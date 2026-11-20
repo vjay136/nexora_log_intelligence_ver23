@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 
 	"nexora.local/nli-v20/internal/fieldmapping"
 	"nexora.local/nli-v20/internal/mixedkv"
@@ -23,11 +25,30 @@ type templateComposeRef struct {
 
 type templateComposeHeader = fieldmapping.HeaderTemplate
 
+type templateComposeStoreError struct{ cause error }
+
+func (e *templateComposeStoreError) Error() string {
+	return "selected template revision could not be loaded from controller metadata"
+}
+func (e *templateComposeStoreError) Unwrap() error { return e.cause }
+
+func templateComposeLookupError(w http.ResponseWriter, err error) {
+	var backend *templateComposeStoreError
+	if errors.As(err, &backend) {
+		metadataFailure(w, backend.Error(), backend.cause)
+		return
+	}
+	jsonError(w, err.Error(), http.StatusBadRequest)
+}
+
 func (s *Server) templateComposeConfig(ctx context.Context, collection string, ref templateComposeRef) (json.RawMessage, error) {
 	if ref.Revision < 1 || ref.ID == "" || safeID(ref.ID) != ref.ID {
 		return nil, fmt.Errorf("select an exact %s revision", collection)
 	}
 	doc, err := s.metadata.Get(ctx, collection, ref.ID, ref.Revision)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, &templateComposeStoreError{cause: err}
+	}
 	if err != nil || doc.Deleted || doc.State == "revoked" {
 		return nil, fmt.Errorf("selected %s revision is unavailable", collection)
 	}
@@ -51,7 +72,8 @@ func (s *Server) handleTemplateCompose(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	ctx, done, ok := s.beginFieldSenseAnalysis(w, r)
+	admission := s.fieldSenseAnalysis()
+	requestContext, done, ok := s.beginFieldSenseAnalysisBudget(w, r, metadataViewReadBudget+admission.timeout)
 	if !ok {
 		return
 	}
@@ -65,23 +87,39 @@ func (s *Server) handleTemplateCompose(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "send 1 to 500 sample records with an exact header revision and an optional KV template revision, up to 2 MiB total", http.StatusBadRequest)
 		return
 	}
-	headerConfig, err := s.templateComposeConfig(ctx, "templates", input.Header)
+	metadataContext, cancelMetadata := context.WithTimeout(requestContext, metadataViewReadBudget)
+	defer cancelMetadata()
+	headerConfig, err := s.templateComposeConfig(metadataContext, "templates", input.Header)
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusBadRequest)
+		templateComposeLookupError(w, err)
 		return
 	}
+	var kvConfig json.RawMessage
+	if input.KV.ID != "" && input.KV.ID != fieldmapping.GlobalKVTemplateID {
+		kvConfig, err = s.templateComposeConfig(metadataContext, "kv-config", input.KV)
+		if err != nil {
+			templateComposeLookupError(w, err)
+			return
+		}
+	} else if input.KV.Revision != 0 {
+		jsonError(w, "the built-in Global AutoSense profile has no saved revision", http.StatusBadRequest)
+		return
+	}
+	cancelMetadata()
+	ctx, cancelAnalysis := context.WithTimeout(requestContext, admission.timeout)
+	defer func() {
+		if ctx.Err() == context.DeadlineExceeded && requestContext.Err() == nil {
+			admission.timedOut.Add(1)
+		}
+		cancelAnalysis()
+	}()
 	var header templateComposeHeader
 	if json.Unmarshal(headerConfig, &header) != nil {
 		jsonError(w, "invalid header template configuration", http.StatusBadRequest)
 		return
 	}
 	var kv *mixedkv.Config
-	if input.KV.ID != "" && input.KV.ID != fieldmapping.GlobalKVTemplateID {
-		kvConfig, err := s.templateComposeConfig(ctx, "kv-config", input.KV)
-		if err != nil {
-			jsonError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+	if kvConfig != nil {
 		decoder := json.NewDecoder(bytes.NewReader(kvConfig))
 		decoder.DisallowUnknownFields()
 		kv = new(mixedkv.Config)
@@ -89,9 +127,6 @@ func (s *Server) handleTemplateCompose(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "KV template configuration is invalid or contains unsupported options", http.StatusBadRequest)
 			return
 		}
-	} else if input.KV.Revision != 0 {
-		jsonError(w, "the built-in Global AutoSense profile has no saved revision", http.StatusBadRequest)
-		return
 	}
 	plan, err := fieldmapping.ComposeTemplates(header, kv)
 	if err != nil {
@@ -99,6 +134,9 @@ func (s *Server) handleTemplateCompose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	compiled, err := fieldmapping.Compile(plan)
+	if fieldSenseContextError(w, ctx) {
+		return
+	}
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
 		return

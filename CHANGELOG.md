@@ -10,6 +10,7 @@
 - Register the eight unchanged reviewed ParserPacks from the exact Ver22.19 RPM when missing, preserve existing revisions and deletion history, and gate their rollout to compatible Ver23 clients.
 - Reuse successful validation only for exact embedded product definitions, with concurrency and mutation isolation.
 - Complete uninstall preserve/purge cleanup across all ten setup modes, including generated edge services and shared-role safeguards.
+- Separate saved-template metadata lookup and parsing deadlines, and distinguish backend failures from missing template revisions.
 
 ## v22.19.1-0
 

@@ -12,6 +12,8 @@ Successful validation of those exact immutable product definitions is reused wit
 
 Controller restarts carry a new instance identifier so the Webapp can accept a fresh snapshot even when its revision counter restarts. Backend authentication and schema failures return actionable diagnostics without silently replacing the catalog or signing users out. Controller and client retain ten verified prior bundles for inspection and recovery; retention does not automatically activate an older generation.
 
+Saved header/KV composition separates its bounded metadata-fetch budget from the existing parsing deadline. A slow reference lookup no longer consumes the parsing allowance or masquerades as a missing revision. Backend failures return service diagnostics; genuinely missing or invalid selections remain input errors. Analysis admission limits and extraction bounds remain enforced.
+
 Reset controls cover all 52 primary workspaces and their inner tabs. Reset clears local inputs, drafts, filters and results, cancels pending previews, and preserves published records, user roles, favorites and live synchronization.
 
 Uninstall offers two explicit behaviors: normal removal preserves local data for reinstall, while `--purge` removes the selected role's local configuration, identity, keys, queues and state. Both remove NLI-owned execution services and edge configuration. Shared files stay available to another installed NLI role; externally managed certificates, source logs and Supabase records are preserved. Client purge confirmation occurs before package removal.
