@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"nexora.local/nli-v20/internal/familyprofile"
 	"nexora.local/nli-v20/internal/fleet"
 	"nexora.local/nli-v20/internal/protocol"
 	rolloutmodel "nexora.local/nli-v20/internal/rollout"
@@ -21,7 +22,7 @@ func TestDottedClientHeartbeatPreservesAndRecoversParserAcknowledgement(t *testi
 	f := newAPIFixture(t)
 	ctx := context.Background()
 	const node = "ip-172-31-37-151.ap-southeast-2.compute.internal-client"
-	f.server.fleet.Register(&fleet.Node{ID: node, Hostname: node})
+	f.server.fleet.Register(&fleet.Node{ID: node, Hostname: node, Version: "23.0.0-1"})
 	bundle, err := f.server.buildActiveParserBundle(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +115,7 @@ func TestPublishedAssurancePackIsOnlyRuntimeBundleHandoff(t *testing.T) {
 	}
 	var included *parserBundleAsset
 	for i := range bundle.Assets {
-		if bundle.Assets[i].AssetClass != "parser-packs" {
+		if bundle.Assets[i].AssetClass != "parser-packs" || familyprofile.IsBuiltinPackID(bundle.Assets[i].AssetID) {
 			continue
 		}
 		if included != nil {
@@ -130,7 +131,7 @@ func TestPublishedAssurancePackIsOnlyRuntimeBundleHandoff(t *testing.T) {
 		t.Fatalf("published parser bundle asset lost immutable payload revision/hash: %+v", included)
 	}
 
-	f.server.fleet.Register(&fleet.Node{ID: "recovery-node", Hostname: "recovery-node"})
+	f.server.fleet.Register(&fleet.Node{ID: "recovery-node", Hostname: "recovery-node", Version: "23.0.0-1"})
 	rollout, err := f.server.startParserBundleRollout(context.Background(), "operator", "Recovery parser rollout", bundle, []string{"recovery-node"})
 	if err != nil || rollout == nil {
 		t.Fatalf("start selected-client rollout: rollout=%+v err=%v", rollout, err)

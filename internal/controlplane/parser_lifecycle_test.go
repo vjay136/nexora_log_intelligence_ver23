@@ -41,7 +41,7 @@ func (e *lifecycleExecutor) UpgradePackage(context.Context, string) error       
 
 func TestR9CatalogDeletionUnloadsActualClientAndRestoreStaysDraft(t *testing.T) {
 	f := newAPIFixture(t)
-	f.server.fleet.Register(&fleet.Node{ID: "lifecycle-client", Hostname: "lifecycle-client"})
+	f.server.fleet.Register(&fleet.Node{ID: "lifecycle-client", Hostname: "lifecycle-client", Version: "23.0.0-1"})
 	if err := f.server.fleet.SetToken("lifecycle-client", "lifecycle-client-token"); err != nil {
 		t.Fatal(err)
 	}

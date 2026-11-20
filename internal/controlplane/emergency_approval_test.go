@@ -122,7 +122,7 @@ func TestAdminEmergencyAssuranceSelfApprovalPublishesExactValidatedCandidate(t *
 
 func TestAdminEmergencyParserRolloutSelfApprovalBindsExactBundle(t *testing.T) {
 	fixture := newAPIFixture(t)
-	fixture.server.fleet.Register(&fleet.Node{ID: "emergency-node", Hostname: "emergency-node"})
+	fixture.server.fleet.Register(&fleet.Node{ID: "emergency-node", Hostname: "emergency-node", Version: "23.0.0-1"})
 	if _, err := fixture.server.metadata.Put(context.Background(), metastore.Document{
 		Collection: "regex-patterns", ID: "emergency-rule", State: "active",
 		Payload: json.RawMessage(`{"name":"Emergency rule","pattern":"safe"}`), CreatedBy: "admin",
