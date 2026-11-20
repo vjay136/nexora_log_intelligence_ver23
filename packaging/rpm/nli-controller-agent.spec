@@ -67,10 +67,38 @@ if [ -s /etc/nli/controller-bootstrap.env ]; then systemctl start nli-controller
 
 %preun
 if [ "$1" -eq 0 ]; then
-  systemctl disable --now nli-controller-bootstrap.service nli-controller-agent.service >/dev/null 2>&1 || :
+  systemctl disable --now nli-controller-bootstrap.service nli-controller-agent.service nli-geoip-update.timer nli-geoip-update.service nli-cloudflared.service nli-cloudflared-quick.service nli-certbot-renew.timer nli-certbot-renew.service >/dev/null 2>&1 || :
 fi
 
 %postun
+if [ "$1" -eq 0 ]; then
+  # Removing an RPM preserves metadata/TLS but must not leave its generated
+  # connectors or reverse-proxy routes running after the controller disappears.
+  for entry in 'nginx nginx.service /etc/nginx/conf.d/nli-controller.conf' 'httpd httpd.service /etc/httpd/conf.d/nli-controller.conf'; do
+    set -- $entry
+    validator=$1; proxy_service=$2; site=$3
+    if [ -f "$site" ]; then
+      backup=$(mktemp)
+      cp -a "$site" "$backup"
+      rm -f -- "$site"
+      if systemctl is-active --quiet "$proxy_service"; then
+        if ! "$validator" -t >/dev/null 2>&1 || ! systemctl reload "$proxy_service" >/dev/null 2>&1; then
+          cp -a "$backup" "$site"
+          echo "NLI removal preserved proxy site after validation/reload failed: $site" >&2
+        fi
+      fi
+      rm -f -- "$backup"
+    fi
+  done
+  rm -f -- /etc/systemd/system/nli-cloudflared.service /etc/systemd/system/nli-cloudflared-quick.service /etc/systemd/system/nli-certbot-renew.service /etc/systemd/system/nli-certbot-renew.timer
+  if [ -f /etc/systemd/system/cloudflared.service ] && grep -Fxq 'Description=Cloudflare Tunnel for NLI controller' /etc/systemd/system/cloudflared.service; then
+    systemctl disable --now cloudflared.service >/dev/null 2>&1 || :
+    install -d -m 0750 /etc/cloudflared
+    printf 'NLI controller named tunnel\n' >/etc/cloudflared/nli-controller-owned
+    rm -f -- /etc/systemd/system/cloudflared.service
+    rmdir /etc/cloudflared /var/lib/cloudflared 2>/dev/null || :
+  fi
+fi
 systemctl daemon-reload >/dev/null 2>&1 || :
 
 %files

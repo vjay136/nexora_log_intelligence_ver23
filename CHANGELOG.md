@@ -8,6 +8,8 @@
 - Add local workspace Reset controls, safe metadata diagnostics and restart synchronization safeguards.
 - Preserve verified prior parser bundles before replacing synchronized assets.
 - Register the eight unchanged reviewed ParserPacks from the exact Ver22.19 RPM when missing, preserve existing revisions and deletion history, and gate their rollout to compatible Ver23 clients.
+- Reuse successful validation only for exact embedded product definitions, with concurrency and mutation isolation.
+- Complete uninstall preserve/purge cleanup across all ten setup modes, including generated edge services and shared-role safeguards.
 
 ## v22.19.1-0
 

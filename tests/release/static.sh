@@ -41,6 +41,7 @@ grep -Fq 'nli-certbot-renew.timer' "$ROOT/scripts/setup-controller-rocky.sh" || 
 python3 "$ROOT/tests/release/controller_edge_contract_test.py" "$ROOT"
 python3 "$ROOT/tests/release/supabase_bootstrap_test.py" "$ROOT"
 python3 "$ROOT/tests/release/installer_metadata_test.py" "$ROOT"
+python3 "$ROOT/tests/release/uninstall_matrix_test.py" "$ROOT"
 python3 "$ROOT/tests/release/output_audit_test.py"
 python3 "$ROOT/tests/release/design_engine_packaging_test.py" "$ROOT"
 python3 "$ROOT/tests/release/controller_edge_selinux_test.py" "$ROOT"
