@@ -11,8 +11,8 @@ import sys
 
 root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else pathlib.Path(__file__).parents[2])
 setup = (root / "scripts/setup-controller-rocky.sh").read_text(encoding="utf-8")
-uninstall = (root / "scripts/uninstall-controller-ver22.sh").read_text(encoding="utf-8")
-installer = (root / "scripts/install-controller-ver22.sh").read_text(encoding="utf-8")
+uninstall = (root / "scripts/uninstall-controller-ver23.sh").read_text(encoding="utf-8")
+installer = (root / "scripts/install-controller-ver23.sh").read_text(encoding="utf-8")
 docs = (root / "docs/INSTALLATION_AND_CONFIGURATION.md").read_text(encoding="utf-8")
 spec = (root / "packaging/rpm/nli-controller-agent.spec").read_text(encoding="utf-8")
 

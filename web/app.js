@@ -885,7 +885,90 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     nav.addEventListener('click',event=>{const button=event.target.closest('[data-endpoint-tab]');if(button)activate(button.dataset.endpointTab);});activate('destinations');
   }
 
-  function renderPage(id, html) { if (state.user && state.page === id) { page.innerHTML = html; page.dataset.page = id; page.dataset.dirty = 'false'; addInputGuidance();queueMicrotask(nfiDecorate);if(['assurance','quarantine-wizard'].includes(id))setupAssuranceTabs();if(id==='outputs')setupEndpointTabs();if(id==='ai')setupAITabs();if(id==='monitoring')setupMonitoringTabs();if(['sync-fabric','nhle-monitor','napi-monitor','nal-monitor','upes'].includes(id))setupSubsystemTabs();decorateWorkspaceAI(); } }
+  function renderPage(id, html) { if (state.user && state.page === id) { page.innerHTML = html; page.dataset.page = id; page.dataset.dirty = 'false'; addInputGuidance();queueMicrotask(nfiDecorate);if(['assurance','quarantine-wizard'].includes(id))setupAssuranceTabs();if(id==='outputs')setupEndpointTabs();if(id==='ai')setupAITabs();if(id==='monitoring')setupMonitoringTabs();if(['sync-fabric','nhle-monitor','napi-monitor','nal-monitor','upes'].includes(id))setupSubsystemTabs();decorateWorkspaceAI();addWorkspaceReset(); } }
+  function addWorkspaceReset() {
+    if(page.querySelector('[data-workspace-reset]'))return;
+    for(const button of page.querySelectorAll('form button[type=submit]'))button.dataset.resetLabel=button.textContent;
+    page.insertAdjacentHTML('afterbegin','<div class="actions" data-workspace-reset><button type="button" class="secondary" data-action="workspace-reset">Reset workspace</button><span class="hint">Clear unsaved inputs, results and filters in this workspace. Saved records and live settings remain unchanged.</span><span role="status" data-workspace-reset-status></span></div>');
+  }
+  function resetWorkspace() {
+    workspaceResetGeneration++;
+    for(const request of workspaceRequests)request.abort();
+    inFlightReads.clear();
+    clearTimeout(nfiLiveTimer);
+    nfiAnalysisController?.abort();
+    qrwLivePreviewController?.abort();
+    const blockInput=el('block-raw');
+    if(blockInput){clearTimeout(blockInput.blockPreviewTimer);blockInput.blockPreviewRequest?.abort();}
+    if(['assurance','quarantine-wizard','field-mapping','parser-workspace'].includes(state.page)){
+      resetGPRSSource();
+      Object.assign(state,{lastAssurance:null,lastNAPI:null,nfiRaw:'',nfiCorpus:'',nfiDesired:null,nfiParser:null,nfiCases:[],nfiEditId:'',nfiName:'',nfiVersion:'',nfiCandidateValidated:null,nfiGuideStep:undefined,nfiPreviewed:false,nfiSenseMode:'',nfiRuntimeRaw:'',nfiRuntimeFieldSuggestions:[],qrwStep:1,uploadReport:null,uploadError:''});
+      kvInspectorState=null;
+      for(const id of ['qrw-field-rows','nfi-live-trace'])el(id)?.replaceChildren();
+      for(const node of page.querySelectorAll('[data-qrw-token],[data-qrw-selection]'))node.classList.remove('selected');
+      if(el('nfi-inspector-host'))el('nfi-inspector-host').replaceChildren();
+      if(el('kvie-inspector'))el('kvie-inspector').hidden=true;
+      if(el('nfi-runtime-evidence'))el('nfi-runtime-evidence').hidden=true;
+      for(const step of page.querySelectorAll('[data-wizard-step]')){delete step.dataset.stepComplete;step.classList.remove('done');}
+      setupQRWStepPanels();
+    }
+    if(state.page==='building-blocks'){
+      state.blockBoard=null;state.blockSeed='';
+      el('block-fields')?.replaceChildren();
+    }
+    if(state.page==='operations')Object.assign(state,{dashboardRange:'24h',dashboardClient:'all',dashboardFrom:'',dashboardTo:'',dashboardHistory:null,dashboardHistoryError:''});
+    if(state.page==='monitoring')Object.assign(state,{monitoringRange:'15m',monitoringNode:'all',monitoringSource:'all',monitoringSearch:'',monitoringPaused:false});
+    if(state.page==='outputs')state.outputPreview=null;
+    if(state.page==='migration')state.migrationPreview=null;
+    if(state.page==='nupire')selectedNupire=null;
+    if(state.page==='input-paths')state.inputHistoryProfile='';
+    if(state.page==='ai')state.aiSelectedProviderId='';
+    // Reset the current workspace in place, retaining its selected inner tab and
+    // persisted inventory. A native form reset alone restores loaded record values.
+    for(const form of page.querySelectorAll('form')){
+      form.aiRequestID=(form.aiRequestID||0)+1;
+      delete form.aiResult;
+      form.reset();
+      delete form.dataset.editId;
+      delete form.dataset.editRevision;
+      delete form.baseOutputProfile;
+      for(const field of form.querySelectorAll('[name=edit_id]'))field.value='';
+    }
+    for(const input of page.querySelectorAll('input,textarea,select')){
+      input.setCustomValidity?.('');
+      if(input.matches('input[type=button],input[type=submit],input[type=reset]'))continue;
+      if(input.matches('select')){
+        if(input.multiple)for(const option of input.options)option.selected=false;
+        else input.selectedIndex=Math.max(0,[...input.options].findIndex(option=>option.value==='all'||option.value==='auto'||option.value===''));
+      }else if(input.matches('[type=checkbox],[type=radio]'))input.checked=false;
+      else if(input.matches('textarea')){
+        let empty='';try{const parsed=JSON.parse(input.value);if(parsed&&typeof parsed==='object')empty=Array.isArray(parsed)?'[]':'{}';}catch{}
+        input.value=empty;
+      }else input.value='';
+      if(input.name==='id')input.readOnly=false;
+    }
+    if(el('dashboard-range'))el('dashboard-range').value='24h';
+    if(el('dashboard-client'))el('dashboard-client').value='all';
+    const configForm=el('config-form');if(configForm)showCatalogFields(configForm);
+    if(el('input-profile-form')){
+      el('input-profile-form').elements.config.value=pretty({inputs:[]});
+      el('input-path-list').innerHTML=table(['Log path','Family','Status and actions'],[],'No paths configured.');
+    }
+    for(const button of page.querySelectorAll('form button[data-reset-label]'))button.textContent=button.dataset.resetLabel;
+    for(const host of page.querySelectorAll('[data-ai-mapping-host]')){host.aiRequestID=(host.aiRequestID||0)+1;delete host.aiProposal;}
+    // Detach old result hosts as well as clearing them: a canceled async callback
+    // holding a host reference must not repopulate the reset workspace.
+    for(const node of page.querySelectorAll('pre.json-output,[data-workspace-ai-result],[data-ai-mapping-json],[data-ai-mapping-status],[data-parser-status],[data-parser-helper-status],[data-replay-status],[data-parser-overview]'))node.replaceWith(node.cloneNode(false));
+    for(const id of ['assurance-result','assurance-corpus-result','assurance-upload-status','gprs-preview','napi-synthesis-result','nfi-controller-result','nfi-candidate-status','nfi-ai-status','block-status','output-config-test-result','output-profile-preview','template-draft-result','template-composition-result','qrw-field-status','qrw-inspect-status']){
+      const output=el(id);if(output)output.replaceWith(output.cloneNode(false));
+    }
+    for(const button of page.querySelectorAll('[data-action=workspace-ai-import],[data-action=workspace-ai-download],[data-action=template-open-verified],[data-ai-mapping-proposal]'))button.hidden=true;
+    if(state.page==='building-blocks'){renderBlockSource();renderBlockOrder();}
+    if(state.page==='monitoring'){renderMonitoring();}
+    // Dirty prevents the periodic catalog refresh from restoring a loaded draft.
+    page.dataset.dirty=SYNC_PAGES.has(state.page)?'false':'true';
+    page.querySelector('[data-workspace-reset-status]').textContent='Workspace reset locally. Reload to load saved settings. Previously submitted operations may still complete; check their status before resubmitting.';
+  }
   function mappingSuggestionButton(tab='Field mapping'){
     return `<button type="button" class="secondary" data-action="workspace-ai-auto" data-artifact="mapping" data-tab="${esc(tab)}" data-suggest-mapping>Suggest Mappings with Nexora AI</button>`;
   }
@@ -1337,6 +1420,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     await api(`/notifications/audit-${id}`,{method:'POST',body});await refreshNotificationBell();if(state.page==='notifications')await loadNotifications();
   }
   function notify(message, type = 'success') {
+    if(type==='error'&&/Workspace was reset;|The operation was aborted\.?$|signal is aborted/i.test(String(message)))return {done:text=>notify(text,'success'),fail:text=>notify(text,'error')};
     if(type==='error'&&[...el('toast-region').children].some(node=>node.classList.contains('bad')&&node.textContent===String(message))){
       return {done:text=>notify(text,'success'),fail:text=>notify(text,'error')};
     }
@@ -1396,6 +1480,9 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     state.csrf = (await response.json()).csrf_token; return state.csrf;
   }
   const inFlightReads = new Map();
+  let workspaceResetGeneration=0;
+  const workspaceRequests=new Set();
+  function workspaceCancellation(){return new DOMException('Workspace was reset; the previous response was discarded.','AbortError');}
   function api(path, options = {}) {
     if ((options.method || 'GET') !== 'GET' || options.signal || options.headers || options.body !== undefined) {
       return requestAPI(path, options);
@@ -1410,17 +1497,27 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     return request;
   }
   async function requestAPI(path, options = {}) {
+    const generation=workspaceResetGeneration;
+    const workspaceScoped=!/^\/(?:auth\/|sync\/|notifications(?:\/|$)|navigation(?:\/|$)|telemetry(?:\/|$)|metrics(?:\/|$)|communications\/browser-heartbeat|health(?:\?|$)|overview(?:\?|$))/.test(path);
     if (path === '/auth/login' && !state.controllerReady) throw new Error(CONTROLLER_REQUIRED);
     const method = options.method || 'GET'; const headers = { Accept: 'application/json', ...(options.headers || {}) };
     let body = options.body;
     if (body !== undefined && !(body instanceof FormData)) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(body); }
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && path !== '/auth/login') headers['X-CSRF-Token'] = await ensureCSRF();
+    if(workspaceScoped&&generation!==workspaceResetGeneration)throw workspaceCancellation();
     const started = performance.now();
-    let response;
-    try { response = await fetchWithTimeout('/api/v1' + path, { method, credentials: 'same-origin', headers, body, signal: options.signal }, options.timeoutMs ?? 55000); }
+    const resetController=workspaceScoped?new AbortController():null;
+    const forwardAbort=()=>resetController?.abort(options.signal?.reason);
+    if(resetController){workspaceRequests.add(resetController);if(options.signal?.aborted)forwardAbort();else options.signal?.addEventListener('abort',forwardAbort,{once:true});}
+    let response,data,contentType;
+    try {
+      response = await fetchWithTimeout('/api/v1' + path, { method, credentials: 'same-origin', headers, body, signal: resetController?.signal||options.signal }, options.timeoutMs ?? 55000);
+      contentType = response.headers.get('content-type') || '';
+      data = contentType.includes('application/json') ? await response.json().catch(() => ({})) : {};
+      if(workspaceScoped&&generation!==workspaceResetGeneration)throw workspaceCancellation();
+    }
     catch (error) { recordAPI(path, method, null, performance.now() - started, error.message); throw error; }
-    const contentType = response.headers.get('content-type') || '';
-    const data = contentType.includes('application/json') ? await response.json().catch(() => ({})) : {};
+    finally {if(resetController){workspaceRequests.delete(resetController);options.signal?.removeEventListener('abort',forwardAbort);}}
     const latency=performance.now()-started;
     const degraded=data?.snapshot_stale===true||path.split('?')[0]==='/admin/ai-provider'&&['degraded','unavailable','encryption_unavailable'].includes(data?.store_status);
     const standby=response.ok&&data.provider_routing==='standby'&&typeof data.provider_id==='string'
@@ -1432,8 +1529,8 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       :data.proposal_origin==='native_fallback'?'Verified native fallback returned':'');
     recordAPI(path, method, response.status, latency, data?.snapshot_stale===true?'Serving last confirmed metadata snapshot':degraded?'Provider storage needs attention':mappingOutcome||(response.ok?'':response.statusText),degraded);
     if ([405, 501].includes(response.status) || (!contentType.includes('application/json') && !response.ok && response.status<500)) throw new Error(CONTROLLER_REQUIRED);
-    if (response.status === 401 && path !== '/auth/login') { signOut(false); throw new Error('Session expired'); }
-    if (!response.ok) { const error=new Error(data.error || (response.status===502?'The request gateway could not reach the controller. Check the controller connection and retry.':response.status===504?'The request timed out. Check the controller connection and retry.':`Request failed (HTTP ${response.status}).`));error.status=response.status;error.details=data;throw error; }
+    if (response.status === 401 && path !== '/auth/login' && !data.backend_error) { signOut(false); throw new Error('Session expired'); }
+    if (!response.ok) { const diagnosis=[data.error,data.diagnostic,data.error_detail,data.next_action].filter(item=>typeof item==='string'&&item.trim()).join(' ');const error=new Error(diagnosis || (response.status===502?'The request gateway could not reach the controller. Check the controller connection and retry.':response.status===504?'The request timed out. Check the controller connection and retry.':`Request failed (HTTP ${response.status}).`));error.status=response.status;error.details=data;throw error; }
     if (!contentType.includes('application/json')) throw new Error('The controller returned an invalid API response.');
     if (data?.snapshot_stale===true && !options.allowStale) {
       const error=new Error(data.snapshot_error || 'Live controller metadata is temporarily unavailable.');
@@ -1695,7 +1792,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   }
   function requestSyncResnapshot(reason='revision gap') {
     if(state.sync.resyncing||!state.user)return;state.sync.resyncing=true;state.streamMode='resynchronizing';el('stream-state').innerHTML='<i></i>Resynchronizing';
-    fetchCanonicalSnapshot().then(snapshot=>{state.sync.snapshot=null;acceptSyncSnapshot(snapshot,{force:true});}).catch(error=>notify(`Canonical resynchronization failed after ${reason}: ${error.message}`,'error')).finally(()=>{state.sync.resyncing=false;});
+    fetchCanonicalSnapshot().then(snapshot=>{acceptSyncSnapshot(snapshot,{force:true});}).catch(error=>notify(`Canonical resynchronization failed after ${reason}: ${error.message}`,'error')).finally(()=>{state.sync.resyncing=false;});
   }
   async function pollCanonicalSnapshot(reason='background recovery') {
     if(!state.user||state.sync.pollInFlight)return false;
@@ -1730,6 +1827,17 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   function acceptSyncSnapshot(raw,{incremental=false,eventType='sync_snapshot',force=false}={}) {
     const incoming=raw?.snapshot||raw;if(!incoming||typeof incoming!=='object')return false;
     if(incoming.schema_version&&incoming.schema_version!==SYNC_SCHEMA){state.sync.rejectedUpdates++;return false;}
+    const instance=incoming.controller_instance_id||raw.controller_instance_id||'',currentInstance=state.sync.snapshot?.controller_instance_id||'';
+    if(instance&&!incoming.controller_instance_id)incoming.controller_instance_id=instance;
+    const retired=state.sync.retiredControllerInstances||[];
+    if(instance&&retired.includes(instance)){state.sync.rejectedUpdates++;return false;}
+    const restarted=!!(instance&&currentInstance&&instance!==currentInstance);
+    if(restarted&&incremental){requestSyncResnapshot('controller instance changed');return false;}
+    if(restarted){
+      state.sync.retiredControllerInstances=[...retired,currentInstance].slice(-16);
+      state.sync.history=[];state.sync.renderedSignature=null;state.streamLastEventId='';
+      if(state.streamSource){state.streamSource.close();state.streamSource=null;queueMicrotask(()=>connectStream());}
+    }
     let heartbeat=false;
     if(incremental){
       const current=state.sync.snapshot||{schema_version:SYNC_SCHEMA,revision:0,sources:[],aggregate:{},diagnostics:{},subsystems:{}};
@@ -1742,7 +1850,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       state.sync.snapshot=merged;
     }else{
       const current=state.sync.snapshot;
-      if(!force&&state.sync.snapshot&&present(incoming.revision)){
+      if(!force&&!restarted&&state.sync.snapshot&&present(incoming.revision)){
         const nextRevision=Number(incoming.revision),currentRevision=Number(state.sync.snapshot.revision||0);
         if(nextRevision<currentRevision){state.sync.rejectedUpdates++;return false;}
         heartbeat=nextRevision===currentRevision;
@@ -3239,6 +3347,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   }
 
   async function action(button) {
+    if(button.dataset.action==='workspace-reset'){resetWorkspace();return;}
     const id=button.dataset.id, value=button.dataset.value;
     if(button.hasAttribute?.('data-map-sample')&&!can('assurance:run'))throw new Error('Mapping requires Assurance run access.');
     if(button.dataset.action==='parser-helper-validate'){
@@ -4107,7 +4216,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     if(typeof EventSource!=='function'){state.streamMode='polling';el('stream-state').textContent='Live sync · recovery';await pollCanonicalSnapshot('streaming unsupported');return;}
     if(state.streamSource)return;
     const url=`/api/v1/sync/stream?last_revision=${encodeURIComponent(state.sync.snapshot?.revision||0)}`,source=new EventSource(url,{withCredentials:true});state.streamSource=source;state.sync.connectionStartedAt=Date.now();
-    const receive=(event,eventType)=>{try{const data=JSON.parse(event.data);if(event.lastEventId)state.streamLastEventId=event.lastEventId;acceptSyncSnapshot(data,{incremental:eventType!=='sync_snapshot'&&eventType!=='sync_heartbeat',eventType});}catch(error){state.sync.rejectedUpdates++;notify(`Synchronization update rejected: ${error.message}`,'error');}};
+    const receive=(event,eventType)=>{try{const data=JSON.parse(event.data);if(acceptSyncSnapshot(data,{incremental:eventType!=='sync_snapshot'&&eventType!=='sync_heartbeat',eventType})&&event.lastEventId)state.streamLastEventId=event.lastEventId;}catch(error){state.sync.rejectedUpdates++;notify(`Synchronization update rejected: ${error.message}`,'error');}};
     source.addEventListener('sync_snapshot',event=>receive(event,'sync_snapshot'));
     source.addEventListener('sync_heartbeat',event=>receive(event,'sync_heartbeat'));
     source.addEventListener('sync_delta',event=>receive(event,'sync_delta'));

@@ -1,5 +1,14 @@
 # Changelog
 
+## v23.0.0-1
+
+- Start Ver23 from the exact v22.19.1-0 source commit 77f95a94885ab1e1843bcd214d44e70a495ee85c.
+- Publish Ver23 RPMs, Webapp ZIP and installation guides in the dedicated Ver23 repository.
+- Keep controller installation choices 1 through 10 and preserve configured metadata identity during reconfiguration.
+- Add local workspace Reset controls, safe metadata diagnostics and restart synchronization safeguards.
+- Preserve verified prior parser bundles before replacing synchronized assets.
+- Register the eight unchanged reviewed ParserPacks from the exact Ver22.19 RPM when missing, preserve existing revisions and deletion history, and gate their rollout to compatible Ver23 clients.
+
 ## v22.19.1-0
 
 - Flatten template-derived KV fields into the parsed event, preserving valid source names.

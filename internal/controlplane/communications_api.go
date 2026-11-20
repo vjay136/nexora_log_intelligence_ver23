@@ -149,7 +149,7 @@ func (s *Server) handleNotificationConfig(w http.ResponseWriter, r *http.Request
 		policy.UpdatedBy, policy.UpdatedAt = principal.Username, time.Now().UTC()
 		payload, _ := json.Marshal(policy)
 		if _, err := s.metadata.Put(r.Context(), metastore.Document{Collection: notificationConfigCollection, ID: "default", State: "active", Payload: payload, CreatedBy: principal.Username}); err != nil {
-			jsonError(w, "notification policy persistence failed", http.StatusServiceUnavailable)
+			metadataFailure(w, "notification policy persistence failed", err)
 			return
 		}
 		s.auditAction(principal, "notification.policy.update", "notifications/default", "success", map[string]string{"channels": strings.Join(enabledChannelNames(policy), ",")})
@@ -174,7 +174,11 @@ func (s *Server) handleNotificationFeed(w http.ResponseWriter, r *http.Request) 
 	}
 	policy := s.readNotificationPolicy(r)
 	userStates := map[uint64]notificationUserState{}
-	acks, _ := s.metadata.List(r.Context(), notificationAckCollection, metastore.Query{Limit: 1000})
+	acks, err := s.metadata.List(r.Context(), notificationAckCollection, metastore.Query{Limit: 1000})
+	if err != nil {
+		metadataFailure(w, "notification states unavailable", err)
+		return
+	}
 	for _, ack := range acks {
 		var payload notificationUserState
 		if json.Unmarshal(ack.Payload, &payload) == nil && payload.Username == principal.Username {
@@ -234,7 +238,11 @@ func (s *Server) handleNotificationFeed(w http.ResponseWriter, r *http.Request) 
 			unreadCount++
 		}
 	}
-	deliveries, _ := s.metadata.List(r.Context(), notificationDeliveryCollection, metastore.Query{Limit: 500})
+	deliveries, err := s.metadata.List(r.Context(), notificationDeliveryCollection, metastore.Query{Limit: 500})
+	if err != nil {
+		metadataFailure(w, "notification delivery history unavailable", err)
+		return
+	}
 	history := make([]map[string]any, 0, len(deliveries))
 	for _, doc := range deliveries {
 		var attempt notificationDeliveryAttempt
@@ -310,7 +318,7 @@ func (s *Server) handleNotificationAck(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(state)
 		id := safeID(principal.Username + "-" + strconv.FormatUint(sequence, 10))
 		if _, err := s.metadata.Put(r.Context(), metastore.Document{Collection: notificationAckCollection, ID: id, State: action, Payload: payload, CreatedBy: principal.Username}); err != nil {
-			jsonError(w, "notification state persistence failed", http.StatusServiceUnavailable)
+			metadataFailure(w, "notification state persistence failed", err)
 			return
 		}
 		jsonOK(w, map[string]any{"status": action, "sequence": sequence, "snoozed_until": nullableTime(snoozedUntil)})

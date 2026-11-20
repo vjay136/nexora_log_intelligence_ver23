@@ -452,6 +452,17 @@ func (s *supabaseStore) call(ctx context.Context, function string, args any, out
 			message = message[:1024]
 		}
 		lastErr = fmt.Errorf("Supabase %s failed with HTTP %d: %s", function, resp.StatusCode, message)
+		switch {
+		case envelope.Code == "42501" || strings.Contains(strings.ToLower(message), "controller authentication failed") || resp.StatusCode == http.StatusForbidden:
+			lastErr = fmt.Errorf("%w: protected RPC access denied", ErrControllerAuthentication)
+		case resp.StatusCode == http.StatusUnauthorized:
+			lastErr = fmt.Errorf("%w: check controller project configuration", ErrPublicAPIKey)
+		case envelope.Code == "PGRST202":
+			lastErr = fmt.Errorf("%w: install the compatible protected RPC schema", ErrRPCSchema)
+		}
+		if errors.Is(lastErr, ErrControllerAuthentication) || errors.Is(lastErr, ErrPublicAPIKey) || errors.Is(lastErr, ErrRPCSchema) {
+			return lastErr
+		}
 		transient := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 		if transient && attempt+1 < maxAttempts && ctx.Err() == nil {
 			if err := waitForStoreRetry(ctx, attempt); err != nil {

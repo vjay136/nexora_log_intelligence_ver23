@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	parserassets "nexora.local/nli-v20/configs/parsers"
+	"nexora.local/nli-v20/internal/canonicaljson"
 	parserpolicy "nexora.local/nli-v20/parser-policy"
 )
 
@@ -242,6 +243,11 @@ func loadManagedDirectory(directory string, isolateInvalid bool) ([]Profile, []M
 			}
 			return nil, diagnostics, fmt.Errorf("managed parser entry %s: %w", entry.Name(), err)
 		}
+		// RPM audit copies and synchronized copies of an exact embedded product
+		// profile are evidence of the same runtime definition, not add-on packs.
+		if IsBuiltinPackID(profile.Pack.ID) && exactEmbeddedPack(data) {
+			continue
+		}
 		profiles = append(profiles, profile)
 		if len(profiles) > MaxManagedPacks {
 			return nil, diagnostics, fmt.Errorf("managed parser generation exceeds %d packs", MaxManagedPacks)
@@ -354,6 +360,45 @@ func CompileManagedPayloadContext(ctx context.Context, name string, data []byte)
 func IsBuiltinPackID(id string) bool {
 	_, ok := expectedBuiltinIDs[id]
 	return ok || id == "smtp_native_v5" || id == parserpolicy.MailTailPackID
+}
+
+// ValidatePublishedPackBytesContext admits a protected product ID only when
+// every sealed semantic field matches this binary's embedded reviewed asset.
+// All site-authored packs continue through the existing managed approval gate.
+func ValidatePublishedPackBytesContext(ctx context.Context, name string, data []byte) (*parserpolicy.ParserPack, error) {
+	pack, err := parserpolicy.LoadParserPackBytes(data)
+	if err != nil {
+		return nil, err
+	}
+	if !IsBuiltinPackID(pack.ID) {
+		return ValidateManagedPackBytesContext(ctx, name, data)
+	}
+	if !exactEmbeddedPack(data) {
+		return nil, fmt.Errorf("protected built-in parser %q differs from the reviewed release asset", pack.ID)
+	}
+	profile, err := compileContext(ctx, name, data, false, true)
+	if err != nil {
+		return nil, err
+	}
+	return profile.Pack, nil
+}
+
+func exactEmbeddedPack(data []byte) bool {
+	actual, err := canonicaljson.Normalize(data)
+	if err != nil {
+		return false
+	}
+	assets, err := parserassets.All()
+	if err != nil {
+		return false
+	}
+	for _, asset := range assets {
+		expected, err := canonicaljson.Normalize(asset.Data)
+		if err == nil && bytes.Equal(actual, expected) {
+			return true
+		}
+	}
+	return false
 }
 
 func runApprovedRegressions(pack *parserpolicy.ParserPack, executor *parserpolicy.ParserPackExecutor) error {

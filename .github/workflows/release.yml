@@ -1,9 +1,9 @@
-name: NLI V22 release
+name: NLI V23 release
 
 on:
   push:
     branches: [main]
-    tags: ['v22.*']
+    tags: ['v23.*']
   pull_request:
     paths:
       - 'packaging/**'
@@ -47,7 +47,7 @@ on:
       - 'docs/V21_R10_RELEASE_NOTES.md'
       - 'docs/V21_R10_TEST_RESULTS.md'
       - 'docs/V21_R10_MANAGER_DEMO.md'
-      - 'docs/V22_19_1_RELEASE_NOTES.md'
+      - 'docs/V23_R1_RELEASE_NOTES.md'
       - 'docs/VER21_IMPLEMENTATION_PLAN.md'
       - 'README.md'
       - 'CHANGELOG.md'
@@ -56,7 +56,7 @@ on:
   workflow_dispatch:
     inputs:
       previous_release_tag:
-        description: 'Previous production tag used for upgrade/rollback qualification; defaults to Ver22 22.18.1-0'
+        description: 'Previous production tag used for upgrade/rollback qualification; defaults to Ver22 22.19.1-0'
         required: false
         type: string
 
@@ -82,7 +82,7 @@ jobs:
               exit 1
             fi
           fi
-          git show v22.18.1-0:supabase/nli_schema.sql > '${{ runner.temp }}/nli-previous-schema.sql'
+          git show 77f95a9:supabase/nli_schema.sql > '${{ runner.temp }}/nli-previous-schema.sql'
           NLI_PREVIOUS_SUPABASE_SCHEMA='${{ runner.temp }}/nli-previous-schema.sql' make release-static
       - name: Test Go and Web contracts
         run: |
@@ -105,7 +105,7 @@ jobs:
 
 
   release-candidate:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v22.')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v23.')
     needs: infrastructure-static
     runs-on: ubuntu-24.04
     permissions:
@@ -121,8 +121,8 @@ jobs:
       - name: Download genuine previous release RPMs
         env:
           GH_TOKEN: ${{ github.token }}
-          PREVIOUS_RELEASE_TAG: ${{ inputs.previous_release_tag || 'v22.18.1-0' }}
-          PREVIOUS_RELEASE_REPO: ${{ github.repository }}
+          PREVIOUS_RELEASE_TAG: ${{ inputs.previous_release_tag || 'v22.19.1-0' }}
+          PREVIOUS_RELEASE_REPO: vjay136/nexora_log_intelligence_ver21
         run: |
           mkdir -p '${{ runner.temp }}/previous'
           previous_release_tag="$PREVIOUS_RELEASE_TAG"
@@ -152,12 +152,12 @@ jobs:
         run: make release-rocky OUTPUT_DIR='${{ runner.temp }}/nli-release' PREVIOUS_DIR='${{ runner.temp }}/previous'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node.js 24
         with:
-          name: nli-v22-unsigned-release
+          name: nli-v23-unsigned-release
           path: ${{ runner.temp }}/nli-release/
           if-no-files-found: error
           retention-days: 14
-      - name: Publish V22 GitHub release
-        if: startsWith(github.ref, 'refs/tags/v22.')
+      - name: Publish V23 GitHub release
+        if: startsWith(github.ref, 'refs/tags/v23.')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -169,7 +169,7 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" "${release_assets[@]}" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Nexora Log Intelligence Ver22 — $GITHUB_REF_NAME" \
-              --notes-file docs/V22_19_1_RELEASE_NOTES.md \
+              --title "Nexora Log Intelligence Ver23 — $GITHUB_REF_NAME" \
+              --notes-file docs/V23_R1_RELEASE_NOTES.md \
               --latest
           fi

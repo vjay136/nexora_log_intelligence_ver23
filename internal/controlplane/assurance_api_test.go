@@ -153,6 +153,10 @@ func TestAssuranceScoreAndParserCandidateLifecycle(t *testing.T) {
 
 func TestAssuranceParserPreviewValidatesCandidateWithoutPersistence(t *testing.T) {
 	f := newAPIFixture(t)
+	baselineResponse, baselineCatalog := f.request(http.MethodGet, "/api/v1/assurance/parsers", nil)
+	if baselineResponse.StatusCode != http.StatusOK {
+		t.Fatalf("read release baseline: %d", baselineResponse.StatusCode)
+	}
 	parser := map[string]any{
 		"pattern_type": "regex",
 		"pattern":      `level=(?P<level>\w+) user=(?P<user>\w+)`,
@@ -175,7 +179,7 @@ func TestAssuranceParserPreviewValidatesCandidateWithoutPersistence(t *testing.T
 		t.Fatalf("unexpected candidate preview: %s", data)
 	}
 	response, catalog := f.request(http.MethodGet, "/api/v1/assurance/parsers", nil)
-	if response.StatusCode != http.StatusOK || !bytes.Contains(catalog, []byte(`"count":0`)) {
+	if response.StatusCode != http.StatusOK || !bytes.Equal(catalog, baselineCatalog) {
 		t.Fatalf("preview persisted a parser candidate: %d %s", response.StatusCode, catalog)
 	}
 }

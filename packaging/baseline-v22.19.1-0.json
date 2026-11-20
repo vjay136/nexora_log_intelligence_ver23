@@ -1,0 +1,60 @@
+{
+  "baseline_release": "v22.19.1-0",
+  "source_commit": "77f95a94885ab1e1843bcd214d44e70a495ee85c",
+  "source_repository": "vjay136/nexora_log_intelligence_ver21",
+  "artifacts": {
+    "nli_controller_agent_ver22.rpm": "645a9e1b5f5db80702d52d318e632a37381892e39f5135853d5b8ed2a1817886",
+    "nli_client_ver22.rpm": "726bbcf67280ccfe2b8d2384d65437710738bdf179502fea586a5c9b402749f1",
+    "webapp_ver22.zip": "34b8aa2c080ba35cde402f78970e5aea8329c06e04b36645125e6cfc79f29070"
+  },
+  "reviewed_parser_packs": [
+    {
+      "file": "nli-reviewed-imap.parserpack.json",
+      "id": "nli_reviewed_imap",
+      "file_sha256": "46583e985b3d1854323ce4f523a171da6c8e1c45307f71f9e4f7039a64b17778",
+      "seal_sha256": "d30d24a86af32d4609356683e1fb6918f9767adf282ec00ce9114b0033bec2ee"
+    },
+    {
+      "file": "nli-reviewed-mss-capd.parserpack.json",
+      "id": "nli_reviewed_mss_capd",
+      "file_sha256": "7669cfd14275f62498a31f80126ad5e9c0d29a7486b37576e1b998a8c25779b8",
+      "seal_sha256": "3ce8f380b35d61019cd41579e12f7741c198d5c7c1c63b7ee871fa675fecd249"
+    },
+    {
+      "file": "nli-reviewed-mta.parserpack.json",
+      "id": "nli_reviewed_mta",
+      "file_sha256": "8efadd50ceaf8de3997cc2eb710cd1321827965435a142064d410a5e6bc71fac",
+      "seal_sha256": "8eadf560e3b90c34fad2892bf2a2d4b60f88fabd1553265b5a1876578c2cfed4"
+    },
+    {
+      "file": "nli-reviewed-pop.parserpack.json",
+      "id": "nli_reviewed_pop",
+      "file_sha256": "fa4ed7fa39dd0d1e8a408764f562b2e51ea5d2cc2c898ae511206eb188d34c7f",
+      "seal_sha256": "54fd87de8338cb1aa74be5d9ff6c411cce6a5b0fd49cadbc683a597f8bddde95"
+    },
+    {
+      "file": "nli-reviewed-pss-pabd.parserpack.json",
+      "id": "nli_reviewed_pss_pabd",
+      "file_sha256": "76eb42cc0aaba34fe1fe5759ee05b7b84443fee136d6cc1538b9b6a56cdf0834",
+      "seal_sha256": "34ced22638e86ac62541902567a8ac9d7afd499ab1d46ed0e26cf6950784c9ab"
+    },
+    {
+      "file": "nli-reviewed-smtp-in.parserpack.json",
+      "id": "nli_reviewed_smtp_in",
+      "file_sha256": "fc22a03733c866a49fc3584a6347a049ebb311fb225bae00b679845839c755dd",
+      "seal_sha256": "528887f964ed9f7547e7c48af3bcc58f674e588cde6997c4910d9e618344b824"
+    },
+    {
+      "file": "nli-reviewed-smtp-out.parserpack.json",
+      "id": "nli_reviewed_smtp_out",
+      "file_sha256": "982c3635aa46203299995c0e1787abee8571988aa20875836f39987f4a290dfb",
+      "seal_sha256": "f1248d40f34c731fbc31a3b215d70e5d769e3448cab38548468947c66d31a198"
+    },
+    {
+      "file": "nli-reviewed-webtop-webmail.parserpack.json",
+      "id": "nli_reviewed_webtop_webmail",
+      "file_sha256": "56a2974c8da43d121af39d257ff3767f6ac270f29e54035ede7925e3c7063fae",
+      "seal_sha256": "af6f9be537288a7d41cf6eec468be5ede0171452526db17ac69a8e1957afb6d6"
+    }
+  ]
+}

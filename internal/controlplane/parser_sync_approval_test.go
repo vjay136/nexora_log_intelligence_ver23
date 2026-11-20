@@ -66,7 +66,7 @@ func TestParserBundleDigestIsStableAcrossSemanticJSONFormatting(t *testing.T) {
 
 func TestParserSyncProposalApprovalPreservesBundleHashAndRequiresIndependentApprover(t *testing.T) {
 	f := newAPIFixture(t)
-	f.server.fleet.Register(&fleet.Node{ID: "parser-node", Hostname: "parser-node"})
+	f.server.fleet.Register(&fleet.Node{ID: "parser-node", Hostname: "parser-node", Version: "23.0.0-1"})
 	// Keep a decimal in the stored payload to catch float64 normalization while
 	// a proposal is decoded and approved.
 	assetPayload := []byte(`{"name":"decimal parser","config":{"weight":1.0}}`)
@@ -137,7 +137,7 @@ func TestParserSyncProposalApprovalPreservesBundleHashAndRequiresIndependentAppr
 
 func TestParserSyncProposalIsIdempotentAndSupersedesOlderBundle(t *testing.T) {
 	f := newAPIFixture(t)
-	f.server.fleet.Register(&fleet.Node{ID: "proposal-node", Hostname: "proposal-node"})
+	f.server.fleet.Register(&fleet.Node{ID: "proposal-node", Hostname: "proposal-node", Version: "23.0.0-1"})
 	firstBundle, err := f.server.buildActiveParserBundle(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestParserSyncProposalIsIdempotentAndSupersedesOlderBundle(t *testing.T) {
 
 func TestLegacyParserSyncProposalIsSafelyUpgradedAndPersisted(t *testing.T) {
 	f := newAPIFixture(t)
-	f.server.fleet.Register(&fleet.Node{ID: "legacy-node", Hostname: "legacy-node"})
+	f.server.fleet.Register(&fleet.Node{ID: "legacy-node", Hostname: "legacy-node", Version: "23.0.0-1"})
 	if _, err := f.server.metadata.Put(context.Background(), metastore.Document{
 		Collection: "regex-patterns", ID: "legacy-rule", State: "active",
 		Payload: json.RawMessage(`{"name":"Legacy rule","config":{"weight":1.0}}`), CreatedBy: "admin",
@@ -247,7 +247,7 @@ func TestLegacyParserSyncProposalIsSafelyUpgradedAndPersisted(t *testing.T) {
 
 func TestR4JSONBRoundTripHashMigratesOnlyWhenSemanticSnapshotIsCurrent(t *testing.T) {
 	f := newAPIFixture(t)
-	f.server.fleet.Register(&fleet.Node{ID: "r4-jsonb-node", Hostname: "r4-jsonb-node"})
+	f.server.fleet.Register(&fleet.Node{ID: "r4-jsonb-node", Hostname: "r4-jsonb-node", Version: "23.0.0-1"})
 	if _, err := f.server.metadata.Put(context.Background(), metastore.Document{
 		Collection: "regex-patterns", ID: "r4-jsonb-rule", State: "active",
 		Payload: json.RawMessage(`{"z":2,"name":"R4 jsonb rule","weight":1.0}`), CreatedBy: "admin",
@@ -278,7 +278,7 @@ func TestR4JSONBRoundTripHashMigratesOnlyWhenSemanticSnapshotIsCurrent(t *testin
 func TestLegacyShortHashEmergencyApprovalUpgradesExactBundle(t *testing.T) {
 	f := newAPIFixture(t)
 	f.server.cfg.AllowAdminEmergencySelfApproval = true
-	f.server.fleet.Register(&fleet.Node{ID: "legacy-emergency-node", Hostname: "legacy-emergency-node"})
+	f.server.fleet.Register(&fleet.Node{ID: "legacy-emergency-node", Hostname: "legacy-emergency-node", Version: "23.0.0-1"})
 	if _, err := f.server.metadata.Put(context.Background(), metastore.Document{
 		Collection: "regex-patterns", ID: "legacy-emergency-rule", State: "active",
 		Payload: json.RawMessage(`{"name":"Legacy emergency","weight":1.0}`), CreatedBy: "admin",
@@ -355,7 +355,7 @@ func TestStaleLegacyParserSyncProposalRequiresRebase(t *testing.T) {
 
 func TestParserSyncRejectsStaleBundleBeforeApplyingControllerFiles(t *testing.T) {
 	f := newAPIFixture(t)
-	f.server.fleet.Register(&fleet.Node{ID: "parser-node", Hostname: "parser-node", Version: "22.16.1"})
+	f.server.fleet.Register(&fleet.Node{ID: "parser-node", Hostname: "parser-node", Version: "23.0.0-1"})
 	ctx := context.Background()
 	prior, err := f.server.buildActiveParserBundle(ctx)
 	if err != nil {
@@ -386,7 +386,7 @@ func TestParserSyncRejectsStaleBundleBeforeApplyingControllerFiles(t *testing.T)
 
 func TestParserSyncSeparatesEligibilityFromMetadataFailure(t *testing.T) {
 	f := newAPIFixture(t)
-	f.server.fleet.Register(&fleet.Node{ID: "parser-node", Hostname: "parser-node", Version: "22.16.1"})
+	f.server.fleet.Register(&fleet.Node{ID: "parser-node", Hostname: "parser-node", Version: "23.0.0-1"})
 	response, body := f.request(http.MethodPost, "/api/v1/parser-sync/retry", map[string]any{"node_ids": []string{"unknown-target"}})
 	if response.StatusCode != http.StatusConflict || !strings.Contains(string(body), "eligible enrolled client") {
 		t.Fatalf("eligibility status %d: %s", response.StatusCode, body)

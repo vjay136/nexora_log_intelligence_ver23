@@ -26,7 +26,7 @@ import (
 )
 
 // Version is the NLI engine version.
-const Version = "22.19.1"
+const Version = "23.0.0"
 
 // MaxLine is the maximum line size processed (1 MiB).
 const MaxLine = 1024 * 1024

@@ -20,6 +20,110 @@ test('login inventory comes from the webapp and controller health', async ({page
   await expect(page.locator('#login-parsers')).toHaveText('23');
 });
 
+test('workspace Reset covers every primary and inner tab without persistence requests', async ({page}) => {
+  test.setTimeout(120_000);
+  const {observed}=await mockController(page);
+  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  await login(page);
+  for(const workspace of tabs){
+    await page.getByTestId(`nav-${workspace}`).click();
+    await expect(page.locator('#page')).toHaveAttribute('data-page',workspace);
+    const innerNames=await page.locator('#page [role=tab]:visible').allTextContents();
+    for(const name of [null,...innerNames.map(name=>name.trim())]){
+      const tab=name?page.locator('#page').getByRole('tab',{name,exact:true}).first():null;
+      if(tab)await tab.click();
+      const start=observed.length;
+      await page.getByRole('button',{name:'Reset workspace',exact:true}).click();
+      await expect(page.locator('[data-workspace-reset-status]')).toContainText('Workspace reset locally');
+      await expect(page.locator('#page')).toHaveAttribute('data-page',workspace);
+      if(tab)await expect(tab).toHaveAttribute('aria-selected','true');
+      expect(observed.slice(start).filter(request=>!request.startsWith('GET ')&&!request.includes('/communications/browser-heartbeat')),`${workspace}/${name}: Reset must not write records`).toEqual([]);
+      await expect(page.locator('.error-state')).toHaveCount(0);
+    }
+  }
+  expect(errors).toEqual([]);
+});
+
+test('workspace Reset clears template draft identity and rejects a delayed pre-reset preview', async ({page}) => {
+  await mockController(page);
+  await login(page);
+  let finish,start;
+  const started=new Promise(resolve=>start=resolve),pending=new Promise(resolve=>finish=resolve);
+  await page.route('**/api/v1/field-mapping/template-draft',async route=>{
+    start();await pending;
+    await route.fulfill({json:{passed:true,config:{pattern:'previous sample',fields:{event:'event'}},examples:[{actual:{event:'old result'}}]}}).catch(()=>{});
+  });
+  await page.getByTestId('nav-header-templates').click();
+  await page.getByLabel('Sample log',{exact:true}).fill('old sample status=failed');
+  await page.locator('#config-form [name=id]').fill('unsaved-template');
+  await page.locator('#config-form [name=name]').fill('Unsaved template');
+  await page.getByRole('button',{name:'Generate draft JSON',exact:true}).click();
+  await started;
+  await page.getByRole('button',{name:'Reset workspace',exact:true}).click();
+  finish();
+  await expect(page.getByLabel('Sample log',{exact:true})).toHaveValue('');
+  await expect(page.locator('#config-form [name=id]')).toHaveValue('');
+  await expect(page.locator('#config-form [name=name]')).toHaveValue('');
+  await expect(page.locator('#config-form [name=config]')).toHaveValue('{}');
+  await expect(page.locator('#template-draft-result')).toBeEmpty();
+  await expect(page.getByRole('button',{name:'Generate draft JSON',exact:true})).toBeEnabled();
+  await expect(page.locator('#toast-region')).not.toContainText('old result');
+});
+
+test('workspace Reset discards FieldSense draft rows and stored mapping selection only', async ({page}) => {
+  await mockController(page);
+  await login(page);
+  await page.getByTestId('nav-field-mapping').click();
+  await page.locator('#nfi-raw').fill('status=failed;reason=not needed');
+  await page.locator('[data-action=qrw-add-field]').click();
+  await expect(page.locator('#qrw-field-rows tr[data-qrw-row]')).not.toHaveCount(0);
+  await page.getByRole('button',{name:'Reset workspace',exact:true}).click();
+  await expect(page.locator('#nfi-raw')).toHaveValue('');
+  await expect(page.locator('#qrw-field-rows tr[data-qrw-row]')).toHaveCount(0);
+  expect(await page.evaluate(()=>sessionStorage.getItem('nli.qrw.mapping-draft'))).toBeNull();
+  await page.getByTestId('nav-knownkeys').click();
+  await page.getByTestId('nav-field-mapping').click();
+  await expect(page.locator('#nfi-raw')).toHaveValue('');
+  await expect(page.locator('#qrw-field-rows tr[data-qrw-row]')).toHaveCount(0);
+});
+
+test('controller restart accepts a fresh revision zero and rejects retired instance updates without losing a draft', async ({page}) => {
+  await mockController(page);
+  const snapshot={schema_version:'nli.sync.v1',controller_instance_id:'controller-before-restart',revision:100,generated_at:new Date().toISOString(),aggregate:{},sources:[],diagnostics:{},subsystems:{}};
+  await page.route('**/api/v1/sync/snapshot',route=>route.fulfill({json:snapshot}));
+  await page.addInitScript(()=>{
+    window.__restartSources=[];
+    window.EventSource=class extends EventTarget{
+      constructor(url){super();this.url=url;window.__restartSources.push(this);setTimeout(()=>this.onopen?.(),0);}
+      close(){this.closed=true;}
+      emit(type,value){this.dispatchEvent(new MessageEvent(type,{data:JSON.stringify(value)}));}
+    };
+  });
+  await login(page);
+  await page.getByTestId('nav-header-templates').click();
+  await page.getByLabel('Sample log',{exact:true}).fill('unsaved evidence status=failed');
+  await page.evaluate(value=>window.__restartSources.at(-1).emit('sync_snapshot',{...value,controller_instance_id:'controller-after-restart',revision:0}),snapshot);
+  await expect.poll(()=>page.evaluate(()=>window.__restartSources.length)).toBe(2);
+  expect(await page.evaluate(()=>window.__restartSources.at(-1).url)).toContain('last_revision=0');
+  await expect(page.getByLabel('Sample log',{exact:true})).toHaveValue('unsaved evidence status=failed');
+  await expect(page.locator('#identity-role')).toHaveText('admin');
+  await page.evaluate(value=>window.__restartSources.at(-1).emit('sync_snapshot',{...value,revision:999}),snapshot);
+  await page.getByTestId('nav-streams').click();
+  await expect(page.locator('#stream-transport')).toContainText('revision 0');
+});
+
+test('workspace Reset is available to a read-only operator and preserves favorites and role', async ({page}) => {
+  await mockController(page,{role:'viewer'});
+  await login(page);
+  await page.getByTestId('nav-header-templates').click();
+  await page.locator('#workspace-favorite').click();
+  await expect(page.locator('#workspace-favorite')).toHaveAttribute('aria-pressed','true');
+  await page.getByRole('button',{name:'Reset workspace',exact:true}).click();
+  await expect(page.locator('#identity-role')).toHaveText('viewer');
+  await expect(page.locator('#workspace-favorite')).toHaveAttribute('aria-pressed','true');
+  await expect(page.locator('#config-form')).toHaveAttribute('data-permission-hidden','true');
+});
+
 test('stale approvals remain visible with mutation disabled', async ({page}) => {
   await mockController(page);
   await login(page);

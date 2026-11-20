@@ -211,7 +211,8 @@ func New(cfg Config) (*Server, error) {
 	}
 	if err := seedBuiltinCatalog(context.Background(), storage); err != nil {
 		_ = storage.Close()
-		return nil, fmt.Errorf("seed parser catalog: %w", err)
+		code, next, _ := metastore.FailureDiagnostic(err)
+		return nil, fmt.Errorf("seed parser catalog: %w; %s (%s)", err, next, code)
 	}
 	artifactStorage, err := openArtifactBlobStore(cfg)
 	if err != nil {
@@ -1213,11 +1214,11 @@ func storageDiagnostic(message string) string {
 	switch {
 	case strings.TrimSpace(message) == "":
 		return "ok"
-	case strings.Contains(message, "http 401"):
+	case strings.Contains(message, "http 401"), strings.Contains(message, "metadata public api key rejected"):
 		return "invalid_public_api_key"
-	case strings.Contains(message, "http 403"), strings.Contains(message, "controller authentication failed"):
+	case strings.Contains(message, "http 403"), strings.Contains(message, "controller authentication failed"), strings.Contains(message, "controller metadata authentication rejected"):
 		return "controller_secret_mismatch_or_rpc_permission"
-	case strings.Contains(message, "schema version"), strings.Contains(message, "function") && strings.Contains(message, "does not exist"):
+	case strings.Contains(message, "metadata rpc schema unavailable"), strings.Contains(message, "schema version"), strings.Contains(message, "function") && strings.Contains(message, "does not exist"):
 		return "schema_missing_or_outdated"
 	default:
 		return "storage_unavailable"

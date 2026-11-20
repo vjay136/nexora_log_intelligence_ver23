@@ -270,7 +270,7 @@ func TestPublishedAssurancePackIsOnlyRuntimeBundleHandoff(t *testing.T) {
 
 func TestLateParserRolloutAcknowledgementCannotRewindReplayGate(t *testing.T) {
 	f := newAPIFixture(t)
-	f.server.fleet.Register(&fleet.Node{ID: "late-ack-node", Hostname: "late-ack-node"})
+	f.server.fleet.Register(&fleet.Node{ID: "late-ack-node", Hostname: "late-ack-node", Version: "23.0.0-1"})
 	oldBundle, err := f.server.buildActiveParserBundle(context.Background())
 	if err != nil {
 		t.Fatal(err)
