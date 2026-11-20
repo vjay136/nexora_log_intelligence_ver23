@@ -143,10 +143,11 @@ if [[ $purge -eq 1 ]]; then
   fi
   rm -rf -- /var/lib/nli-controller /var/lib/nli-tunnel /var/www/nli-acme
   rmdir /etc/nli/cloudflare 2>/dev/null || true
+  # Updater configuration and license credentials belong only to this RPM.
+  rm -f -- /etc/nli/geoip.env /etc/nli/geoip.env.rpmsave /etc/nli/geoip.env.rpmnew
   # Shared GeoIP assets may still be needed by a coinstalled client. External
   # databases/certificates and third-party packages are not NLI-owned state.
   if ! rpm -q nli-client >/dev/null 2>&1; then
-    rm -f -- /etc/nli/geoip.env /etc/nli/geoip.env.rpmsave /etc/nli/geoip.env.rpmnew
     rm -rf -- /var/lib/nli-geoip /var/cache/nli /var/log/nli
     rmdir /etc/nli 2>/dev/null || true
   fi

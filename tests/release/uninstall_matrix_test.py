@@ -42,6 +42,7 @@ for mode in range(1,11):
       assert has('etc/nli/cloudflare/tunnel-token')==(not purge)
       assert has('etc/cloudflared/tunnel-token')==(not purge)
       assert has('var/lib/nli-tunnel/state')==(not purge)
+      assert has('etc/nli/geoip.env.rpmsave')==(not purge)
      else:
       assert has('etc/nli/nli.json')==(not purge)
       assert has('etc/nli/nli.json.backup')==(not purge)
