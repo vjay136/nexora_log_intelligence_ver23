@@ -1,9 +1,7 @@
 package controlplane
 
 import (
-	"encoding/json"
 	"net/http"
-	metastore "nexora.local/nli-v20/internal/store"
 	"sync"
 	"time"
 )
@@ -37,12 +35,7 @@ func replyMetadataCurrent(w http.ResponseWriter, view *recoverableMetadataView, 
 	jsonOK(w, value)
 }
 
-func replyMetadataUnavailable(w http.ResponseWriter, r *http.Request, view *recoverableMetadataView, message string, causes ...error) {
-	var cause error
-	if len(causes) > 0 {
-		cause = causes[0]
-	}
-	code, next, retryable := metastore.FailureDiagnostic(cause)
+func replyMetadataUnavailable(w http.ResponseWriter, r *http.Request, view *recoverableMetadataView, message string) {
 	w.Header().Set("Cache-Control", "no-store")
 	if view != nil && r.Context().Err() == nil {
 		view.mu.RLock()
@@ -55,18 +48,9 @@ func replyMetadataUnavailable(w http.ResponseWriter, r *http.Request, view *reco
 			}
 			stale["snapshot_stale"] = true
 			stale["snapshot_error"] = message
-			stale["diagnostic"], stale["next_action"], stale["retryable"] = code, next, retryable
 			jsonOK(w, stale)
 			return
 		}
 	}
-	metadataFailure(w, message, cause)
-}
-
-func metadataFailure(w http.ResponseWriter, message string, cause error) {
-	code, next, retryable := metastore.FailureDiagnostic(cause)
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusServiceUnavailable)
-	_ = json.NewEncoder(w).Encode(map[string]any{"error": message, "diagnostic": code, "next_action": next, "retryable": retryable})
+	jsonError(w, message, http.StatusServiceUnavailable)
 }

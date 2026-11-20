@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -152,11 +151,6 @@ func TestMigrationAPIRealPipelineDraftAndNoRetention(t *testing.T) {
 
 func TestMigrationAPIVectorAndDeterministicReportHashes(t *testing.T) {
 	f := newAPIFixture(t)
-	baselineResponse, baselineData := f.request("GET", "/api/v1/parser-packs", nil)
-	if baselineResponse.StatusCode != 200 {
-		t.Fatal("read seeded parser baseline")
-	}
-	baseline := decodeMap(t, baselineData)
 	request := map[string]any{
 		"filename": "smtp.toml", "source_type": "vector", "content": controlplaneTestVector, "create_draft": false,
 	}
@@ -186,7 +180,7 @@ func TestMigrationAPIVectorAndDeterministicReportHashes(t *testing.T) {
 		t.Fatalf("create_draft=false persisted a draft id: %#v", first["draft_id"])
 	}
 	response, data := f.request("GET", "/api/v1/parser-packs", nil)
-	if response.StatusCode != 200 || !reflect.DeepEqual(decodeMap(t, data)["parser_packs"], baseline["parser_packs"]) {
+	if response.StatusCode != 200 || decodeMap(t, data)["count"].(float64) != 0 {
 		t.Fatalf("create_draft=false created parser pack: %d %s", response.StatusCode, data)
 	}
 }

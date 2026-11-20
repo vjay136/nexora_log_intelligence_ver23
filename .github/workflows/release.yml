@@ -1,184 +1,24 @@
-name: NLI V23 release
-
+name: Verify local-first NLI release
 on:
-  push:
-    branches: [main]
-    tags: ['v23.*']
-  pull_request:
-    paths:
-      - 'packaging/**'
-      - 'scripts/release/**'
-      - 'tests/release/**'
-      - 'tests/rocky/**'
-      - 'supabase/**'
-      - 'tests/supabase/**'
-      - 'scripts/setup-controller-rocky.sh'
-      - 'docs/V21_R2_RELEASE_NOTES.md'
-      - 'docs/V21_R2_TEST_RESULTS.md'
-      - 'docs/V21_R3_RELEASE_NOTES.md'
-      - 'docs/V21_R3_TEST_RESULTS.md'
-      - 'docs/V21_R4_RELEASE_NOTES.md'
-      - 'docs/V21_R4_TEST_RESULTS.md'
-      - 'docs/V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md'
-      - 'docs/V21_R5_RELEASE_NOTES.md'
-      - 'docs/V21_R5_TEST_RESULTS.md'
-      - 'docs/V21_R6_RELEASE_NOTES.md'
-      - 'docs/V21_R6_TEST_RESULTS.md'
-      - 'docs/V21_R7_RELEASE_NOTES.md'
-      - 'docs/V21_R7_TEST_RESULTS.md'
-      - 'docs/V21_R7_MAPPING_DESIGN.md'
-      - 'docs/V21_R7_FIELD_MAPPING_GUIDE.md'
-      - 'docs/V21_R8_RELEASE_NOTES.md'
-      - 'docs/V21_R8_TEST_RESULTS.md'
-      - 'docs/V21_R8_DESIGN_ENGINE_DESIGN.md'
-      - 'docs/V21_R8_DESIGN_ENGINE_GUIDE.md'
-      - 'docs/V21_R8_OUTPUT_ACCOUNTING_GUIDE.md'
-      - 'docs/V21_R8_AI_PROVIDER_GUIDE.md'
-      - 'web/design-engine.js'
-      - 'web/design-engine.css'
-      - 'web/index.html'
-      - 'scripts/build-webapp.mjs'
-      - 'scripts/export-webapp.mjs'
-      - 'scripts/nli-output-audit.py'
-      - 'tests/design-engine-contract.test.js'
-      - 'docs/V21_R9_RELEASE_NOTES.md'
-      - 'docs/V21_R9_TEST_RESULTS.md'
-      - 'docs/V21_R9_FIELD_MAPPING_GUIDE.md'
-      - 'docs/V21_R10_RELEASE_NOTES.md'
-      - 'docs/V21_R10_TEST_RESULTS.md'
-      - 'docs/V21_R10_MANAGER_DEMO.md'
-      - 'docs/V23_R3_RELEASE_NOTES.md'
-      - 'docs/VER21_IMPLEMENTATION_PLAN.md'
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - 'Makefile'
-      - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
-      previous_release_tag:
-        description: 'Previous production tag used for upgrade/rollback qualification; defaults to Ver23 R2 23.0.0-2'
-        required: false
-        type: string
-
+      tag:
+        description: Published local-first release tag to verify
+        required: true
+        default: v23.0.0-4
 permissions:
   contents: read
-
-concurrency:
-  group: nli-release-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  infrastructure-static:
+  verify:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1, Node.js 24
-        with:
-          fetch-depth: 0
-      - name: Validate release infrastructure
-        env:
-          NLI_BUILD_SCRATCH: ${{ runner.temp }}
-        run: |
-          if [[ "${GITHUB_REF_TYPE:-}" == tag ]]; then
-            source packaging/release.env
-            expected_tag="v${NLI_VERSION}-${NLI_RELEASE}"
-            if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
-              printf 'Release tag %s does not match package identity %s\n' "$GITHUB_REF_NAME" "$expected_tag" >&2
-              exit 1
-            fi
-          fi
-          git show 4701a9d:supabase/nli_schema.sql > '${{ runner.temp }}/nli-previous-schema.sql'
-          NLI_PREVIOUS_SUPABASE_SCHEMA='${{ runner.temp }}/nli-previous-schema.sql' make release-static
-      - name: Test Go and Web contracts
-        run: |
-          go test ./...
-          go vet ./...
-          npm run web:check
-      - name: Run Linux race detector
-        run: go test -timeout=20m -race ./...
-      - name: Test Vite production build and browser UI
-        working-directory: web
-        run: |
-          npm ci --ignore-scripts
-          npx playwright install --with-deps chromium
-          npm run build
-          npm run test:ui
-      - name: Prove deterministic RPM and evidence pipeline
-        env:
-          NLI_BUILD_SCRATCH: ${{ runner.temp }}
-        run: make release-package-test
-
-
-  release-candidate:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v23.')
-    needs: infrastructure-static
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1, Node.js 24
-        with:
-          fetch-depth: 0
-      - name: Build reproducible release
-        env:
-          NLI_BUILD_SCRATCH: ${{ runner.temp }}
-        run: make release-build OUTPUT_DIR='${{ runner.temp }}/nli-release'
-      - name: Download genuine previous release RPMs
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - name: Verify the published local artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-          PREVIOUS_RELEASE_TAG: ${{ inputs.previous_release_tag || 'v23.0.0-2' }}
-          PREVIOUS_RELEASE_REPO: vjay136/nexora_log_intelligence_ver23
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          mkdir -p '${{ runner.temp }}/previous'
-          previous_release_tag="$PREVIOUS_RELEASE_TAG"
-          if [[ -z "$previous_release_tag" ]]; then
-            previous_release_tag=$(gh release list --repo "$PREVIOUS_RELEASE_REPO" --limit 100 \
-              --json tagName,isDraft,isPrerelease,publishedAt \
-              --jq 'map(select(.isDraft == false and .isPrerelease == false)) | sort_by(.publishedAt) | reverse | .[0].tagName')
-          fi
-          if [[ -z "$previous_release_tag" || "$previous_release_tag" == "null" ]]; then
-            echo "No published previous lifecycle baseline is available in $PREVIOUS_RELEASE_REPO" >&2
-            exit 1
-          fi
-          echo "Using previous lifecycle baseline $PREVIOUS_RELEASE_REPO@$previous_release_tag"
-          gh release view "$previous_release_tag" --repo "$PREVIOUS_RELEASE_REPO" >/dev/null
-          gh release download "$previous_release_tag" --repo "$PREVIOUS_RELEASE_REPO" \
-            --pattern '*.rpm' --dir '${{ runner.temp }}/previous'
-          shopt -s nullglob
-          previous_rpms=('${{ runner.temp }}/previous'/*.rpm)
-          if (( ${#previous_rpms[@]} < 2 )); then
-            echo "Expected genuine client and controller RPMs in $PREVIOUS_RELEASE_REPO@$previous_release_tag" >&2
-            exit 1
-          fi
-          echo 'REQUIRE_PREVIOUS=1' >> "$GITHUB_ENV"
-      - name: Validate Rocky 9 and Rocky 10.2 lifecycle
-        env:
-          NLI_BUILD_SCRATCH: ${{ runner.temp }}
-        run: make release-rocky OUTPUT_DIR='${{ runner.temp }}/nli-release' PREVIOUS_DIR='${{ runner.temp }}/previous'
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node.js 24
-        with:
-          name: nli-v23-unsigned-release
-          path: ${{ runner.temp }}/nli-release/
-          if-no-files-found: error
-          retention-days: 14
-      - name: Publish V23 GitHub release
-        if: startsWith(github.ref, 'refs/tags/v23.')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          remote_revision=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)
-          if [[ "$remote_revision" != "$GITHUB_SHA" ]]; then
-            echo 'Release tag changed during qualification; refusing stale artifacts' >&2
-            exit 1
-          fi
-          release_assets=('${{ runner.temp }}/nli-release/'*)
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${release_assets[@]}" \
-              --repo "$GITHUB_REPOSITORY" \
-              --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" "${release_assets[@]}" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "Nexora Log Intelligence Ver23 — $GITHUB_REF_NAME" \
-              --notes-file docs/V23_R3_RELEASE_NOTES.md \
-              --latest
-          fi
+          mkdir release
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release
+          cd release
+          sha256sum -c SHA256SUMS

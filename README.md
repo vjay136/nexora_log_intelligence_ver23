@@ -1,10 +1,18 @@
-# Nexora Log Intelligence Ver23
+# NLI Ver23 R4 — local artifact replica
 
-Nexora Log Intelligence Ver23 is a deterministic, review-gated log parsing and fleet-control platform for x86_64 RHEL/Rocky Linux 8, 9, and 10. It combines a managed client, a central controller, an authenticated WebView/webapp, Supabase-backed control metadata, private file storage for approved workflows, and optional AI-assisted parser proposals.
+R4 (`v23.0.0-4`) is an identity-only repackage of the exact local `releases/v22.19.1-0` artifacts, not a continuation of the Ver23 R1–R3 runtime changes. Runtime source: `77f95a94885ab1e1843bcd214d44e70a495ee85c`.
+
+Prepare and verify artifacts in the local release folder before uploading those same bytes to GitHub. `scripts/release/replicate-local-v2219.py` uses original RPM payloads without compiling runtime code. Native executables and the webapp ZIP remain byte-identical to the original release; native version commands still report `22.19.1`. RPM package identity is `23.0.0-4`.
+
+No existing API, parser-sync or Supabase authentication issue is claimed fixed. Stable service/configuration/protocol paths and SQL ownership checks remain unchanged. The release's `REPLICATION_MANIFEST.json` records binary hashes and identity edits. The manual GitHub workflow verifies published checksums only, with no remote rebuild.
+
+# Nexora Log Intelligence Ver22
+
+Nexora Log Intelligence Ver22 is a deterministic, review-gated log parsing and fleet-control platform for x86_64 RHEL/Rocky Linux 8, 9, and 10. It combines a managed client, a central controller, an authenticated WebView/webapp, Supabase-backed control metadata, private file storage for approved workflows, and optional AI-assisted parser proposals.
 
 > Install from the single versioned release archive in a fresh directory. Verify its external `.sha256` file and the complete internal `SHA256SUMS`; never mix loose files from different releases.
 
-Release `23.0.0-3` upgrades Ver23 R2 `23.0.0-2`. See the [Ver23 R3 release notes](docs/V23_R3_RELEASE_NOTES.md) and the [installation guide](docs/INSTALLATION_AND_CONFIGURATION.md).
+Release `22.19.1-0` upgrades Ver22 `22.18.1-0`. See the [22.19.1 release notes](docs/V22_19_1_RELEASE_NOTES.md) and the [installation guide](docs/INSTALLATION_AND_CONFIGURATION.md).
 
 ## V18 upgrade baseline architecture
 
@@ -14,7 +22,7 @@ The V18 architecture SVG is retained as the upgrade baseline reference. Its 8K P
 
 ## Historical Ver20 and Ver19 implementation notes
 
-The sections below preserve Ver20-era architecture and qualification history. Current release identity and installation commands are Ver23; use the Ver23 archive and helper names shown below.
+The sections below preserve Ver20-era architecture and qualification history. Current release identity and installation commands are Ver22; use the Ver22 archive and helper names shown below.
 
 ### Ver20 NUPIRE and EGPE
 
@@ -84,16 +92,16 @@ File buckets are private. Browsers never receive `SUPABASE_SECRET_KEY`, object p
 
 The publishable key is used only for the protected metadata RPC contract. Server-side private Storage requires a dedicated `sb_secret_...` key in the root-owned controller environment; it must never be committed, sent to Vercel, copied to a client RPM, or placed in a `NEXT_PUBLIC_` variable.
 
-## Ver23 upgrade and rollback
+## Ver22 upgrade and rollback
 
-Ver23 retains the stable RPM package identities, systemd units, `/etc/nli` configuration, and `/var/lib/nli` state paths for compatible upgrades. Ver20 release lifecycle statements below this section are historical. For the Ver20-to-Ver23 migration boundary and current rollback process, use the release archive's verified checksums and follow the target environment's approved recovery procedure; the legacy [Ver20 migration and rollback note](docs/release/V20_MIGRATION_AND_ROLLBACK.md) describes the earlier boundary.
+Ver22 retains the stable RPM package identities, systemd units, `/etc/nli` configuration, and `/var/lib/nli` state paths for compatible upgrades. Ver20 release lifecycle statements below this section are historical. For the Ver20-to-Ver22 migration boundary and current rollback process, use the release archive's verified checksums and follow the target environment's approved recovery procedure; the legacy [Ver20 migration and rollback note](docs/release/V20_MIGRATION_AND_ROLLBACK.md) describes the earlier boundary.
 
 ## Installation
 
 On the Rocky/RHEL controller, the lowest-interaction path is:
 
 ```bash
-sudo bash install-controller-ver23.sh --automatic
+sudo bash install-controller-ver22.sh --automatic
 ```
 
 This discovers private/public AWS and host identities, persists generated secrets in root-owned files, creates TLS material, configures the listener/firewall, and prints concrete diagnostics. Run without `--automatic` to choose private-network TLS, public Nginx/ACME, Cloudflare Tunnel, a corporate certificate, or an existing public HTTPS proxy. The installer creates a root-only, one-use `/root/nli-client-bootstrap.env` and a recoverable root-only `/root/nli-controller-credentials.env`; it does not print secret values to the terminal.
@@ -101,7 +109,7 @@ This discovers private/public AWS and host identities, persists generated secret
 On each client, provision all reviewed families and standard paths with:
 
 ```bash
-sudo bash install-client-ver23.sh --all-log-files
+sudo bash install-client-ver22.sh --all-log-files
 ```
 
 The interactive installer remains available for custom log paths, parser families, event/service/hostname selection, and destinations. Enter `automatic` for both paths and parser families to create and verify one reviewed sample path for every bundled parser. For each additional client, first create a new one-use enrollment file on the controller:
@@ -113,8 +121,8 @@ sudo nli-controller-setup --rotate-enrollment
 Use the separate uninstall scripts when required:
 
 ```bash
-sudo bash uninstall-client-ver23.sh
-sudo bash uninstall-controller-ver23.sh
+sudo bash uninstall-client-ver22.sh
+sudo bash uninstall-controller-ver22.sh
 ```
 
 See [INSTALLATION_AND_CONFIGURATION.md](docs/INSTALLATION_AND_CONFIGURATION.md) for VMware/MobaXterm steps, connectivity checks, Vercel/Cloudflare configuration, Supabase bootstrap, upgrades, and optional purge behavior.
@@ -125,8 +133,8 @@ single additive controller command that installs private VPC TLS and then
 starts a named Cloudflare Tunnel is:
 
 ```bash
-sudo bash install-controller-aws-cloudflare-ver23.sh \
-  --rpm ./nli_controller_agent_ver23.rpm \
+sudo bash install-controller-aws-cloudflare-ver22.sh \
+  --rpm ./nli_controller_agent_ver22.rpm \
   --private-endpoint 10.20.1.10 \
   --public-hostname nli-controller.example.com \
   --tunnel-token-file /root/cloudflare-tunnel-token.txt

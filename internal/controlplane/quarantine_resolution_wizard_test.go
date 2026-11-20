@@ -26,7 +26,7 @@ func TestQuarantineResolutionWizardAllowsAdminCreatorApprovalWithReason(t *testi
 	if _, err := f.server.metadata.Put(context.Background(), metastore.Document{Collection: "parser-packs", ID: "qrw-rollout", State: "published", Payload: parserPayload, CreatedBy: "author"}); err != nil {
 		t.Fatal(err)
 	}
-	f.server.fleet.Register(&fleet.Node{ID: "qrw-node", Hostname: "qrw-node", Version: "23.0.0-1"})
+	f.server.fleet.Register(&fleet.Node{ID: "qrw-node", Hostname: "qrw-node"})
 	f.login("admin", "Admin-password-12345!")
 	f.refreshCSRF()
 	response, data := f.request(http.MethodPost, "/api/v1/parser-sync/rollout", map[string]any{"target_mode": "origin", "origin_node_id": "qrw-node"})
@@ -77,8 +77,8 @@ func TestQuarantineResolutionWizardParserRolloutTargetModesAndStaleProposal(t *t
 	if _, err := f.server.metadata.Put(context.Background(), metastore.Document{Collection: "parser-packs", ID: "qrw-targets", State: "published", Payload: parserPayload, CreatedBy: "author"}); err != nil {
 		t.Fatal(err)
 	}
-	f.server.fleet.Register(&fleet.Node{ID: "qrw-target-a", Hostname: "qrw-target-a", Version: "23.0.0-1"})
-	f.server.fleet.Register(&fleet.Node{ID: "qrw-target-b", Hostname: "qrw-target-b", Version: "23.0.0-1"})
+	f.server.fleet.Register(&fleet.Node{ID: "qrw-target-a", Hostname: "qrw-target-a"})
+	f.server.fleet.Register(&fleet.Node{ID: "qrw-target-b", Hostname: "qrw-target-b"})
 	f.login("admin", "Admin-password-12345!")
 	f.refreshCSRF()
 	response, data := f.request(http.MethodPost, "/api/v1/parser-sync/rollout", map[string]any{"target_mode": "selected", "node_ids": []string{"qrw-target-a"}})

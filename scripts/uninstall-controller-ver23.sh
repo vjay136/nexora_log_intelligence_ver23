@@ -83,7 +83,7 @@ PY
 }
 
 systemctl disable --now nli-controller-bootstrap.service nli-controller-agent.service >/dev/null 2>&1 || true
-systemctl disable --now nli-cloudflared.service nli-cloudflared-quick.service nli-certbot-renew.timer nli-certbot-renew.service nli-geoip-update.timer nli-geoip-update.service >/dev/null 2>&1 || true
+systemctl disable --now nli-cloudflared.service nli-cloudflared-quick.service nli-certbot-renew.timer >/dev/null 2>&1 || true
 
 remove_managed_site() {
   local site=$1 validator=$2 service=$3 backup
@@ -106,17 +106,7 @@ remove_managed_site /etc/nginx/conf.d/nli-controller.conf nginx nginx.service
 remove_managed_site /etc/httpd/conf.d/nli-controller.conf httpd httpd.service
 rm -f -- /etc/systemd/system/nli-cloudflared.service /etc/systemd/system/nli-cloudflared-quick.service
 rm -f -- /etc/systemd/system/nli-certbot-renew.service /etc/systemd/system/nli-certbot-renew.timer
-# The standalone named-tunnel wrapper uses a generic service name: remove it
-# only when its unit proves this is NLI's connector, never an operator tunnel.
-if [[ -f /etc/systemd/system/cloudflared.service ]] && grep -Fxq 'Description=Cloudflare Tunnel for NLI controller' /etc/systemd/system/cloudflared.service; then
-  systemctl disable --now cloudflared.service >/dev/null 2>&1 || true
-  install -d -m 0750 /etc/cloudflared
-  printf 'NLI controller named tunnel\n' >/etc/cloudflared/nli-controller-owned
-  rm -f -- /etc/systemd/system/cloudflared.service
-  if [[ $purge -eq 1 ]]; then rm -f -- /etc/cloudflared/tunnel-token /etc/cloudflared/deployment.conf; fi
-  rmdir /etc/cloudflared /var/lib/cloudflared 2>/dev/null || true
-fi
-rmdir /etc/nli/cloudflare 2>/dev/null || true
+rm -f -- /etc/nli/cloudflare/tunnel-token
 systemctl daemon-reload
 restore_nli_selinux_boolean_on_purge
 
@@ -131,28 +121,11 @@ systemctl reset-failed nli-controller-bootstrap.service nli-controller-agent.ser
 if [[ $purge -eq 1 ]]; then
   rm -f -- /etc/nli/controller.json /etc/nli/controller.json.rpmsave /etc/nli/controller.json.rpmnew
   rm -f -- /etc/nli/controller.env /etc/nli/controller.env.rpmsave /etc/nli/controller.env.rpmnew
-  for generated in /etc/nli/controller-edge.json /etc/nli/controller-bootstrap.env; do
-    rm -f -- "$generated" "$generated.rpmsave" "$generated.rpmnew"
-  done
+  rm -f -- /etc/nli/controller-edge.json
+  rm -f -- /etc/nli/controller-bootstrap.env
   rm -f -- /root/nli-client-bootstrap.env /root/nli-controller-credentials.env \
     /root/nli-initial-admin-password.txt /root/nli-supabase-bootstrap.sql
-  rm -f -- /root/nli-controller-credentials.env.pending /root/nli-supabase-bootstrap.sql.pending
-  rm -rf -- /root/nli-controller-credentials.env.project-backups
-  rm -f -- /etc/nli/cloudflare/tunnel-token
-  if [[ -f /etc/cloudflared/nli-controller-owned && ! -e /etc/systemd/system/cloudflared.service ]]; then
-    rm -f -- /etc/cloudflared/tunnel-token /etc/cloudflared/deployment.conf /etc/cloudflared/nli-controller-owned
-    rmdir /etc/cloudflared /var/lib/cloudflared 2>/dev/null || true
-  fi
-  rm -rf -- /var/lib/nli-controller /var/lib/nli-tunnel /var/www/nli-acme
-  rmdir /etc/nli/cloudflare 2>/dev/null || true
-  # Updater configuration and license credentials belong only to this RPM.
-  rm -f -- /etc/nli/geoip.env /etc/nli/geoip.env.rpmsave /etc/nli/geoip.env.rpmnew
-  # Shared GeoIP assets may still be needed by a coinstalled client. External
-  # databases/certificates and third-party packages are not NLI-owned state.
-  if ! rpm -q nli-client >/dev/null 2>&1; then
-    rm -rf -- /var/lib/nli-geoip /var/cache/nli /var/log/nli
-    rmdir /etc/nli 2>/dev/null || true
-  fi
+  rm -rf -- /var/lib/nli-controller
   info 'local controller configuration and state were purged; Supabase cloud data was not changed'
 else
   info 'controller configuration and state were preserved for reinstall/recovery'

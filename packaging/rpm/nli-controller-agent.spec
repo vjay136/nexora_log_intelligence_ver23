@@ -1,11 +1,11 @@
 %{!?nli_version:%global nli_version 23.0.0}
-%{!?nli_release:%global nli_release 3}
+%{!?nli_release:%global nli_release 4}
 Name:           nli-controller-agent
 Version:        %{nli_version}
 Release:        %{nli_release}%{?dist}
 Summary:        Nexora Log Intelligence Ver23 controller and Web console
 License:        LicenseRef-Proprietary
-URL:            https://github.com/vjay136/nexora_log_intelligence_ver21.git
+URL:            https://github.com/vjay136/nexora_log_intelligence_ver23.git
 Source0:        %{name}-%{version}.tar.gz
 ExclusiveArch:  x86_64
 Requires(pre):  shadow-utils
@@ -44,7 +44,7 @@ cp -a web/. %{buildroot}%{_datadir}/nli/webview_ver21/
 find %{buildroot}%{_datadir}/nli/webview_ver21 -type d -exec chmod 0755 {} +
 find %{buildroot}%{_datadir}/nli/webview_ver21 -type f -exec chmod 0644 {} +
 install -m 0644 README.md %{buildroot}%{_docdir}/%{name}/README.md
-install -m 0644 V23_R3_RELEASE_NOTES.md All_NLI_features.md V21_R1_RELEASE_NOTES.md V21_R1_TEST_RESULTS.md V21_R2_RELEASE_NOTES.md V21_R2_TEST_RESULTS.md V21_R3_RELEASE_NOTES.md V21_R3_TEST_RESULTS.md V21_R4_RELEASE_NOTES.md V21_R4_TEST_RESULTS.md V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md V21_R5_RELEASE_NOTES.md V21_R5_TEST_RESULTS.md V21_R6_RELEASE_NOTES.md V21_R6_TEST_RESULTS.md V21_R7_RELEASE_NOTES.md V21_R7_TEST_RESULTS.md V21_R7_MAPPING_DESIGN.md V21_R7_FIELD_MAPPING_GUIDE.md V21_R8_RELEASE_NOTES.md V21_R8_TEST_RESULTS.md V21_R8_DESIGN_ENGINE_DESIGN.md V21_R8_DESIGN_ENGINE_GUIDE.md V21_R8_OUTPUT_ACCOUNTING_GUIDE.md V21_R8_AI_PROVIDER_GUIDE.md V21_R9_RELEASE_NOTES.md V21_R9_TEST_RESULTS.md V21_R9_FIELD_MAPPING_GUIDE.md V21_R10_RELEASE_NOTES.md V21_R10_TEST_RESULTS.md V21_R10_MANAGER_DEMO.md nli-output-audit.py VER21_IMPLEMENTATION_PLAN.md %{buildroot}%{_docdir}/%{name}/
+install -m 0644 V22_19_1_RELEASE_NOTES.md All_NLI_features.md V21_R1_RELEASE_NOTES.md V21_R1_TEST_RESULTS.md V21_R2_RELEASE_NOTES.md V21_R2_TEST_RESULTS.md V21_R3_RELEASE_NOTES.md V21_R3_TEST_RESULTS.md V21_R4_RELEASE_NOTES.md V21_R4_TEST_RESULTS.md V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md V21_R5_RELEASE_NOTES.md V21_R5_TEST_RESULTS.md V21_R6_RELEASE_NOTES.md V21_R6_TEST_RESULTS.md V21_R7_RELEASE_NOTES.md V21_R7_TEST_RESULTS.md V21_R7_MAPPING_DESIGN.md V21_R7_FIELD_MAPPING_GUIDE.md V21_R8_RELEASE_NOTES.md V21_R8_TEST_RESULTS.md V21_R8_DESIGN_ENGINE_DESIGN.md V21_R8_DESIGN_ENGINE_GUIDE.md V21_R8_OUTPUT_ACCOUNTING_GUIDE.md V21_R8_AI_PROVIDER_GUIDE.md V21_R9_RELEASE_NOTES.md V21_R9_TEST_RESULTS.md V21_R9_FIELD_MAPPING_GUIDE.md V21_R10_RELEASE_NOTES.md V21_R10_TEST_RESULTS.md V21_R10_MANAGER_DEMO.md nli-output-audit.py VER21_IMPLEMENTATION_PLAN.md %{buildroot}%{_docdir}/%{name}/
 install -m 0644 metrics/README.md metrics/metric-catalog.json metrics/prometheus-scrape.yml metrics/grafana-dashboard.json %{buildroot}%{_datadir}/nli/metrics/
 
 %pre
@@ -67,38 +67,10 @@ if [ -s /etc/nli/controller-bootstrap.env ]; then systemctl start nli-controller
 
 %preun
 if [ "$1" -eq 0 ]; then
-  systemctl disable --now nli-controller-bootstrap.service nli-controller-agent.service nli-geoip-update.timer nli-geoip-update.service nli-cloudflared.service nli-cloudflared-quick.service nli-certbot-renew.timer nli-certbot-renew.service >/dev/null 2>&1 || :
+  systemctl disable --now nli-controller-bootstrap.service nli-controller-agent.service >/dev/null 2>&1 || :
 fi
 
 %postun
-if [ "$1" -eq 0 ]; then
-  # Removing an RPM preserves metadata/TLS but must not leave its generated
-  # connectors or reverse-proxy routes running after the controller disappears.
-  for entry in 'nginx nginx.service /etc/nginx/conf.d/nli-controller.conf' 'httpd httpd.service /etc/httpd/conf.d/nli-controller.conf'; do
-    set -- $entry
-    validator=$1; proxy_service=$2; site=$3
-    if [ -f "$site" ]; then
-      backup=$(mktemp)
-      cp -a "$site" "$backup"
-      rm -f -- "$site"
-      if systemctl is-active --quiet "$proxy_service"; then
-        if ! "$validator" -t >/dev/null 2>&1 || ! systemctl reload "$proxy_service" >/dev/null 2>&1; then
-          cp -a "$backup" "$site"
-          echo "NLI removal preserved proxy site after validation/reload failed: $site" >&2
-        fi
-      fi
-      rm -f -- "$backup"
-    fi
-  done
-  rm -f -- /etc/systemd/system/nli-cloudflared.service /etc/systemd/system/nli-cloudflared-quick.service /etc/systemd/system/nli-certbot-renew.service /etc/systemd/system/nli-certbot-renew.timer
-  if [ -f /etc/systemd/system/cloudflared.service ] && grep -Fxq 'Description=Cloudflare Tunnel for NLI controller' /etc/systemd/system/cloudflared.service; then
-    systemctl disable --now cloudflared.service >/dev/null 2>&1 || :
-    install -d -m 0750 /etc/cloudflared
-    printf 'NLI controller named tunnel\n' >/etc/cloudflared/nli-controller-owned
-    rm -f -- /etc/systemd/system/cloudflared.service
-    rmdir /etc/cloudflared /var/lib/cloudflared 2>/dev/null || :
-  fi
-fi
 systemctl daemon-reload >/dev/null 2>&1 || :
 
 %files
@@ -160,18 +132,9 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 %doc %{_docdir}/%{name}/V21_R10_MANAGER_DEMO.md
 %doc %{_docdir}/%{name}/nli-output-audit.py
 %doc %{_docdir}/%{name}/VER21_IMPLEMENTATION_PLAN.md
-%doc %{_docdir}/%{name}/V23_R3_RELEASE_NOTES.md
+%doc %{_docdir}/%{name}/V22_19_1_RELEASE_NOTES.md
 
 %changelog
-* Sat Nov 21 2026 Nexora Engineering <engineering@nexora.local> - 23.0.0-3
-- Restore exact Ver22.19 installation flow with Ver23 identity substitutions only.
-
-* Sat Nov 21 2026 Nexora Engineering <engineering@nexora.local> - 23.0.0-2
-- Support dynamic new/existing Supabase credentials with explicit project selection.
-
-* Fri Nov 20 2026 Nexora Engineering <engineering@nexora.local> - 23.0.0-1
-- Publish Ver23 R1 from the exact Ver22.19 baseline with compatible state paths.
-
 * Fri Nov 13 2026 Nexora Engineering <engineering@nexora.local> - 22.19.1-0
 - Improve rollout recovery and field mapping previews.
 
@@ -203,7 +166,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 - Add literal mapping controls and key/value input preparation.
 
 * Sun Nov 08 2026 Nexora Engineering <engineering@nexora.local> - 22.1.0-0
-- Qualify Ver22.1 runtime and fleet operations.
+- Qualify Ver23.1 runtime and fleet operations.
 
 * Sat Nov 07 2026 Nexora Engineering <engineering@nexora.local> - 21.0.0-10
 - Add KV Intelligence Engine authoring and release evidence.

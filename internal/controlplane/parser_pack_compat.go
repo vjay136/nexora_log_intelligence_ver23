@@ -228,7 +228,7 @@ func normalizeRuntimeParserPackContext(ctx context.Context, doc metastore.Docume
 	if verified.ReviewState != parserpolicy.ReviewStateApproved && verified.ReviewState != parserpolicy.ReviewStateActivated {
 		return nil, nil, fmt.Errorf("runtime parser must be approved or activated")
 	}
-	validated, err := familyprofile.ValidatePublishedPackBytesContext(ctx, doc.ID, encoded)
+	validated, err := familyprofile.ValidateManagedPackBytesContext(ctx, doc.ID, encoded)
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime parser failed production validation: %w", err)
 	}

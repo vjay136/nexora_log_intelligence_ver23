@@ -58,39 +58,3 @@ func TestFieldSenseCanceledRequestCannotOccupyCapacity(t *testing.T) {
 		t.Fatal("canceled request admitted")
 	}
 }
-
-func TestFieldSenseWorkflowBudgetKeepsStandardExtractionDeadline(t *testing.T) {
-	s := &Server{cfg: Config{FieldSenseAnalysisConcurrency: 1, FieldSenseAnalysisTimeoutMS: 50}}
-	request := httptest.NewRequest(http.MethodPost, "/", nil)
-	workflow, done, ok := s.beginFieldSenseAnalysisBudget(httptest.NewRecorder(), request, metadataViewReadBudget+s.fieldSenseAnalysis().timeout)
-	if !ok {
-		t.Fatal("workflow admission failed")
-	}
-	deadline, _ := workflow.Deadline()
-	if time.Until(deadline) <= metadataViewReadBudget {
-		t.Fatal("workflow did not reserve separate metadata and extraction phases")
-	}
-	busy := httptest.NewRecorder()
-	if _, _, ok := s.beginFieldSenseAnalysis(busy, request); ok || busy.Code != 429 {
-		t.Fatal("workflow bypassed shared capacity")
-	}
-	done()
-	extraction, finish, ok := s.beginFieldSenseAnalysis(httptest.NewRecorder(), request)
-	if !ok {
-		t.Fatal("workflow leaked its slot")
-	}
-	defer finish()
-	deadline, _ = extraction.Deadline()
-	if time.Until(deadline) > 50*time.Millisecond {
-		t.Fatal("ordinary extraction inherited the longer metadata budget")
-	}
-	select {
-	case <-extraction.Done():
-	case <-time.After(time.Second):
-		t.Fatal("ordinary extraction deadline missing")
-	}
-	w := httptest.NewRecorder()
-	if !fieldSenseContextError(w, extraction) || w.Code != 408 {
-		t.Fatal("ordinary extraction timeout changed")
-	}
-}

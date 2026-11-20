@@ -12,15 +12,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"nexora.local/nli-v20/internal/canonicaljson"
-	"nexora.local/nli-v20/internal/familyprofile"
 	"nexora.local/nli-v20/internal/fieldmapping"
 	"nexora.local/nli-v20/internal/fleet"
 	"nexora.local/nli-v20/internal/middleware"
-	"nexora.local/nli-v20/internal/parserarchive"
 	"nexora.local/nli-v20/internal/protocol"
 	"nexora.local/nli-v20/internal/rollout"
 	metastore "nexora.local/nli-v20/internal/store"
@@ -330,15 +327,11 @@ func (s *Server) buildActiveParserBundle(ctx context.Context) (parserAssetBundle
 	}
 	readContext, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var workers sync.WaitGroup
-	defer func() { cancel(); workers.Wait() }()
 	reads := make([]chan collectionRead, len(parserAssetCollections))
 	for index, collection := range parserAssetCollections {
 		results := make(chan collectionRead, 1)
 		reads[index] = results
-		workers.Add(1)
 		go func(collection string, results chan<- collectionRead) {
-			defer workers.Done()
 			documents, err := s.listEffectiveParserAssets(readContext, collection)
 			results <- collectionRead{documents: documents, err: err}
 		}(collection, results)
@@ -446,9 +439,6 @@ func (s *Server) materializeParserBundle(bundle parserAssetBundle) (string, erro
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return "", err
 	}
-	if err := parserarchive.BeforeReplace(dir, verifyArchivedControllerBundle); err != nil {
-		return "", fmt.Errorf("preserve parser evidence: %w", err)
-	}
 	path := filepath.Join(dir, "bundle.json")
 	temp := path + ".staging"
 	file, err := os.OpenFile(temp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0640)
@@ -503,14 +493,13 @@ func (s *Server) readMaterializedParserBundleHash() (string, error) {
 }
 
 const (
-	kvOutputEditsMinimumRelease    = "22.1.0-0"
-	kvInputEditsMinimumRelease     = "22.2.0-0"
-	advancedKVMinimumRelease       = "22.11.0-0"
-	largeKVMinimumRelease          = "22.12.0-0"
-	taggedMailMinimumRelease       = "22.14.0-0"
-	liveTemplateMinimumRelease     = "22.16.1-0"
-	flatTemplateMinimumRelease     = "22.19.1-0"
-	reviewedBaselineMinimumRelease = "23.0.0-1"
+	kvOutputEditsMinimumRelease = "22.1.0-0"
+	kvInputEditsMinimumRelease  = "22.2.0-0"
+	advancedKVMinimumRelease    = "22.11.0-0"
+	largeKVMinimumRelease       = "22.12.0-0"
+	taggedMailMinimumRelease    = "22.14.0-0"
+	liveTemplateMinimumRelease  = "22.16.1-0"
+	flatTemplateMinimumRelease  = "22.19.1-0"
 )
 
 // Inspect native stage content so imported packs cannot bypass the release
@@ -520,11 +509,6 @@ func parserBundleMinimumKVRelease(bundle parserAssetBundle) string {
 	requireVersion := func(version string) {
 		if minimum == "" || !parserClientSupportsKVRelease(minimum, version) {
 			minimum = version
-		}
-	}
-	for _, asset := range bundle.Assets {
-		if asset.AssetClass == "parser-packs" && familyprofile.IsBuiltinPackID(asset.AssetID) {
-			requireVersion(reviewedBaselineMinimumRelease)
 		}
 	}
 	for _, asset := range bundle.Assets {
@@ -563,7 +547,7 @@ func parserBundleMinimumKVRelease(bundle parserAssetBundle) string {
 				for _, field := range stage.Config.Fields {
 					switch {
 					case field.KVHeaderPattern != "" && field.OutputPolicy == "flatten":
-						requireVersion(flatTemplateMinimumRelease)
+						return flatTemplateMinimumRelease
 					case taggedMailTemplateField(field):
 						requireVersion(taggedMailMinimumRelease)
 					case field.UsesLargeKV():
@@ -1240,7 +1224,7 @@ func (s *Server) listParserSync(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	bundle, err := s.buildActiveParserBundle(ctx)
 	if err != nil {
-		replyMetadataUnavailable(w, r, &s.parserSyncView, "parser sync metadata unavailable", err)
+		replyMetadataUnavailable(w, r, &s.parserSyncView, "parser sync metadata unavailable")
 		return
 	}
 	controllerHash := ""
@@ -1259,7 +1243,7 @@ func (s *Server) listParserSync(w http.ResponseWriter, r *http.Request) {
 	}
 	page, pageErr := s.listParserSyncDocuments(ctx, "fleet-sync", "", parserSyncTargetLimit)
 	if pageErr != nil {
-		replyMetadataUnavailable(w, r, &s.parserSyncView, "client parser acknowledgement telemetry unavailable", pageErr)
+		replyMetadataUnavailable(w, r, &s.parserSyncView, "client parser acknowledgement telemetry unavailable")
 		return
 	}
 	byNode := map[string]map[string]any{}
@@ -1320,7 +1304,7 @@ func (s *Server) listParserSync(w http.ResponseWriter, r *http.Request) {
 	var pendingProposal *metastore.Document
 	proposals, err := s.listParserSyncDocuments(ctx, "rollout-proposals", "pending_approval", parserSyncTargetLimit)
 	if err != nil {
-		replyMetadataUnavailable(w, r, &s.parserSyncView, "parser sync rollout approvals unavailable", err)
+		replyMetadataUnavailable(w, r, &s.parserSyncView, "parser sync rollout approvals unavailable")
 		return
 	}
 	for i := range proposals {
@@ -1380,29 +1364,4 @@ func rolloutSummary(item *rolloutRecord) any {
 		return map[string]any{"status": "not_started"}
 	}
 	return map[string]any{"id": item.ID, "status": item.Status, "total_nodes": item.TotalNodes, "done_nodes": item.DoneNodes, "failed_nodes": item.FailedNodes, "target_nodes": item.TargetNodes, "node_results": item.NodeResults}
-}
-
-func verifyArchivedControllerBundle(data []byte) (string, error) {
-	var bundle parserAssetBundle
-	if err := json.Unmarshal(data, &bundle); err != nil {
-		return "", err
-	}
-	if bundle.SchemaVersion != 1 || len(bundle.Assets) > 10000 {
-		return "", errors.New("unsupported prior parser bundle")
-	}
-	for _, asset := range bundle.Assets {
-		payload, err := canonicaljson.Normalize(asset.Payload)
-		if err != nil {
-			return "", err
-		}
-		sum := sha256.Sum256(payload)
-		if hex.EncodeToString(sum[:]) != asset.SHA256 {
-			return "", errors.New("prior asset digest mismatch")
-		}
-	}
-	hash, _, err := bundleDigest(bundle)
-	if err != nil || hash != bundle.BundleHash {
-		return "", errors.New("prior bundle digest mismatch")
-	}
-	return hash, nil
 }

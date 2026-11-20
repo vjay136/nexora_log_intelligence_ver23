@@ -37,12 +37,6 @@ func (s *Server) fieldSenseAnalysis() *fieldSenseAdmission {
 }
 
 func (s *Server) beginFieldSenseAnalysis(w http.ResponseWriter, r *http.Request) (context.Context, func(), bool) {
-	return s.beginFieldSenseAnalysisBudget(w, r, s.fieldSenseAnalysis().timeout)
-}
-
-// A workflow may reserve the same bounded slot across metadata I/O and a
-// separately bounded extraction phase. Other analysis routes retain timeout.
-func (s *Server) beginFieldSenseAnalysisBudget(w http.ResponseWriter, r *http.Request, budget time.Duration) (context.Context, func(), bool) {
 	a := s.fieldSenseAnalysis()
 	if r.Context().Err() != nil {
 		jsonError(w, "FieldSense analysis canceled", http.StatusRequestTimeout)
@@ -57,7 +51,7 @@ func (s *Server) beginFieldSenseAnalysisBudget(w http.ResponseWriter, r *http.Re
 		return nil, nil, false
 	}
 	a.accepted.Add(1)
-	ctx, cancel := context.WithTimeout(r.Context(), budget)
+	ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
 	return ctx, func() {
 		if ctx.Err() == context.DeadlineExceeded {
 			a.timedOut.Add(1)

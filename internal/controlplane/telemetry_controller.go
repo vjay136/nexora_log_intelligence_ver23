@@ -641,10 +641,6 @@ func (h *StreamHub) serveCanonicalSSE(w http.ResponseWriter, r *http.Request, ev
 	if snapshot != nil {
 		initial = snapshot(r)
 	}
-	instanceID := ""
-	if value, ok := initial.(map[string]any); ok {
-		instanceID, _ = value["controller_instance_id"].(string)
-	}
 	if !writeSSE(stream, flusher, enc, strconv.FormatUint(h.sequence.Add(1), 10), "sync_snapshot", initial) {
 		return
 	}
@@ -668,12 +664,12 @@ func (h *StreamHub) serveCanonicalSSE(w http.ResponseWriter, r *http.Request, ev
 				nhle["read_lines_per_second"] = sample.CanonicalAggregate.ReadLinesPerSecond
 				nhle["normalized_per_second"] = sample.CanonicalAggregate.NormalizedPerSecond
 			}
-			envelope := map[string]any{"controller_instance_id": instanceID, "schema_version": telemetry.SyncSchemaVersion, "revision": sample.CanonicalRevision, "emitted_at": time.Now().UTC(), "kind": "source", "source": sample, "aggregate": sample.CanonicalAggregate, "diagnostics": sample.CanonicalDiagnostics, "subsystems": map[string]any{"nhle": nhle}, "resync_required": sample.ResyncRequired}
+			envelope := map[string]any{"schema_version": telemetry.SyncSchemaVersion, "revision": sample.CanonicalRevision, "emitted_at": time.Now().UTC(), "kind": "source", "source": sample, "aggregate": sample.CanonicalAggregate, "diagnostics": sample.CanonicalDiagnostics, "subsystems": map[string]any{"nhle": nhle}, "resync_required": sample.ResyncRequired}
 			if !writeSSE(stream, flusher, enc, strconv.FormatUint(h.sequence.Add(1), 10), "sync_delta", envelope) {
 				return
 			}
 			if sample.Critical {
-				critical := map[string]any{"controller_instance_id": instanceID, "schema_version": telemetry.SyncSchemaVersion, "revision": h.revision.Load(), "emitted_at": time.Now().UTC(), "kind": "critical", "node_id": sample.NodeID, "source": sample.Source, "diagnostic_codes": sample.DiagnosticCodes, "raw_payload_retained": false}
+				critical := map[string]any{"schema_version": telemetry.SyncSchemaVersion, "revision": h.revision.Load(), "emitted_at": time.Now().UTC(), "kind": "critical", "node_id": sample.NodeID, "source": sample.Source, "diagnostic_codes": sample.DiagnosticCodes, "raw_payload_retained": false}
 				if !writeSSE(stream, flusher, enc, strconv.FormatUint(h.sequence.Add(1), 10), "sync_critical", critical) {
 					return
 				}
@@ -698,9 +694,8 @@ func (h *StreamHub) serveCanonicalSSE(w http.ResponseWriter, r *http.Request, ev
 			// cached snapshot of local controller records.
 			heartbeat := struct {
 				telemetry.SyncSnapshot
-				ControllerInstanceID string         `json:"controller_instance_id,omitempty"`
-				Subsystems           map[string]any `json:"subsystems,omitempty"`
-			}{SyncSnapshot: h.CanonicalSnapshot(), ControllerInstanceID: instanceID}
+				Subsystems map[string]any `json:"subsystems,omitempty"`
+			}{SyncSnapshot: h.CanonicalSnapshot()}
 			if replaySnapshot != nil {
 				heartbeat.Subsystems = map[string]any{"replay": replaySnapshot(r.Context())}
 			}

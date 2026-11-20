@@ -1,4 +1,4 @@
--- NLI Ver23 (23.0.0-3) Supabase metadata schema (compatible RPC schema version 1).
+-- NLI Ver23 (23.0.0-4) Supabase metadata schema (compatible RPC schema version 1).
 -- The controller uses protected RPCs for revisioned JSONB parser packs, mappings,
 -- scope policies, bundle descriptors, KV profiles and parser recovery archives.
 -- Assurance evidence is encrypted by the controller before persistence.
@@ -60,24 +60,12 @@ alter table public.nli_documents enable row level security;
 revoke all on table public.nli_controller_settings from public, anon, authenticated;
 revoke all on table public.nli_documents from public, anon, authenticated;
 
--- Bootstrap upgrades cannot silently transfer ownership to another node.
-do $$
-declare
-  v_requested_digest constant text := '__NLI_CONTROLLER_SECRET_SHA256__';
-begin
-  insert into public.nli_controller_settings (singleton, secret_sha256, schema_version, updated_at)
-  values (true, v_requested_digest, 1, now())
-  on conflict (singleton) do nothing;
-  perform 1 from public.nli_controller_settings
-    where singleton and secret_sha256 = v_requested_digest
-    for update;
-  if not found then
-    raise exception using errcode = '42501',
-      message = 'NLI bootstrap refused: this project belongs to a different controller secret',
-      hint = 'Reuse the existing controller secret. Do not replace the stored fingerprint or clear metadata. Credential rotation requires an explicit reviewed database operation.';
-  end if;
-end;
-$$;
+insert into public.nli_controller_settings (singleton, secret_sha256, schema_version, updated_at)
+values (true, '__NLI_CONTROLLER_SECRET_SHA256__', 1, now())
+on conflict (singleton) do update
+set secret_sha256 = excluded.secret_sha256,
+    schema_version = excluded.schema_version,
+    updated_at = excluded.updated_at;
 
 create or replace function public.nli_controller_authorized()
 returns boolean
@@ -114,7 +102,7 @@ begin
   end if;
   select count(*) into v_count from public.nli_documents;
   return jsonb_build_object('status', 'ok', 'schema_version', 1, 'revisions', v_count,
-    'bootstrap_release', '23.0.0-3',
+    'bootstrap_release', '23.0.0-4',
     'persistence_capabilities', jsonb_build_array('revisioned_jsonb', 'nfi_mapping_plan_metadata', 'scope_policy_metadata', 'nullable_object_array_payloads', 'dynamic_kv_eol_metadata', 'parser_recovery_archive', 'kvie_profile_metadata'),
     'validation_authority', 'nli-controller');
 end;
@@ -362,7 +350,7 @@ grant execute on function public.nli_list_rollout_summaries(text,integer,integer
 grant execute on function public.nli_delete_document(text,text,boolean,text) to anon;
 
 comment on table public.nli_documents is
-  'NLI Ver22 compatible RPC v1 revisioned JSONB control-plane metadata; NFI mapping/scope/review metadata is validated by the controller. Assurance raw logs are AES-GCM encrypted by the controller before insertion.';
+  'NLI Ver23 compatible RPC v1 revisioned JSONB control-plane metadata; NFI mapping/scope/review metadata is validated by the controller. Assurance raw logs are AES-GCM encrypted by the controller before insertion.';
 
 notify pgrst, 'reload schema';
 commit;

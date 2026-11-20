@@ -35,7 +35,6 @@ import (
 	"nexora.local/nli-v20/internal/canonicaljson"
 	"nexora.local/nli-v20/internal/engine"
 	"nexora.local/nli-v20/internal/familyprofile"
-	"nexora.local/nli-v20/internal/parserarchive"
 	"nexora.local/nli-v20/internal/protocol"
 	"nexora.local/nli-v20/internal/registry"
 	"nexora.local/nli-v20/internal/rollout"
@@ -1088,11 +1087,6 @@ func (c *Client) applyAssetBundle(ctx context.Context, data []byte) (string, err
 		_ = os.RemoveAll(parserStaging)
 		return "", err
 	}
-	if err := parserarchive.BeforeReplace(c.cfg.AssetDir, verifyArchivedClientBundle); err != nil {
-		_ = os.RemoveAll(staging)
-		_ = os.RemoveAll(parserStaging)
-		return "", fmt.Errorf("preserve parser evidence: %w", err)
-	}
 	_ = os.RemoveAll(backup)
 	_ = os.RemoveAll(parserBackup)
 	if _, err := os.Stat(c.cfg.AssetDir); err == nil {
@@ -1842,29 +1836,4 @@ func sanitizeVersion(version string) string {
 		return "unknown"
 	}
 	return out.String()
-}
-
-func verifyArchivedClientBundle(data []byte) (string, error) {
-	var bundle synchronizedAssetBundle
-	if err := json.Unmarshal(data, &bundle); err != nil {
-		return "", err
-	}
-	if bundle.SchemaVersion != 1 || len(bundle.Assets) > 10000 {
-		return "", errors.New("unsupported prior parser bundle")
-	}
-	for _, asset := range bundle.Assets {
-		payload, err := canonicaljson.Normalize(asset.Payload)
-		if err != nil {
-			return "", err
-		}
-		sum := sha256.Sum256(payload)
-		if hex.EncodeToString(sum[:]) != asset.SHA256 {
-			return "", errors.New("prior asset digest mismatch")
-		}
-	}
-	hash, err := synchronizedBundleHash(bundle)
-	if err != nil || hash != bundle.BundleHash {
-		return "", errors.New("prior bundle digest mismatch")
-	}
-	return hash, nil
 }

@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const setup = readFileSync(new URL('../scripts/setup-cloudflare-tunnel-v23.sh', import.meta.url), 'utf8');
-const verify = readFileSync(new URL('../scripts/verify-cloudflare-tunnel-v23.sh', import.meta.url), 'utf8');
-const uninstall = readFileSync(new URL('../scripts/uninstall-cloudflare-tunnel-v23.sh', import.meta.url), 'utf8');
-const quick = readFileSync(new URL('../scripts/cloudflare-quick-diagnosis-v23.sh', import.meta.url), 'utf8');
+const setup = readFileSync(new URL('../scripts/setup-cloudflare-tunnel-v22.sh', import.meta.url), 'utf8');
+const verify = readFileSync(new URL('../scripts/verify-cloudflare-tunnel-v22.sh', import.meta.url), 'utf8');
+const uninstall = readFileSync(new URL('../scripts/uninstall-cloudflare-tunnel-v22.sh', import.meta.url), 'utf8');
+const quick = readFileSync(new URL('../scripts/cloudflare-quick-diagnosis-v22.sh', import.meta.url), 'utf8');
 
 test('named setup uses a protected token file and keeps credentials out of the unit', () => {
   assert.match(setup, /https:\/\/127\.0\.0\.1:12382/);
@@ -31,6 +31,5 @@ test('quick tunnel is temporary and separate from the named production service',
   assert.match(quick, /pkg\.cloudflare\.com\/cloudflared\.repo/);
   assert.doesNotMatch(quick, /systemctl enable|systemctl start/);
   assert.match(uninstall, /cloudflared\.service/);
-  assert.match(uninstall, /shared RPM and Cloudflare dashboard data preserved/);
-  assert.doesNotMatch(uninstall, /rm -rf\s+\/etc\/cloudflared/);
+  assert.match(uninstall, /RPM and Cloudflare dashboard tunnel were left in place/);
 });

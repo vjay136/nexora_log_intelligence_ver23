@@ -234,12 +234,6 @@ func loadManagedDirectory(directory string, isolateInvalid bool) ([]Profile, []M
 		if !LooksLikePackDocument(data) {
 			continue
 		}
-		if exactEmbeddedPack(data) {
-			if _, err := ValidatePublishedPackBytesContext(context.Background(), entry.Name(), data); err != nil {
-				return nil, diagnostics, err
-			}
-			continue
-		}
 		profile, err := compile(entry.Name(), data, true, false)
 		if err != nil {
 			if isolateInvalid {

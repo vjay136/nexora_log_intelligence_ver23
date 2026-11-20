@@ -1,29 +1,5 @@
 # Changelog
 
-## 23.0.0-3 — Ver23 R3
-
-- Restore the exact Ver22.19 installation prompt flow with only Ver23 identity substitutions; remove R2 staged credential and new/existing project steps.
-- Preserve runtime fixes and role-aware uninstall behavior. This prompt rollback does not by itself resolve existing Supabase authentication failures.
-- Qualify upgrade/rollback against Ver23 R2.
-
-## 23.0.0-2 — Ver23 R2
-
-- Allow explicit new/existing Supabase project and controller-secret selection during setup, retaining existing credentials by default.
-- Keep project changes explicit: switching projects does not copy prior metadata automatically.
-- Qualify upgrade/rollback against Ver23 R1 and retain the original Ver22.19 source provenance.
-
-## v23.0.0-1
-
-- Start Ver23 from the exact v22.19.1-0 source commit 77f95a94885ab1e1843bcd214d44e70a495ee85c.
-- Publish Ver23 RPMs, Webapp ZIP and installation guides in the dedicated Ver23 repository.
-- Keep controller installation choices 1 through 10 and preserve configured metadata identity during reconfiguration.
-- Add local workspace Reset controls, safe metadata diagnostics and restart synchronization safeguards.
-- Preserve verified prior parser bundles before replacing synchronized assets.
-- Register the eight unchanged reviewed ParserPacks from the exact Ver22.19 RPM when missing, preserve existing revisions and deletion history, and gate their rollout to compatible Ver23 clients.
-- Reuse successful validation only for exact embedded product definitions, with concurrency and mutation isolation.
-- Complete uninstall preserve/purge cleanup across all ten setup modes, including generated edge services and shared-role safeguards.
-- Separate saved-template metadata lookup and parsing deadlines, and distinguish backend failures from missing template revisions.
-
 ## v22.19.1-0
 
 - Flatten template-derived KV fields into the parsed event, preserving valid source names.

@@ -45,14 +45,6 @@ func mappingAIProviderFixture(t *testing.T, f *apiFixture, reply string, inspect
 
 func TestFieldMappingAICompoundProposalUsesNativeSchemaAndStaysEphemeral(t *testing.T) {
 	f := newAPIFixture(t)
-	baselineByCollection := map[string][]metastore.Document{}
-	for _, collection := range []string{"parser-packs", "ai-remediation-proposals", "assurance-cases"} {
-		docs, err := f.server.metadata.List(context.Background(), collection, metastore.Query{Limit: 100})
-		if err != nil {
-			t.Fatal(err)
-		}
-		baselineByCollection[collection] = docs
-	}
 	definition, desired := nfiExampleDefinition()
 	// Private unrequested values are intentionally omitted, rather than being
 	// silently dropped by an otherwise successful AI proposal.
@@ -135,7 +127,7 @@ func TestFieldMappingAICompoundProposalUsesNativeSchemaAndStaysEphemeral(t *test
 	}
 	for _, collection := range []string{"parser-packs", "ai-remediation-proposals", "assurance-cases"} {
 		docs, err := f.server.metadata.List(context.Background(), collection, metastore.Query{Limit: 100})
-		if err != nil || !reflect.DeepEqual(docs, baselineByCollection[collection]) {
+		if err != nil || len(docs) != 0 {
 			t.Fatalf("AI suggestion persisted %s metadata", collection)
 		}
 	}

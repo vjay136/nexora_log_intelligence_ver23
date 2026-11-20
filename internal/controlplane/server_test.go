@@ -534,7 +534,7 @@ func TestSignedConfigArtifactUpload(t *testing.T) {
 
 func TestNodeStateDriftIsAuthenticated(t *testing.T) {
 	f := newAPIFixture(t)
-	registration := map[string]any{"id": "node-1", "hostname": "node-1", "os": "linux", "arch": "x86_64", "version": "23.0.0-1", "config_hash": strings.Repeat("a", 64)}
+	registration := map[string]any{"id": "node-1", "hostname": "node-1", "os": "linux", "arch": "x86_64", "version": "5.0.0", "config_hash": strings.Repeat("a", 64)}
 	encoded, _ := json.Marshal(registration)
 	request, _ := http.NewRequest(http.MethodPost, f.http.URL+"/api/v1/node/register", bytes.NewReader(encoded))
 	request.Header.Set("Content-Type", "application/json")
@@ -609,7 +609,7 @@ func TestEnrollmentParserSyncRequiresApprovalForCustomizedCatalog(t *testing.T) 
 	if _, err := f.server.metadata.Put(ctx, metastore.Document{Collection: asset.AssetClass, ID: asset.AssetID, State: "active", Payload: modified, CreatedBy: "admin"}); err != nil {
 		t.Fatal(err)
 	}
-	registration, _ := json.Marshal(map[string]any{"id": "site-node", "hostname": "site-node", "arch": "x86_64", "version": "23.0.0-1"})
+	registration, _ := json.Marshal(map[string]any{"id": "site-node", "hostname": "site-node", "arch": "x86_64", "version": "22.4.0"})
 	request, err := http.NewRequest(http.MethodPost, f.http.URL+"/api/v1/node/register", bytes.NewReader(registration))
 	if err != nil {
 		t.Fatal(err)

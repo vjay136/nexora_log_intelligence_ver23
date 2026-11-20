@@ -127,18 +127,4 @@ select public.nli_get_document('parser-trash','archive-r9',1)->'payload'->>'rest
 SQL
 [[ $(tr '\n' ' ' <"$scratch/r9-result") == '1 1 t t t ' ]] || { echo 'KVIE/recovery persistence contract failed' >&2; exit 1; }
 
-# Bootstrap ownership is immutable. A different node must not take over the
-# configured controller secret or alter any existing customer revision.
-docker exec "$container" psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -At -U postgres -c "select md5(row_to_json(s)::text) from public.nli_controller_settings s; select md5(coalesce(string_agg(row_to_json(d)::text,'' order by collection,document_id,revision),'')) from public.nli_documents d;" >"$scratch/owner-before"
-sed "s/__NLI_CONTROLLER_SECRET_SHA256__/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/" "$ROOT/supabase/nli_schema.sql" >"$scratch/foreign-schema.sql"
-if docker exec -i "$container" psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -U postgres <"$scratch/foreign-schema.sql" >"$scratch/foreign-result" 2>&1; then
-  echo 'Bootstrap accepted a foreign controller secret' >&2; exit 1
-fi
-grep -q 'NLI bootstrap refused' "$scratch/foreign-result" || { echo 'Missing actionable bootstrap ownership refusal' >&2; exit 1; }
-docker exec "$container" psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -At -U postgres -c "select md5(row_to_json(s)::text) from public.nli_controller_settings s; select md5(coalesce(string_agg(row_to_json(d)::text,'' order by collection,document_id,revision),'')) from public.nli_documents d;" >"$scratch/owner-after"
-cmp "$scratch/owner-before" "$scratch/owner-after" || { echo 'Foreign bootstrap modified ownership or metadata' >&2; exit 1; }
-docker exec -i "$container" psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -U postgres <"$scratch/schema.sql" >/dev/null
-docker exec "$container" psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -At -U postgres -c "select md5(row_to_json(s)::text) from public.nli_controller_settings s; select md5(coalesce(string_agg(row_to_json(d)::text,'' order by collection,document_id,revision),'')) from public.nli_documents d;" >"$scratch/same-owner-after"
-cmp "$scratch/owner-before" "$scratch/same-owner-after" || { echo 'Same-owner bootstrap changed preserved state' >&2; exit 1; }
-
 echo 'Supabase schema/RLS/RPC contract: PASS'
