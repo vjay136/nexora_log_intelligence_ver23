@@ -45,7 +45,6 @@ printf '%s' "$result" | python3 -c 'import json,sys; d=json.load(sys.stdin); ass
 for bucket in nli-assurance-fixtures nli-rollout-artifacts; do
   bucket_json=$(curl --fail --silent --show-error --max-time 15 \
     -H "apikey: $supabase_storage_secret" \
-    -H "Authorization: Bearer $supabase_storage_secret" \
     "$supabase_url/storage/v1/bucket/$bucket") || \
     fail "private Supabase Storage bucket $bucket is unavailable; apply /root/nli-supabase-bootstrap.sql"
   printf '%s' "$bucket_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); expected=sys.argv[1]; assert d.get("id")==expected and d.get("public") is False' "$bucket" || \

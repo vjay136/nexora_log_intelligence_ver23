@@ -1,5 +1,11 @@
 # Changelog
 
+## 23.0.0-2 — Ver23 R2
+
+- Allow explicit new/existing Supabase project and controller-secret selection during setup, retaining existing credentials by default.
+- Keep project changes explicit: switching projects does not copy prior metadata automatically.
+- Qualify upgrade/rollback against Ver23 R1 and retain the original Ver22.19 source provenance.
+
 ## v23.0.0-1
 
 - Start Ver23 from the exact v22.19.1-0 source commit 77f95a94885ab1e1843bcd214d44e70a495ee85c.

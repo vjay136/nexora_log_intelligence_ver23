@@ -20,7 +20,7 @@ func TestSupabaseBlobStoreUsesControllerSecretAndImmutableVerifiedObjects(t *tes
 	var stored []byte
 	var server *httptest.Server
 	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("apikey") != secret || r.Header.Get("Authorization") != "Bearer "+secret {
+		if r.Header.Get("apikey") != secret || r.Header.Get("Authorization") != "" {
 			t.Errorf("Storage request did not use only controller secret")
 		}
 		if strings.Contains(r.Header.Get("apikey"), "publishable") {
@@ -73,7 +73,7 @@ func TestSupabaseBlobStoreUsesTusForLargeRPMs(t *testing.T) {
 	var received bytes.Buffer
 	var server *httptest.Server
 	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+secret {
+		if r.Header.Get("apikey") != secret || r.Header.Get("Authorization") != "" {
 			t.Error("TUS did not use controller secret")
 		}
 		switch r.Method {

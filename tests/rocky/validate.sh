@@ -5,6 +5,8 @@ ARTIFACT_DIR=${ARTIFACT_DIR:-/artifacts}
 PREVIOUS_DIR=${PREVIOUS_DIR:-/previous}
 TEST_ROOT=${TEST_ROOT:-/tests}
 REQUIRE_PREVIOUS=${REQUIRE_PREVIOUS:-1}
+PREVIOUS_EXPECTED_VERSION=${PREVIOUS_EXPECTED_VERSION:-23.0.0}
+PREVIOUS_EXPECTED_RELEASE=${PREVIOUS_EXPECTED_RELEASE:-1}
 fail() { echo "Rocky validation: $*" >&2; exit 1; }
 
 client="$ARTIFACT_DIR/nli_client_ver23.rpm"
@@ -27,10 +29,13 @@ if [[ -n $previous_client && -n $previous_controller ]]; then
   previous_controller_version=$(rpm -qp --qf '%{VERSION}' "$previous_controller")
   current_client_version=$(rpm -qp --qf '%{VERSION}' "$client")
   current_controller_version=$(rpm -qp --qf '%{VERSION}' "$controller")
-  [[ $previous_client_version == 22.19.1 ]] || fail "previous client must be the genuine Ver22 22.19.1-0 RPM"
-  [[ $previous_controller_version == 22.19.1 ]] || fail "previous controller must be the genuine Ver22 22.19.1-0 RPM"
-  [[ $current_client_version == 23.0.0 ]] || fail "release client must be Ver23"
-  [[ $current_controller_version == 23.0.0 ]] || fail "release controller must be Ver23"
+  [[ $previous_client_version == "$PREVIOUS_EXPECTED_VERSION" ]] || fail "previous client must be the genuine Ver23 R1 RPM"
+  [[ $previous_controller_version == "$PREVIOUS_EXPECTED_VERSION" ]] || fail "previous controller must be the genuine Ver23 R1 RPM"
+  expected_version=$(awk -F= '$1=="NLI_VERSION" {print $2; exit}' "$ARTIFACT_DIR/RELEASE_ID")
+  expected_release=$(awk -F= '$1=="NLI_RELEASE" {print $2; exit}' "$ARTIFACT_DIR/RELEASE_ID")
+  [[ $expected_version =~ ^[0-9]+[.][0-9]+[.][0-9]+$ && $expected_release =~ ^[0-9]+([.][0-9]+)*$ ]] || fail "invalid release identity"
+  [[ $current_client_version == "$expected_version" ]] || fail "release client must be Ver23"
+  [[ $current_controller_version == "$expected_version" ]] || fail "release controller must be Ver23"
   previous_client_nevra=$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$previous_client")
   previous_controller_nevra=$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$previous_controller")
   current_client_nevra=$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$client")
@@ -41,8 +46,10 @@ if [[ -n $previous_client && -n $previous_controller ]]; then
   previous_controller_release=$(rpm -qp --qf '%{RELEASE}' "$previous_controller")
   current_client_release=$(rpm -qp --qf '%{RELEASE}' "$client")
   current_controller_release=$(rpm -qp --qf '%{RELEASE}' "$controller")
-  [[ $previous_client_release =~ ^0([.]el[0-9]+)?$ && $current_client_release =~ ^1([.]el[0-9]+)?$ ]] || fail "client lifecycle baseline is not Ver22 22.19.1-0 to 23.0.0-1"
-  [[ $previous_controller_release =~ ^0([.]el[0-9]+)?$ && $current_controller_release =~ ^1([.]el[0-9]+)?$ ]] || fail "controller lifecycle baseline is not Ver22 22.19.1-0 to 23.0.0-1"
+  [[ $previous_client_release == "$PREVIOUS_EXPECTED_RELEASE" || $previous_client_release =~ ^${PREVIOUS_EXPECTED_RELEASE//./[.]}[.]el[0-9]+$ ]] || fail "previous client release is not the R1 baseline"
+  [[ $previous_controller_release == "$PREVIOUS_EXPECTED_RELEASE" || $previous_controller_release =~ ^${PREVIOUS_EXPECTED_RELEASE//./[.]}[.]el[0-9]+$ ]] || fail "previous controller release is not the R1 baseline"
+  [[ $current_client_release == "$expected_release" || $current_client_release =~ ^${expected_release//./[.]}[.]el[0-9]+$ ]] || fail "current client release does not match RELEASE_ID"
+  [[ $current_controller_release == "$expected_release" || $current_controller_release =~ ^${expected_release//./[.]}[.]el[0-9]+$ ]] || fail "current controller release does not match RELEASE_ID"
   dnf -y install "$previous_client" "$previous_controller"
   install -d -o nli -g nli -m 0750 /var/lib/nli /var/lib/nli-controller
   echo pre-upgrade-client >/var/lib/nli/release-test.marker

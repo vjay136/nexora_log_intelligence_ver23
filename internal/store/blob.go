@@ -153,7 +153,6 @@ func (s *supabaseBlobStore) do(ctx context.Context, method, bucket, object strin
 		return nil, err
 	}
 	req.Header.Set("apikey", s.secret)
-	req.Header.Set("Authorization", "Bearer "+s.secret)
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", mimeType)
 		req.ContentLength = size
@@ -227,7 +226,6 @@ func (s *supabaseBlobStore) putTUS(ctx context.Context, bucket, object string, c
 		return err
 	}
 	request.Header.Set("apikey", s.secret)
-	request.Header.Set("Authorization", "Bearer "+s.secret)
 	request.Header.Set("Tus-Resumable", "1.0.0")
 	request.Header.Set("Upload-Length", strconv.FormatInt(size, 10))
 	request.Header.Set("Upload-Metadata", strings.Join([]string{metadata("bucketName", bucket), metadata("objectName", object), metadata("contentType", mimeType), metadata("cacheControl", "3600")}, ","))
@@ -264,7 +262,6 @@ func (s *supabaseBlobStore) putTUS(ctx context.Context, bucket, object string, c
 			return err
 		}
 		patch.Header.Set("apikey", s.secret)
-		patch.Header.Set("Authorization", "Bearer "+s.secret)
 		patch.Header.Set("Tus-Resumable", "1.0.0")
 		patch.Header.Set("Upload-Offset", strconv.FormatInt(offset, 10))
 		patch.Header.Set("Content-Type", "application/offset+octet-stream")
@@ -326,7 +323,6 @@ func (s *supabaseBlobStore) Delete(ctx context.Context, bucket, object string) e
 		return err
 	}
 	req.Header.Set("apikey", s.secret)
-	req.Header.Set("Authorization", "Bearer "+s.secret)
 	req.Header.Set("Content-Type", "application/json")
 	req.ContentLength = int64(len(body))
 	resp, err := s.client.Do(req)

@@ -136,6 +136,8 @@ if [[ $purge -eq 1 ]]; then
   done
   rm -f -- /root/nli-client-bootstrap.env /root/nli-controller-credentials.env \
     /root/nli-initial-admin-password.txt /root/nli-supabase-bootstrap.sql
+  rm -f -- /root/nli-controller-credentials.env.pending /root/nli-supabase-bootstrap.sql.pending
+  rm -rf -- /root/nli-controller-credentials.env.project-backups
   rm -f -- /etc/nli/cloudflare/tunnel-token
   if [[ -f /etc/cloudflared/nli-controller-owned && ! -e /etc/systemd/system/cloudflared.service ]]; then
     rm -f -- /etc/cloudflared/tunnel-token /etc/cloudflared/deployment.conf /etc/cloudflared/nli-controller-owned

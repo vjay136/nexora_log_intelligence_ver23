@@ -3,7 +3,7 @@ import json, os, pathlib, shutil, subprocess, sys, tempfile
 root=pathlib.Path(sys.argv[1] if len(sys.argv)>1 else '.').resolve()
 s=(root/'scripts/setup-controller-rocky.sh').read_text(encoding='utf-8')
 block=s.split('# Preserve the metadata authority',1)[1].split("supabase_url=''",1)[0]
-urlcheck=s.split('supabase_url=${supabase_url%/}',1)[1].split('[[ $(LC_ALL=C',1)[0]
+urlcheck=s.split('supabase_project_changed=false',1)[1].split('current_supabase_key=$(saved_supabase_value',1)[0]
 bash=shutil.which('bash')
 if os.name=='nt': bash='C:/Program Files/Git/bin/bash.exe'
 assert bash
@@ -12,6 +12,7 @@ with tempfile.TemporaryDirectory() as tmp:
  env=dict(os.environ, CONFIG=str(config).replace('\\','/'),STATE_DIR=str(state).replace('\\','/'),NLI_TEST_PYTHON=sys.executable.replace('\\','/'))
  header='''set -eu
 fail() { printf '%s\\n' "$*" >&2; exit 1; }
+info() { :; }
 read_env() { printf '%s' "${SAVED_TOKEN:-}"; }
 python3() { "$NLI_TEST_PYTHON" "$@"; }
 '''

@@ -13,7 +13,7 @@ for mode in range(1,11):
      def put(name,value='owned'):
       p=tree/name.lstrip('/');p.parent.mkdir(parents=True,exist_ok=True);p.write_text(value);return p
      def has(name):return (tree/name.lstrip('/')).exists()
-     for name in ['etc/nli/controller.json','etc/nli/controller.env','etc/nli/controller.json.rpmsave','etc/nli/controller.env.rpmnew','etc/nli/controller-bootstrap.env.rpmsave','etc/nli/nli.json','etc/nli/nli.json.backup','etc/nli/client-control.json','etc/nli/client-control.env.rpmsave','etc/nli/controller-ca.crt.rpmnew','etc/nli/bootstrap.env.rpmsave','etc/nli/geoip.env.rpmsave','etc/nli/cloudflare/tunnel-token','var/lib/nli-controller/users.json','var/lib/nli/spool/item','var/lib/nli-control-client/node.token','var/lib/nli-geoip/state.json','var/lib/nli-tunnel/state','var/www/nli-acme/file','var/log/nli/output.json','root/nli-controller-credentials.env','root/nli-client-bootstrap.env','etc/systemd/system/nli-cloudflared.service','etc/systemd/system/nli-cloudflared-quick.service','etc/systemd/system/nli-certbot-renew.timer','etc/nginx/conf.d/nli-controller.conf','etc/httpd/conf.d/nli-controller.conf','etc/nginx/conf.d/operator.conf','etc/operator/server.key','var/operator/raw.log','etc/cloudflared/operator-config.yml']:
+     for name in ['etc/nli/controller.json','etc/nli/controller.env','etc/nli/controller.json.rpmsave','etc/nli/controller.env.rpmnew','etc/nli/controller-bootstrap.env.rpmsave','etc/nli/nli.json','etc/nli/nli.json.backup','etc/nli/client-control.json','etc/nli/client-control.env.rpmsave','etc/nli/controller-ca.crt.rpmnew','etc/nli/bootstrap.env.rpmsave','etc/nli/geoip.env.rpmsave','etc/nli/cloudflare/tunnel-token','var/lib/nli-controller/users.json','var/lib/nli/spool/item','var/lib/nli-control-client/node.token','var/lib/nli-geoip/state.json','var/lib/nli-tunnel/state','var/www/nli-acme/file','var/log/nli/output.json','root/nli-controller-credentials.env','root/nli-controller-credentials.env.pending','root/nli-supabase-bootstrap.sql.pending','root/nli-controller-credentials.env.project-backups/test/controller.env','root/nli-client-bootstrap.env','etc/systemd/system/nli-cloudflared.service','etc/systemd/system/nli-cloudflared-quick.service','etc/systemd/system/nli-certbot-renew.timer','etc/nginx/conf.d/nli-controller.conf','etc/httpd/conf.d/nli-controller.conf','etc/nginx/conf.d/operator.conf','etc/operator/server.key','var/operator/raw.log','etc/cloudflared/operator-config.yml']:
       put(name)
      put('etc/nli/controller-edge.json',json.dumps({'mode':mode,'selinux_proxy_boolean_changed':False}))
      put('etc/systemd/system/cloudflared.service','Description=Cloudflare Tunnel for NLI controller\n');put('etc/cloudflared/tunnel-token');put('etc/cloudflared/deployment.conf')
@@ -36,6 +36,8 @@ for mode in range(1,11):
      assert has('etc/operator/server.key') and has('var/operator/raw.log') and has('etc/nginx/conf.d/operator.conf') and has('etc/cloudflared/operator-config.yml')
      if role=='controller':
       assert has('etc/nli/controller.env')== (not purge)
+      for candidate in ['root/nli-controller-credentials.env.pending','root/nli-supabase-bootstrap.sql.pending','root/nli-controller-credentials.env.project-backups/test/controller.env']:
+       assert has(candidate)==(not purge)
       assert has('var/lib/nli-controller/users.json')==(not purge)
       assert has('etc/nli/nli.json')
       assert not has('etc/systemd/system/nli-cloudflared.service')
