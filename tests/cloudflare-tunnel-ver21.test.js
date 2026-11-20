@@ -31,5 +31,6 @@ test('quick tunnel is temporary and separate from the named production service',
   assert.match(quick, /pkg\.cloudflare\.com\/cloudflared\.repo/);
   assert.doesNotMatch(quick, /systemctl enable|systemctl start/);
   assert.match(uninstall, /cloudflared\.service/);
-  assert.match(uninstall, /RPM and Cloudflare dashboard tunnel were left in place/);
+  assert.match(uninstall, /shared RPM and Cloudflare dashboard data preserved/);
+  assert.doesNotMatch(uninstall, /rm -rf\s+\/etc\/cloudflared/);
 });
