@@ -29,22 +29,19 @@ supabase_url=${supabase_url%/}
 
 auth_headers=()
 [[ $supabase_anon_key == sb_* ]] || auth_headers=(-H "Authorization: Bearer $supabase_anon_key")
-result=$(curl --silent --show-error --connect-timeout 5 --max-time 15 -w $'\n%{http_code}' \
+result=$(curl --fail --silent --show-error --max-time 15 \
   -H 'Content-Type: application/json' \
   -H "apikey: $supabase_anon_key" \
   "${auth_headers[@]}" \
   -H "X-NLI-Controller-Secret: $supabase_controller_secret" \
   -d '{}' "$supabase_url/rest/v1/rpc/nli_health") || \
-  fail 'protected Supabase RPC transport failed; check network reachability and retry'
-status=${result##*$'\n'}
-result=${result%$'\n'*}
-[[ $status != 401 && $status != 403 ]] || fail 'Supabase rejected controller authentication (401/403). Reuse NLI_SUPABASE_CONTROLLER_SECRET from the working controller /etc/nli/controller.env; do not replace the registered project secret.'
-[[ $status == 200 ]] || fail 'protected Supabase RPC failed; verify project URL and apply the complete generated bootstrap only with the existing registered controller secret'
+  fail 'protected Supabase RPC failed; run /root/nli-supabase-bootstrap.sql in the project SQL Editor'
 printf '%s' "$result" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("status")=="ok" and d.get("schema_version")==1' || fail 'Supabase returned an incompatible NLI schema'
 
 for bucket in nli-assurance-fixtures nli-rollout-artifacts; do
   bucket_json=$(curl --fail --silent --show-error --max-time 15 \
     -H "apikey: $supabase_storage_secret" \
+    -H "Authorization: Bearer $supabase_storage_secret" \
     "$supabase_url/storage/v1/bucket/$bucket") || \
     fail "private Supabase Storage bucket $bucket is unavailable; apply /root/nli-supabase-bootstrap.sql"
   printf '%s' "$bucket_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); expected=sys.argv[1]; assert d.get("id")==expected and d.get("public") is False' "$bucket" || \

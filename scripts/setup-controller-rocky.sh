@@ -164,38 +164,7 @@ first_discovered_identity() {
   printf '%s\n' "$fallback"
 }
 
-# Preserve the metadata authority when reconfiguring transport. A packaged
-# default config alone is not evidence that a controller was initialized.
-existing_metadata_provider=''
-if [[ -e $CONFIG ]]; then
-  configured_provider=$(python3 - "$CONFIG" <<'PYCONFIG'
-import json, pathlib, sys
-try:
-    value = json.loads(pathlib.Path(sys.argv[1]).read_text())
-    if not isinstance(value, dict): raise ValueError("expected object")
-    provider = value.get("storage_provider", "supabase")
-    if provider not in ("local", "supabase"): raise ValueError("invalid storage_provider")
-    print(provider)
-except (ValueError, OSError) as error:
-    raise SystemExit("invalid existing controller configuration: " + str(error))
-PYCONFIG
-  ) || fail 'existing controller configuration is invalid; repair it before setup'
-  saved_enrollment=$(read_env NLI_ENROLLMENT_TOKEN)
-  if [[ -s $STATE_DIR/users.json || ${#saved_enrollment} -ge 32 ]]; then
-    existing_metadata_provider=$configured_provider
-  fi
-  saved_enrollment=''
-fi
-metadata_backend_change_ack() {
-  [[ ${NLI_SETUP_ALLOW_METADATA_BACKEND_CHANGE:-0} == 1 ]] || fail "$*: back up the current controller and metadata, restore/migrate the destination, then explicitly set NLI_SETUP_ALLOW_METADATA_BACKEND_CHANGE=1. Setup does not transfer metadata."
-}
-default_local_metadata_for_new_controller() {
-  if [[ -z ${NLI_SETUP_STORAGE_PROVIDER:-} && -z $existing_metadata_provider ]]; then storage_provider=local; fi
-}
-storage_provider=${NLI_SETUP_STORAGE_PROVIDER:-${existing_metadata_provider:-supabase}}
-if [[ -n $existing_metadata_provider && $storage_provider != "$existing_metadata_provider" ]]; then
-  metadata_backend_change_ack 'changing metadata storage provider'
-fi
+storage_provider=${NLI_SETUP_STORAGE_PROVIDER:-supabase}
 [[ $storage_provider == supabase || $storage_provider == local ]] || fail 'NLI_SETUP_STORAGE_PROVIDER must be supabase or local'
 supabase_url=''
 supabase_public_key=''
@@ -237,10 +206,10 @@ if [[ $mode == 7 ]]; then
   # enterprise path explicit to operators. No public DNS or external CA is used.
   mode=2
   offline_private_tls=true
-  default_local_metadata_for_new_controller
+  if [[ -z ${NLI_SETUP_STORAGE_PROVIDER:-} ]]; then storage_provider=local; fi
 elif [[ $mode == 8 ]]; then
   auto_server_tls=true
-  default_local_metadata_for_new_controller
+  if [[ -z ${NLI_SETUP_STORAGE_PROVIDER:-} ]]; then storage_provider=local; fi
 fi
 
 admin_password=''
@@ -462,7 +431,7 @@ PY
     info 'no eligible server certificate/key pair matched this identity; using generated offline private TLS'
     mode=2
     offline_private_tls=true
-    default_local_metadata_for_new_controller
+    if [[ -z ${NLI_SETUP_STORAGE_PROVIDER:-} ]]; then storage_provider=local; fi
   fi
 fi
 
@@ -730,7 +699,7 @@ if [[ $mode == 10 ]]; then
   listen_address="127.0.0.1:${PORT}"
   controller_url=''
   force_secure=true
-  default_local_metadata_for_new_controller
+  if [[ -z ${NLI_SETUP_STORAGE_PROVIDER:-} ]]; then storage_provider=local; fi
 fi
 
 if [[ $mode == 3 || $mode == 9 ]]; then
@@ -1130,64 +1099,26 @@ if [[ -z $existing_quarantine_key && -s $STATE_DIR/quarantine-metadata/quarantin
 fi
 quarantine_key=''
 
-# Supabase credentials are installation input, never release defaults. Match
-# saved records by project URL before offering any credential for reuse.
-supabase_pending_file=${CREDENTIAL_FILE}.pending
-saved_supabase_value() {
-  local key=$1 project=$2 record record_url value
-  for record in "$ENV_FILE" "$CREDENTIAL_FILE" "$supabase_pending_file"; do
-    [[ -s $record ]] || continue
-    record_url=$(sed -n 's/^SUPABASE_URL=//p' "$record" | tail -n 1)
-    [[ ${record_url%/} == "$project" ]] || continue
-    value=$(sed -n "s/^${key}=//p" "$record" | tail -n 1)
-    [[ -n $value ]] || continue
-    printf '%s' "$value"
-    return 0
-  done
-  return 0
-}
-supabase_hidden_input() {
-  local variable=$1 label=$2 saved=${3:-} entered=''
-  if [[ -n $saved ]]; then label="$label [Enter keeps saved value]"; fi
-  if ! read -r -s -p "$label: " entered; then
-    [[ -n $saved ]] || fail "$label is required; supply the corresponding NLI_SETUP_SUPABASE_* setting for unattended setup"
-  fi
-  printf '\n'
-  printf -v "$variable" '%s' "${entered:-$saved}"
-}
 if [[ $storage_provider == supabase ]]; then
 current_supabase_url=$(read_env SUPABASE_URL)
-if [[ -z $current_supabase_url && -s $supabase_pending_file ]]; then
-  current_supabase_url=$(sed -n 's/^SUPABASE_URL=//p' "$supabase_pending_file" | tail -n 1)
-fi
+current_supabase_key=$(read_env SUPABASE_PUBLISHABLE_KEY)
+current_supabase_key=${current_supabase_key:-$(read_env SUPABASE_ANON_KEY)}
 if [[ -n ${NLI_SETUP_SUPABASE_URL:-} ]]; then
   supabase_url=$NLI_SETUP_SUPABASE_URL
 else
   read -r -p "Supabase project URL [${current_supabase_url:-https://project-ref.supabase.co}]: " supabase_url
   supabase_url=${supabase_url:-${current_supabase_url:-}}
 fi
-supabase_url=${supabase_url%/}
-supabase_project_changed=false
-if [[ -n $current_supabase_url && $supabase_url != "${current_supabase_url%/}" ]]; then
-  supabase_project_changed=true
-  info "Selected a different Supabase project: $supabase_url"
-  info 'Existing project data is retained there; switching connections does not copy parser catalogs or files.'
-  if [[ -n $existing_metadata_provider && ${NLI_SETUP_ALLOW_METADATA_BACKEND_CHANGE:-0} != 1 ]]; then
-    if [[ -t 0 ]]; then
-      read -r -p 'Type CHANGE-PROJECT to save a new project connection after verification: ' project_confirmation
-      [[ $project_confirmation == CHANGE-PROJECT ]] || fail 'project change cancelled; existing connection retained'
-    else
-      metadata_backend_change_ack 'changing Supabase project URL'
-    fi
-  fi
-fi
-current_supabase_key=$(saved_supabase_value SUPABASE_PUBLISHABLE_KEY "$supabase_url")
-current_supabase_key=${current_supabase_key:-$(saved_supabase_value SUPABASE_ANON_KEY "$supabase_url")}
 NLI_SETUP_SUPABASE_PUBLISHABLE_KEY=${NLI_SETUP_SUPABASE_PUBLISHABLE_KEY:-${NLI_SETUP_SUPABASE_ANON_KEY:-}}
 if [[ -n ${NLI_SETUP_SUPABASE_PUBLISHABLE_KEY:-} ]]; then
   supabase_public_key=$NLI_SETUP_SUPABASE_PUBLISHABLE_KEY
+elif [[ -n $current_supabase_key ]]; then
+  read -r -s -p 'Supabase publishable/public key [Enter keeps the packaged value]: ' supabase_public_key
+  printf '\n'
+  supabase_public_key=${supabase_public_key:-$current_supabase_key}
 else
-  supabase_hidden_input supabase_public_key 'Supabase publishable/public key' "$current_supabase_key"
+  read -r -s -p 'Supabase publishable/public key: ' supabase_public_key
+  printf '\n'
 fi
 if [[ ${NLI_SUPABASE_ALLOW_INSECURE:-0} == 1 ]]; then
   [[ $supabase_url =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]] || fail 'invalid Supabase test URL'
@@ -1198,48 +1129,15 @@ else
 fi
 supabase_url=${supabase_url%/}
 [[ $(LC_ALL=C printf '%s' "$supabase_public_key" | wc -c) -ge 32 ]] || fail 'Supabase publishable/public key is missing or too short'
-valid_env_secret "$supabase_public_key" || fail 'Supabase public key contains unsupported whitespace or characters'
-supabase_controller_secret=${NLI_SETUP_SUPABASE_CONTROLLER_SECRET:-}
-if [[ -n ${NLI_SETUP_SUPABASE_CONTROLLER_SECRET_FILE:-} ]]; then
-  [[ -z $supabase_controller_secret ]] || fail 'supply a controller secret value or file, not both'
-  supabase_controller_secret=$(python3 - "$NLI_SETUP_SUPABASE_CONTROLLER_SECRET_FILE" <<'PYSECRET'
-import os,pathlib,stat,sys
-p=pathlib.Path(sys.argv[1]); s=p.lstat()
-if not stat.S_ISREG(s.st_mode) or s.st_uid != 0 or s.st_mode & 0o077:
-    raise SystemExit('controller secret file must be root-owned, regular, and mode 0600')
-value=p.read_text().strip()
-if '\n' in value or '\r' in value: raise SystemExit('controller secret file must contain one value')
-print(value,end='')
-PYSECRET
-  ) || fail 'could not read protected controller secret file'
+supabase_controller_secret=$(read_env NLI_SUPABASE_CONTROLLER_SECRET)
+if [[ $(LC_ALL=C printf '%s' "$supabase_controller_secret" | wc -c) -lt 32 ]]; then
+  supabase_controller_secret=$(random_secret)
 fi
-saved_controller_secret=$(saved_supabase_value NLI_SUPABASE_CONTROLLER_SECRET "$supabase_url")
-if [[ -z $supabase_controller_secret ]]; then
-  project_mode=${NLI_SETUP_SUPABASE_PROJECT_MODE:-}
-  if [[ -z $project_mode && -n $saved_controller_secret ]]; then project_mode=existing; fi
-  if [[ -z $project_mode ]]; then
-    info 'NLI metadata project: 1) New/uninitialized project (create an NLI controller secret); 2) Existing project (enter its existing NLI controller secret).'
-    if read -r -p 'NLI project initialization [2]: ' project_mode; then project_mode=${project_mode:-2}; else
-      fail 'choose NLI_SETUP_SUPABASE_PROJECT_MODE=new or existing for unattended setup'
-    fi
-  fi
-  case $project_mode in
-    1|new)
-      supabase_controller_secret=${saved_controller_secret:-$(random_secret)}
-      info 'New-project NLI controller secret prepared; its value is hidden and the generated SQL stores only its SHA-256 digest.'
-      ;;
-    2|existing)
-      supabase_hidden_input supabase_controller_secret 'Existing NLI controller secret (not the Supabase API key)' "$saved_controller_secret"
-      ;;
-    *) fail 'NLI_SETUP_SUPABASE_PROJECT_MODE must be new or existing' ;;
-  esac
-fi
-[[ $(LC_ALL=C printf '%s' "$supabase_controller_secret" | wc -c) -ge 32 ]] || fail 'existing NLI controller secret is required; restore it from the working controller or protected recovery backup'
 valid_env_secret "$supabase_controller_secret" || fail 'Supabase controller secret is not safe for a systemd EnvironmentFile'
-supabase_storage_secret=${NLI_SETUP_SUPABASE_SECRET_KEY:-}
+supabase_storage_secret=${NLI_SETUP_SUPABASE_SECRET_KEY:-$(read_env SUPABASE_SECRET_KEY)}
 if [[ -z $supabase_storage_secret ]]; then
-  saved_storage_secret=$(saved_supabase_value SUPABASE_SECRET_KEY "$supabase_url")
-  supabase_hidden_input supabase_storage_secret 'Supabase server-only secret key (sb_secret_...; controller only)' "$saved_storage_secret"
+  read -r -s -p 'Supabase server-only secret key (sb_secret_...; stored only on controller): ' supabase_storage_secret
+  printf '\n'
 fi
 [[ $supabase_storage_secret == sb_secret_* ]] || fail 'Supabase Storage requires a server-only sb_secret_ key; publishable/anon keys are not accepted'
 [[ $(LC_ALL=C printf '%s' "$supabase_storage_secret" | wc -c) -ge 20 ]] || fail 'Supabase secret key is too short'
@@ -1250,7 +1148,7 @@ valid_env_secret "$supabase_storage_secret" || fail 'Supabase secret key is not 
 # upgrade or reconfiguration.
 valid_env_secret "$assurance_key" || fail 'Assurance encryption key is not safe for a systemd EnvironmentFile'
 supabase_secret_sha256=$(printf '%s' "$supabase_controller_secret" | sha256sum | awk '{print $1}')
-NLI_SETUP_SUPABASE_HASH=$supabase_secret_sha256 python3 - "$SUPABASE_SCHEMA_TEMPLATE" "${SUPABASE_BOOTSTRAP_FILE}.pending" <<'PY'
+NLI_SETUP_SUPABASE_HASH=$supabase_secret_sha256 python3 - "$SUPABASE_SCHEMA_TEMPLATE" "$SUPABASE_BOOTSTRAP_FILE" <<'PY'
 import os, pathlib, re, sys
 source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 placeholder = "__NLI_CONTROLLER_SECRET_SHA256__"
@@ -1277,7 +1175,6 @@ target.write_text(rendered, encoding="utf-8")
 target.chmod(0o600)
 PY
 fi
-# End Supabase credential selection.
 
 if [[ -z $quarantine_retention_enabled ]]; then
   if [[ -n $existing_quarantine_key ]]; then
@@ -1299,84 +1196,6 @@ if [[ $quarantine_retention_enabled == true ]]; then
   quarantine_key=${existing_quarantine_key:-$(random_secret)}
   valid_env_secret "$quarantine_key" || fail 'quarantine encryption key is not safe for a systemd EnvironmentFile'
 fi
-
-
-# Stage candidate credentials before verification. Failed authentication must
-# not replace a working active connection; new-project secrets survive retries.
-if [[ $storage_provider == supabase ]]; then
-  umask 077
-  candidate_tmp=$(mktemp "${supabase_pending_file}.XXXXXX")
-  printf 'SUPABASE_URL=%s\nSUPABASE_PUBLISHABLE_KEY=%s\nNLI_SUPABASE_CONTROLLER_SECRET=%s\nSUPABASE_SECRET_KEY=%s\n' \
-    "$supabase_url" "$supabase_public_key" "$supabase_controller_secret" "$supabase_storage_secret" >"$candidate_tmp"
-  install -o root -g root -m 0600 "$candidate_tmp" "$supabase_pending_file"
-  rm -f -- "$candidate_tmp"
-fi
-
-verify_supabase() {
-  local result='' status=''
-  local auth_headers=()
-  [[ $supabase_public_key == sb_* ]] || auth_headers=(-H "Authorization: Bearer $supabase_public_key")
-  supabase_auth_rejected=false
-  result=$(curl --silent --show-error --connect-timeout 5 --max-time 15 -w $'\n%{http_code}' \
-    -H 'Content-Type: application/json' \
-    -H "apikey: $supabase_public_key" \
-    "${auth_headers[@]}" \
-    -H "X-NLI-Controller-Secret: $supabase_controller_secret" \
-    -d '{}' "$supabase_url/rest/v1/rpc/nli_health") || return 1
-  status=${result##*$'\n'}
-  result=${result%$'\n'*}
-  if [[ $status == 401 || $status == 403 ]]; then supabase_auth_rejected=true; return 1; fi
-  [[ $status == 200 ]] || return 1
-  printf '%s' "$result" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("status")=="ok" and d.get("schema_version")==1'
-}
-
-if [[ $storage_provider == supabase ]]; then
-if ! verify_supabase; then
-  [[ $supabase_auth_rejected == false ]] || fail "Supabase rejected controller authentication (401/403). Verify this project's URL, public key and existing NLI controller secret. Active credentials are unchanged; the candidate is stored at $supabase_pending_file."
-  info 'Supabase RPC verification failed; the schema may be missing, credentials may be invalid, or the service may be unreachable.'
-  info "Open the Supabase project SQL Editor, run the complete file ${SUPABASE_BOOTSTRAP_FILE}.pending, then return here."
-  info 'The generated SQL contains only a SHA-256 secret digest; it never contains the controller secret or admin password.'
-  if [[ -t 0 ]]; then
-    read -r -p 'Press Enter after the SQL Editor reports success: ' _
-  else
-    fail "run ${SUPABASE_BOOTSTRAP_FILE}.pending in Supabase SQL Editor, then rerun sudo nli-controller-setup"
-  fi
-  verify_supabase || fail 'Supabase schema verification still failed; review the SQL Editor result and project URL/key'
-fi
-info 'Supabase protected RPC storage is healthy'
-else
-  info 'explicit local metadata storage selected'
-fi
-
-
-if [[ $storage_provider == supabase ]]; then
-  # Verify that the supplied server-only key belongs to the selected project.
-  for bucket in nli-assurance-fixtures nli-rollout-artifacts; do
-    bucket_json=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
-      -H "apikey: $supabase_storage_secret" \
-      "$supabase_url/storage/v1/bucket/$bucket") || fail "Selected-project Storage key or private bucket $bucket is invalid; active credentials are unchanged"
-    printf '%s' "$bucket_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("id")==sys.argv[1] and d.get("public") is False' "$bucket" || fail 'Selected-project Storage bucket is missing or public; active credentials are unchanged'
-  done
-  if [[ $supabase_project_changed == true ]]; then
-    project_backup_dir="${CREDENTIAL_FILE}.project-backups"
-    python3 - "$project_backup_dir" "$ENV_FILE" "$CREDENTIAL_FILE" "$CONFIG" "$SUPABASE_BOOTSTRAP_FILE" <<'PYBACKUP'
-import datetime,os,pathlib,shutil,stat,sys,uuid
-root=pathlib.Path(sys.argv[1])
-if root.is_symlink(): raise SystemExit('project backup directory must not be a symlink')
-root.mkdir(mode=0o700,parents=True,exist_ok=True); root.chmod(0o700)
-target=root/(datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex[:8])
-target.mkdir(mode=0o700)
-for name in sys.argv[2:]:
-    source=pathlib.Path(name)
-    if not source.exists(): continue
-    if not stat.S_ISREG(source.lstat().st_mode): raise SystemExit('project backup source must be a regular file')
-    dest=target/source.name; shutil.copyfile(source,dest); dest.chmod(0o600)
-PYBACKUP
-    info "Previous project connection backed up in $project_backup_dir (root-only); previous cloud records were not changed"
-  fi
-  install -o root -g root -m 0600 "${SUPABASE_BOOTSTRAP_FILE}.pending" "$SUPABASE_BOOTSTRAP_FILE"
-fi
-# End verified Supabase candidate preparation. Active files may now be saved.
 
 umask 077
 env_tmp=$(mktemp "${ENV_FILE}.XXXXXX")
@@ -1449,7 +1268,6 @@ EOF
 install -o root -g root -m 0600 "$credential_tmp" "$CREDENTIAL_FILE"
 rm -f "$credential_tmp"
 info "controller credentials preserved at $CREDENTIAL_FILE (root-only; values are intentionally not printed)"
-if [[ $storage_provider == supabase ]]; then rm -f -- "$supabase_pending_file" "${SUPABASE_BOOTSTRAP_FILE}.pending"; fi
 
 if [[ -n $admin_password ]]; then
   install -d -o nli -g nli -m 0750 "$STATE_DIR"
@@ -1524,6 +1342,32 @@ wait_for_controller() {
   printf '%s' "$health_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("service")=="nli-controller-agent" and d.get("api_version")=="v1"' || fail 'health endpoint is not an NLI v21 controller'
 }
 
+verify_supabase() {
+  local result=''
+  result=$(curl --fail --silent --show-error --max-time 15 \
+    -H 'Content-Type: application/json' \
+    -H "apikey: $supabase_public_key" \
+    -H "X-NLI-Controller-Secret: $supabase_controller_secret" \
+    -d '{}' "$supabase_url/rest/v1/rpc/nli_health") || return 1
+  printf '%s' "$result" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("status")=="ok" and d.get("schema_version")==1'
+}
+
+if [[ $storage_provider == supabase ]]; then
+if ! verify_supabase; then
+  info 'Supabase RPC verification failed; the schema may be missing, credentials may be invalid, or the service may be unreachable.'
+  info "Open the Supabase project SQL Editor, run the complete file $SUPABASE_BOOTSTRAP_FILE, then return here."
+  info 'The generated SQL contains only a SHA-256 secret digest; it never contains the controller secret or admin password.'
+  if [[ -t 0 ]]; then
+    read -r -p 'Press Enter after the SQL Editor reports success: ' _
+  else
+    fail "run $SUPABASE_BOOTSTRAP_FILE in Supabase SQL Editor, then rerun sudo nli-controller-setup"
+  fi
+  verify_supabase || fail 'Supabase schema verification still failed; review the SQL Editor result and project URL/key'
+fi
+info 'Supabase protected RPC storage is healthy'
+else
+  info 'explicit local metadata storage selected'
+fi
 
 systemctl daemon-reload
 systemctl enable "$SERVICE" >/dev/null

@@ -1,50 +1,45 @@
 #!/usr/bin/env python3
-"""Exercise actual credential selection/staging with synthetic data and no network.
+"""Original Ver22.19 credential/SQL wizard, synthetic offline root-Linux fixture.
 
-Run as root on Linux (the release Docker fixture does this). Only temporary files
-are touched. curl is a deterministic shell fixture; no Supabase/AWS calls occur.
+The original flow saves before verification. These tests do not claim R2 staging,
+rollback, project-isolation, or extra credential prompts. No real credentials,
+cloud requests, AWS calls, or host services are used.
 """
 import hashlib
 import json
 import os
-import pathlib
+from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 import unittest
 
-ROOT = pathlib.Path(sys.argv.pop(1) if len(sys.argv) > 1 else pathlib.Path(__file__).parents[2]).resolve()
-SOURCE = (ROOT / "scripts/setup-controller-rocky.sh").read_text().replace("\r\n", "\n")
-SELECT_START = "# Supabase credentials are installation input"
-SELECT_END = "# End Supabase credential selection."
-STAGE_START = "# Stage candidate credentials before verification."
-STAGE_END = "# End verified Supabase candidate preparation. Active files may now be saved."
-SELECTION = SOURCE[SOURCE.index(SELECT_START):SOURCE.index(SELECT_END) + len(SELECT_END)]
-STAGING = SOURCE[SOURCE.index(STAGE_START):SOURCE.index(STAGE_END) + len(STAGE_END)]
-commit_start = SOURCE.index("\numask 077\nenv_tmp=", SOURCE.index(STAGE_END))
-COMMIT = SOURCE[commit_start:SOURCE.index("\nif [[ $mode == 1 ]]; then", commit_start)]
+ROOT = Path(sys.argv.pop(1) if len(sys.argv) > 1 else Path(__file__).parents[2]).resolve()
+SOURCE = (ROOT / "scripts/setup-controller-rocky.sh").read_text()
+start = SOURCE.index("if [[ $storage_provider == supabase ]]; then\ncurrent_supabase_url=")
+SELECTION = SOURCE[start:SOURCE.index("\nif [[ -z $quarantine_retention_enabled ]]", start)]
+begin = SOURCE.index("\numask 077\nenv_tmp=", start)
+COMMIT = SOURCE[begin:SOURCE.index("\nif [[ $mode == 1 ]]; then", begin)]
+begin = SOURCE.index("verify_supabase() {")
+WIZARD = SOURCE[begin:SOURCE.index("\nsystemctl daemon-reload", begin)]
 
 
 def function(name):
-    match = re.search(r"^" + re.escape(name) + r"\(\) \{.*?^\}", SOURCE, re.M | re.S)
-    assert match, name
-    return match.group() + "\n"
+    found = re.search(r"^" + name + r"\(\) \{.*?^\}", SOURCE, re.M | re.S)
+    assert found, name
+    return found.group() + "\n"
 
 
+HELPERS = "".join(function(name) for name in ["read_env", "valid_env_secret", "random_secret"])
 A = {"SUPABASE_URL": "https://fixture-a.supabase.co", "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_a_" + "a" * 40,
-     "NLI_SUPABASE_CONTROLLER_SECRET": "fixture-a-controller-" + "a" * 44, "SUPABASE_SECRET_KEY": "sb_secret_a_" + "a" * 40}
+     "NLI_SUPABASE_CONTROLLER_SECRET": "fixture-controller-" + "a" * 44, "SUPABASE_SECRET_KEY": "sb_secret_a_" + "a" * 40}
 B = {"SUPABASE_URL": "https://fixture-b.supabase.co", "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_b_" + "b" * 40,
-     "NLI_SUPABASE_CONTROLLER_SECRET": "fixture-b-controller-" + "b" * 44, "SUPABASE_SECRET_KEY": "sb_secret_b_" + "b" * 40}
-OVERRIDES = {"SUPABASE_URL": "NLI_SETUP_SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY": "NLI_SETUP_SUPABASE_PUBLISHABLE_KEY",
-             "NLI_SUPABASE_CONTROLLER_SECRET": "NLI_SETUP_SUPABASE_CONTROLLER_SECRET", "SUPABASE_SECRET_KEY": "NLI_SETUP_SUPABASE_SECRET_KEY"}
-
+     "NLI_SUPABASE_CONTROLLER_SECRET": "fixture-controller-" + "b" * 44, "SUPABASE_SECRET_KEY": "sb_secret_b_" + "b" * 40}
 SHELL = r'''set -eu
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 read() { printf '%s\n' "$*" >> "$READ_LOG"; builtin read "$@"; }
-# Preserve actual install/mode behavior. Only the fixture's absent nli group is
-# mapped to root; candidate/root credential ownership remains actual root:root.
 install() {
   local args=() value
   while (($#)); do value=$1; shift; if [[ $value == -g && ${1:-} == nli ]]; then args+=(-g root); shift; else args+=("$value"); fi; done
@@ -52,29 +47,20 @@ install() {
 }
 chown() { local owner=$1; shift; [[ $owner != root:nli ]] || owner=root:root; command chown "$owner" "$@"; }
 curl() {
-  local url=${!#} public='' controller='' authorization='' item
-  local args=("$@") index
+  local url=${!#} public='' item index count status
+  local args=("$@") statuses=()
   for ((index=0;index<${#args[@]};index++)); do
-    if [[ ${args[index]} == -H ]]; then
-      item=${args[index+1]}
-      case $item in 'apikey: '*) public=${item#apikey: };; 'X-NLI-Controller-Secret: '*) controller=${item#X-NLI-Controller-Secret: };; 'Authorization: '*) authorization=${item#Authorization: };; esac
-    fi
+    if [[ ${args[index]} == -H ]]; then item=${args[index+1]}; case $item in 'apikey: '*) public=${item#apikey: };; esac; fi
   done
+  [[ $url == */rest/v1/rpc/nli_health && $public == "$EXPECTED_PUBLIC" ]] || return 22
+  count=$(grep -c '/rest/v1/rpc/nli_health' "$CURL_LOG" || true)
+  IFS=, builtin read -r -a statuses <<< "$RPC_SEQUENCE"
+  status=${statuses[count]:-${statuses[${#statuses[@]}-1]}}
   printf '%s\n' "$url" >> "$CURL_LOG"
-  if [[ $url == */rest/v1/rpc/nli_health ]]; then
-    [[ $public == "$EXPECTED_PUBLIC" ]] || { printf '{"error":"fixture key mismatch"}\n401'; return; }
-    [[ -z $EXPECTED_CONTROLLER || $controller == "$EXPECTED_CONTROLLER" ]] || { printf '{"error":"fixture controller mismatch"}\n401'; return; }
-    if [[ $public == sb_* ]]; then [[ -z $authorization ]] || return 88; else [[ $authorization == "Bearer $public" ]] || return 89; fi
-    printf '{"status":"ok","schema_version":1}\n%s' "$RPC_STATUS"
-  elif [[ $url == */storage/v1/bucket/* ]]; then
-    [[ $public == "$EXPECTED_STORAGE" ]] || { printf 'fixture Storage apikey mismatch\n' >&2; return 22; }
-    [[ -z $authorization ]] || { printf 'opaque server keys must not be sent as JWT Bearer tokens\n' >&2; return 22; }
-    [[ $STORAGE_STATUS == 200 ]] || return 22
-    printf '{"id":"%s","public":%s}' "${url##*/}" "$BUCKET_PUBLIC"
-  else return 90; fi
+  [[ $status == 200 ]] || return 22
+  printf '{"status":"ok","schema_version":1}'
 }
-storage_provider=supabase
-supabase_url=''; supabase_public_key=''; supabase_controller_secret=''; supabase_storage_secret=''
+storage_provider=supabase; supabase_url=''; supabase_public_key=''; supabase_controller_secret=''; supabase_storage_secret=''
 enrollment_token=synthetic-enrollment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 audit_key=synthetic-audit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 csrf_key=synthetic-csrf-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -82,217 +68,105 @@ assurance_key=synthetic-assurance-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 artifact_public_keys=''; quarantine_key=''; quarantine_retention_enabled=false; admin_password=''
 listen_address=127.0.0.1:12382; tls_cert=''; tls_key=''; force_secure=false; allow_insecure_remote=false
 '''
-HELPERS = "".join(function(name) for name in ["read_env", "valid_env_secret", "random_secret", "metadata_backend_change_ack"])
 
 
-def parse_env(path):
+def record(path):
     return dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line and not line.startswith("#"))
 
 
-@unittest.skipUnless(os.name == "posix" and os.geteuid() == 0, "requires the root Linux release Docker fixture")
-class Credentials(unittest.TestCase):
+@unittest.skipUnless(os.name == "posix" and os.geteuid() == 0, "requires root Linux release Docker fixture")
+class OriginalWizard(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.directory = pathlib.Path(self.temporary.name)
-        self.active = self.directory / "controller.env"
-        self.credentials = self.directory / "credentials.env"
-        self.config = self.directory / "controller.json"
-        self.sql = self.directory / "bootstrap.sql"
-        self.pending = pathlib.Path(str(self.credentials) + ".pending")
-        self.write_record(self.active, A)
-        self.write_record(self.credentials, A)
-        self.config.write_text(json.dumps({"storage_provider": "supabase", "custom_setting": "must survive"}))
-        self.sql.write_text("original verified SQL\n")
-        self.before = {path: path.read_bytes() for path in [self.active, self.credentials, self.config, self.sql]}
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+        self.active = self.directory / "controller.env"; self.credentials = self.directory / "credentials.env"
+        self.config = self.directory / "controller.json"; self.sql = self.directory / "bootstrap.sql"
+        self.save(self.active, A); self.save(self.credentials, A)
+        self.config.write_text(json.dumps({"storage_provider": "supabase", "custom_setting": "preserve"}))
+        self.sql.write_text("previous SQL\n"); (self.directory / "curl.log").touch()
 
-    def write_record(self, path, values):
-        path.write_text("PRESERVE_LINE=keep\n" + "".join(f"{key}={value}\n" for key, value in values.items()))
-        path.chmod(0o600)
+    def save(self, path, values):
+        path.write_text("".join(key + "=" + value + "\n" for key, value in values.items())); path.chmod(0o600)
 
-    def environment(self, selected=A, **settings):
+    def env(self, expected=A, **settings):
         env = {key: value for key, value in os.environ.items() if not key.startswith(("NLI_SETUP_", "SUPABASE_", "NLI_SUPABASE_"))}
         env.update(ENV_FILE=str(self.active), CREDENTIAL_FILE=str(self.credentials), CONFIG=str(self.config),
-                   SUPABASE_SCHEMA_TEMPLATE=str(ROOT / "supabase/nli_schema.sql"), SUPABASE_BOOTSTRAP_FILE=str(self.sql),
-                   STATE_DIR=str(self.directory / "state"), READ_LOG=str(self.directory / "reads.log"), CURL_LOG=str(self.directory / "curl.log"),
-                   existing_metadata_provider="supabase", EXPECTED_PUBLIC=selected["SUPABASE_PUBLISHABLE_KEY"],
-                   EXPECTED_CONTROLLER=selected["NLI_SUPABASE_CONTROLLER_SECRET"], EXPECTED_STORAGE=selected["SUPABASE_SECRET_KEY"],
-                   RPC_STATUS="200", STORAGE_STATUS="200", BUCKET_PUBLIC="false")
-        env.update(settings)
-        return env
+            SUPABASE_SCHEMA_TEMPLATE=str(ROOT / "supabase/nli_schema.sql"), SUPABASE_BOOTSTRAP_FILE=str(self.sql),
+            READ_LOG=str(self.directory / "read.log"), CURL_LOG=str(self.directory / "curl.log"),
+            EXPECTED_PUBLIC=expected["SUPABASE_PUBLISHABLE_KEY"], RPC_SEQUENCE="200")
+        env.update(settings); return env
 
-    def run_setup(self, selected=A, input_text="", commit=True, **settings):
-        script = SHELL + HELPERS + SELECTION + "\n" + STAGING + (COMMIT if commit else "")
-        result = subprocess.run(["bash", "-c", script], env=self.environment(selected, **settings), input=input_text,
-                                capture_output=True, text=True, timeout=25)
-        observed = result.stdout + result.stderr
-        if (self.directory / "reads.log").exists(): observed += (self.directory / "reads.log").read_text()
-        secrets = [value for record in [A, B] for key, value in record.items() if key != "SUPABASE_URL"]
-        for path in [self.active, self.credentials, self.pending]:
-            if path.exists(): secrets.extend(value for key, value in parse_env(path).items() if key in OVERRIDES and key != "SUPABASE_URL")
-        for secret in secrets: self.assertNotIn(secret, observed, "credentials must never appear in prompts or diagnostics")
-        return result
+    def no_leak(self, output):
+        for values in [A, B, record(self.credentials) if self.credentials.exists() else {}]:
+            for key, value in values.items():
+                if value and key != "SUPABASE_URL": self.assertNotIn(value, output)
 
-    def unchanged(self):
-        for path, data in self.before.items(): self.assertEqual(path.read_bytes(), data, path.name)
+    def run_setup(self, expected=A, answers="", **settings):
+        result = subprocess.run(["bash", "-c", SHELL + HELPERS + SELECTION + COMMIT + WIZARD],
+            env=self.env(expected, **settings), input=answers, capture_output=True, text=True, timeout=25)
+        self.no_leak(result.stdout + result.stderr); return result
 
-    def overrides(self, values):
-        return {OVERRIDES[key]: value for key, value in values.items()}
-
-    def test_saved_same_project_keeps_hidden_defaults_and_private_modes(self):
-        result = self.run_setup(NLI_SETUP_SUPABASE_URL=A["SUPABASE_URL"] + "/")
+    def test_original_saved_url_and_hidden_public_key_defaults(self):
+        result = self.run_setup(answers="\n\n")
         self.assertEqual(result.returncode, 0, result.stderr)
-        record = parse_env(self.credentials)
-        for key, value in A.items(): self.assertEqual(record[key], value)
+        for key, value in A.items(): self.assertEqual(record(self.credentials)[key], value)
         self.assertEqual(self.credentials.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.credentials.stat().st_uid, 0)
-        self.assertFalse(self.pending.exists())
-        self.assertFalse(pathlib.Path(str(self.sql) + ".pending").exists())
-        self.assertEqual(json.loads(self.config.read_text())["custom_setting"], "must survive")
-        self.assertEqual((self.directory / "reads.log").read_text().count("-s -p"), 3)
+        self.assertEqual(json.loads(self.config.read_text())["custom_setting"], "preserve")
+        reads = (self.directory / "read.log").read_text()
+        self.assertLess(reads.index("Supabase project URL"), reads.index("Supabase publishable/public key"))
+        self.assertNotIn("NLI project initialization", reads); self.assertNotIn("CHANGE-PROJECT", reads)
 
-    def test_fresh_existing_project_requires_explicit_secret_and_never_generates(self):
+    def test_original_fresh_flow_prompts_keys_and_generates_controller_secret(self):
         self.active.write_text(""); self.credentials.unlink()
-        result = self.run_setup(**{key: value for key, value in self.overrides(B).items() if key != "NLI_SETUP_SUPABASE_CONTROLLER_SECRET"}, NLI_SETUP_SUPABASE_PROJECT_MODE="existing")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("required", result.stderr)
-        self.assertFalse(self.pending.exists())
-        self.assertEqual(self.active.read_text(), "")
-
-    def test_fresh_dynamic_inputs_accept_explicit_existing_project_choice(self):
-        self.active.write_text(""); self.credentials.unlink()
-        answers = "\n".join([B["SUPABASE_PUBLISHABLE_KEY"], "2", B["NLI_SUPABASE_CONTROLLER_SECRET"], B["SUPABASE_SECRET_KEY"]]) + "\n"
-        result = self.run_setup(B, input_text=answers, NLI_SETUP_SUPABASE_URL=B["SUPABASE_URL"], existing_metadata_provider="")
+        answers = "\n".join([B["SUPABASE_URL"], B["SUPABASE_PUBLISHABLE_KEY"], B["SUPABASE_SECRET_KEY"]]) + "\n"
+        result = self.run_setup(B, answers=answers)
         self.assertEqual(result.returncode, 0, result.stderr)
-        for key, value in B.items(): self.assertEqual(parse_env(self.credentials)[key], value)
-        self.assertEqual((self.directory / "reads.log").read_text().count("-s -p"), 3)
+        saved = record(self.credentials); secret = saved["NLI_SUPABASE_CONTROLLER_SECRET"]
+        self.assertRegex(secret, "^[0-9a-f]{64}$")
+        for key in ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY"]: self.assertEqual(saved[key], B[key])
+        sql = self.sql.read_text(); self.assertIn(hashlib.sha256(secret.encode()).hexdigest(), sql); self.assertNotIn(secret, sql)
+        self.assertNotIn("__NLI_CONTROLLER_SECRET_SHA256__", sql)
+        self.assertEqual(self.sql.stat().st_mode & 0o777, 0o600)
+        self.assertFalse(Path(str(self.credentials) + ".pending").exists())
 
-    def test_same_project_hidden_prompts_rotate_all_credentials(self):
-        rotated = {"SUPABASE_URL": A["SUPABASE_URL"], "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_rotated_" + "r" * 40,
-                   "NLI_SUPABASE_CONTROLLER_SECRET": "rotated-controller-" + "r" * 45, "SUPABASE_SECRET_KEY": "sb_secret_rotated_" + "r" * 40}
-        answers = "\n".join(rotated[key] for key in ["SUPABASE_PUBLISHABLE_KEY", "NLI_SUPABASE_CONTROLLER_SECRET", "SUPABASE_SECRET_KEY"]) + "\n"
-        result = self.run_setup(rotated, input_text=answers, NLI_SETUP_SUPABASE_URL=A["SUPABASE_URL"])
+    def test_original_noninteractive_overrides_reuse_saved_controller_secret(self):
+        result = self.run_setup(B, NLI_SETUP_SUPABASE_URL=B["SUPABASE_URL"], NLI_SETUP_SUPABASE_PUBLISHABLE_KEY=B["SUPABASE_PUBLISHABLE_KEY"], NLI_SETUP_SUPABASE_SECRET_KEY=B["SUPABASE_SECRET_KEY"])
         self.assertEqual(result.returncode, 0, result.stderr)
-        for key, value in rotated.items(): self.assertEqual(parse_env(self.credentials)[key], value)
-        self.assertEqual((self.directory / "reads.log").read_text().count("-s -p"), 3)
+        saved = record(self.credentials)
+        self.assertEqual(saved["SUPABASE_URL"], B["SUPABASE_URL"])
+        self.assertEqual(saved["NLI_SUPABASE_CONTROLLER_SECRET"], A["NLI_SUPABASE_CONTROLLER_SECRET"])
 
-    def test_fresh_unattended_requires_mode_or_controller_override(self):
-        self.active.write_text(""); self.credentials.unlink()
-        settings = self.overrides(B); settings.pop("NLI_SETUP_SUPABASE_CONTROLLER_SECRET")
-        result = self.run_setup(**settings)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("choose NLI_SETUP_SUPABASE_PROJECT_MODE", result.stderr)
-        self.assertFalse(self.pending.exists())
-
-    def test_explicit_new_project_generates_once_and_pending_is_resumable(self):
-        self.active.write_text(""); self.credentials.unlink()
-        settings = self.overrides(B); settings.pop("NLI_SETUP_SUPABASE_CONTROLLER_SECRET")
-        first = self.run_setup(B, EXPECTED_CONTROLLER="", RPC_STATUS="401", NLI_SETUP_SUPABASE_PROJECT_MODE="new", **settings)
-        self.assertNotEqual(first.returncode, 0)
-        pending = parse_env(self.pending)
-        secret = pending["NLI_SUPABASE_CONTROLLER_SECRET"]
-        self.assertRegex(secret, r"^[0-9a-f]{64}$")
-        self.assertEqual(self.pending.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.pending.stat().st_uid, 0)
-        self.assertIn(hashlib.sha256(secret.encode()).hexdigest(), pathlib.Path(str(self.sql) + ".pending").read_text())
-        second = self.run_setup(B, EXPECTED_CONTROLLER=secret, **settings)
-        self.assertEqual(second.returncode, 0, second.stderr)
-        self.assertEqual(parse_env(self.credentials)["NLI_SUPABASE_CONTROLLER_SECRET"], secret)
-
-    def test_new_url_does_not_inherit_previous_project_credentials(self):
-        result = self.run_setup(B, NLI_SETUP_SUPABASE_URL=B["SUPABASE_URL"], NLI_SETUP_ALLOW_METADATA_BACKEND_CHANGE="1")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("public key", result.stderr)
-        self.unchanged()
-
-    def test_mismatching_root_record_cannot_fill_missing_active_project_key(self):
-        active = dict(A); active.pop("SUPABASE_PUBLISHABLE_KEY")
-        self.write_record(self.active, active); self.write_record(self.credentials, B)
-        before = {path: path.read_bytes() for path in self.before}
-        result = self.run_setup(NLI_SETUP_SUPABASE_URL=A["SUPABASE_URL"])
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("public key", result.stderr)
-        for path, data in before.items(): self.assertEqual(path.read_bytes(), data)
-
-    def test_project_change_requires_acknowledgement(self):
-        result = self.run_setup(B, **self.overrides(B))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("back up", result.stderr)
-        self.unchanged()
-
-    def test_terminal_project_change_requires_the_exact_confirmation(self):
-        import pty
-        script = SHELL + HELPERS + SELECTION + "\n" + STAGING + COMMIT
-        for answer, expected_success in [("CANCEL", False), ("CHANGE-PROJECT", True)]:
-            master, slave = pty.openpty()
-            try:
-                child = subprocess.Popen(["bash", "-c", script], stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                         env=self.environment(B, **self.overrides(B)), text=True)
-                os.close(slave); slave = None
-                os.write(master, (answer + "\n").encode())
-                stdout, stderr = child.communicate(timeout=25)
-            finally:
-                os.close(master)
-                if slave is not None: os.close(slave)
-            self.assertEqual(child.returncode == 0, expected_success, stderr)
-            self.assertIn("Type CHANGE-PROJECT", stderr)
-            for record in [A, B]:
-                for key, value in record.items():
-                    if key != "SUPABASE_URL": self.assertNotIn(value, stdout + stderr)
-            if not expected_success: self.unchanged()
-
-    def test_confirmed_project_change_backs_up_old_files_before_commit(self):
-        result = self.run_setup(B, NLI_SETUP_ALLOW_METADATA_BACKEND_CHANGE="1", **self.overrides(B))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        backups = list(pathlib.Path(str(self.credentials) + ".project-backups").iterdir())
-        self.assertEqual(len(backups), 1)
-        self.assertEqual(backups[0].stat().st_mode & 0o777, 0o700)
-        for path, data in self.before.items():
-            saved = backups[0] / path.name
-            self.assertEqual(saved.read_bytes(), data)
-            self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
-        for key, value in B.items(): self.assertEqual(parse_env(self.credentials)[key], value)
-        self.assertNotEqual(self.sql.read_bytes(), self.before[self.sql])
-
-    def test_auth_failure_preserves_active_files_and_retains_private_candidate(self):
+    def test_original_noninteractive_failure_is_honest_without_rollback_claim(self):
         for status in ["401", "403", "503"]:
             with self.subTest(status=status):
-                result = self.run_setup(B, RPC_STATUS=status, NLI_SETUP_ALLOW_METADATA_BACKEND_CHANGE="1", **self.overrides(B))
-                self.assertNotEqual(result.returncode, 0)
-                self.unchanged()
-                self.assertEqual(self.pending.stat().st_mode & 0o777, 0o600)
-                self.assertEqual(self.pending.stat().st_uid, 0)
-                for key, value in B.items(): self.assertEqual(parse_env(self.pending)[key], value)
-                self.assertFalse(pathlib.Path(str(self.credentials) + ".project-backups").exists())
+                result = self.run_setup(B, RPC_SEQUENCE=status, NLI_SETUP_SUPABASE_URL=B["SUPABASE_URL"], NLI_SETUP_SUPABASE_PUBLISHABLE_KEY=B["SUPABASE_PUBLISHABLE_KEY"], NLI_SETUP_SUPABASE_SECRET_KEY=B["SUPABASE_SECRET_KEY"])
+                self.assertNotEqual(result.returncode, 0); self.assertIn("Supabase SQL Editor", result.stderr)
+                # Ver22.19 saved before probing. Preserve this exact behavior,
+                # rather than asserting the removed R2 staging guarantees.
+                self.assertEqual(record(self.active)["SUPABASE_URL"], B["SUPABASE_URL"])
+                self.assertEqual(record(self.credentials)["SUPABASE_URL"], B["SUPABASE_URL"])
+                self.assertIn("listen_address", json.loads(self.config.read_text()))
 
-    def test_storage_auth_or_public_bucket_failure_preserves_active_files(self):
-        for settings in [{"STORAGE_STATUS": "403"}, {"BUCKET_PUBLIC": "true"}]:
-            with self.subTest(settings=settings):
-                result = self.run_setup(B, NLI_SETUP_ALLOW_METADATA_BACKEND_CHANGE="1", **self.overrides(B), **settings)
-                self.assertNotEqual(result.returncode, 0)
-                self.unchanged()
-                self.assertFalse(pathlib.Path(str(self.credentials) + ".project-backups").exists())
-
-    def test_root_private_secret_file_and_legacy_public_key(self):
-        secret_file = self.directory / "controller-input.secret"
-        secret_file.write_text(A["NLI_SUPABASE_CONTROLLER_SECRET"] + "\n"); secret_file.chmod(0o600)
-        legacy = dict(A, SUPABASE_PUBLISHABLE_KEY="eyJsyntheticLegacyAnonPublicKey" + "a" * 40)
-        settings = self.overrides(legacy); settings.pop("NLI_SETUP_SUPABASE_CONTROLLER_SECRET")
-        result = self.run_setup(legacy, NLI_SETUP_SUPABASE_CONTROLLER_SECRET_FILE=str(secret_file), **settings)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(parse_env(self.credentials)["SUPABASE_PUBLISHABLE_KEY"], legacy["SUPABASE_PUBLISHABLE_KEY"])
-
-    def test_secret_file_rejects_unsafe_modes_symlinks_and_ambiguous_override(self):
-        secret_file = self.directory / "controller-input.secret"
-        secret_file.write_text(A["NLI_SUPABASE_CONTROLLER_SECRET"]); secret_file.chmod(0o644)
-        result = self.run_setup(NLI_SETUP_SUPABASE_URL=A["SUPABASE_URL"], NLI_SETUP_SUPABASE_CONTROLLER_SECRET_FILE=str(secret_file))
-        self.assertNotEqual(result.returncode, 0); self.unchanged()
-        secret_file.chmod(0o600)
-        link = self.directory / "secret-link"; link.symlink_to(secret_file)
-        result = self.run_setup(NLI_SETUP_SUPABASE_URL=A["SUPABASE_URL"], NLI_SETUP_SUPABASE_CONTROLLER_SECRET_FILE=str(link))
-        self.assertNotEqual(result.returncode, 0); self.unchanged()
-        result = self.run_setup(NLI_SETUP_SUPABASE_CONTROLLER_SECRET_FILE=str(secret_file), **self.overrides(A))
-        self.assertNotEqual(result.returncode, 0); self.unchanged()
+    def test_original_terminal_sql_wizard_retries_once_then_reports_result(self):
+        import pty
+        for sequence, success in [("503,200", True), ("401,403", False)]:
+            with self.subTest(sequence=sequence):
+                (self.directory / "curl.log").write_text("")
+                master, slave = pty.openpty()
+                try:
+                    child = subprocess.Popen(["bash", "-c", SHELL + HELPERS + SELECTION + COMMIT + WIZARD], stdin=slave,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env(RPC_SEQUENCE=sequence,
+                        NLI_SETUP_SUPABASE_URL=A["SUPABASE_URL"], NLI_SETUP_SUPABASE_PUBLISHABLE_KEY=A["SUPABASE_PUBLISHABLE_KEY"], NLI_SETUP_SUPABASE_SECRET_KEY=A["SUPABASE_SECRET_KEY"]))
+                    os.close(slave); slave = None; os.write(master, b"\n")
+                    out, err = child.communicate(timeout=25)
+                finally:
+                    os.close(master)
+                    if slave is not None: os.close(slave)
+                self.no_leak(out + err); self.assertEqual(child.returncode == 0, success, err)
+                self.assertIn("Press Enter after the SQL Editor reports success", err)
+                self.assertEqual((self.directory / "curl.log").read_text().count("/rest/v1/rpc/nli_health"), 2)
+                if not success: self.assertIn("schema verification still failed", err)
 
 
 if __name__ == "__main__":

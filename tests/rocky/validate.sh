@@ -6,7 +6,7 @@ PREVIOUS_DIR=${PREVIOUS_DIR:-/previous}
 TEST_ROOT=${TEST_ROOT:-/tests}
 REQUIRE_PREVIOUS=${REQUIRE_PREVIOUS:-1}
 PREVIOUS_EXPECTED_VERSION=${PREVIOUS_EXPECTED_VERSION:-23.0.0}
-PREVIOUS_EXPECTED_RELEASE=${PREVIOUS_EXPECTED_RELEASE:-1}
+PREVIOUS_EXPECTED_RELEASE=${PREVIOUS_EXPECTED_RELEASE:-2}
 fail() { echo "Rocky validation: $*" >&2; exit 1; }
 
 client="$ARTIFACT_DIR/nli_client_ver23.rpm"
@@ -29,8 +29,8 @@ if [[ -n $previous_client && -n $previous_controller ]]; then
   previous_controller_version=$(rpm -qp --qf '%{VERSION}' "$previous_controller")
   current_client_version=$(rpm -qp --qf '%{VERSION}' "$client")
   current_controller_version=$(rpm -qp --qf '%{VERSION}' "$controller")
-  [[ $previous_client_version == "$PREVIOUS_EXPECTED_VERSION" ]] || fail "previous client must be the genuine Ver23 R1 RPM"
-  [[ $previous_controller_version == "$PREVIOUS_EXPECTED_VERSION" ]] || fail "previous controller must be the genuine Ver23 R1 RPM"
+  [[ $previous_client_version == "$PREVIOUS_EXPECTED_VERSION" ]] || fail "previous client must be the genuine Ver23 R2 RPM"
+  [[ $previous_controller_version == "$PREVIOUS_EXPECTED_VERSION" ]] || fail "previous controller must be the genuine Ver23 R2 RPM"
   expected_version=$(awk -F= '$1=="NLI_VERSION" {print $2; exit}' "$ARTIFACT_DIR/RELEASE_ID")
   expected_release=$(awk -F= '$1=="NLI_RELEASE" {print $2; exit}' "$ARTIFACT_DIR/RELEASE_ID")
   [[ $expected_version =~ ^[0-9]+[.][0-9]+[.][0-9]+$ && $expected_release =~ ^[0-9]+([.][0-9]+)*$ ]] || fail "invalid release identity"
@@ -46,8 +46,8 @@ if [[ -n $previous_client && -n $previous_controller ]]; then
   previous_controller_release=$(rpm -qp --qf '%{RELEASE}' "$previous_controller")
   current_client_release=$(rpm -qp --qf '%{RELEASE}' "$client")
   current_controller_release=$(rpm -qp --qf '%{RELEASE}' "$controller")
-  [[ $previous_client_release == "$PREVIOUS_EXPECTED_RELEASE" || $previous_client_release =~ ^${PREVIOUS_EXPECTED_RELEASE//./[.]}[.]el[0-9]+$ ]] || fail "previous client release is not the R1 baseline"
-  [[ $previous_controller_release == "$PREVIOUS_EXPECTED_RELEASE" || $previous_controller_release =~ ^${PREVIOUS_EXPECTED_RELEASE//./[.]}[.]el[0-9]+$ ]] || fail "previous controller release is not the R1 baseline"
+  [[ $previous_client_release == "$PREVIOUS_EXPECTED_RELEASE" || $previous_client_release =~ ^${PREVIOUS_EXPECTED_RELEASE//./[.]}[.]el[0-9]+$ ]] || fail "previous client release is not the R2 baseline"
+  [[ $previous_controller_release == "$PREVIOUS_EXPECTED_RELEASE" || $previous_controller_release =~ ^${PREVIOUS_EXPECTED_RELEASE//./[.]}[.]el[0-9]+$ ]] || fail "previous controller release is not the R2 baseline"
   [[ $current_client_release == "$expected_release" || $current_client_release =~ ^${expected_release//./[.]}[.]el[0-9]+$ ]] || fail "current client release does not match RELEASE_ID"
   [[ $current_controller_release == "$expected_release" || $current_controller_release =~ ^${expected_release//./[.]}[.]el[0-9]+$ ]] || fail "current controller release does not match RELEASE_ID"
   dnf -y install "$previous_client" "$previous_controller"

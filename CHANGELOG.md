@@ -1,5 +1,11 @@
 # Changelog
 
+## 23.0.0-3 — Ver23 R3
+
+- Restore the exact Ver22.19 installation prompt flow with only Ver23 identity substitutions; remove R2 staged credential and new/existing project steps.
+- Preserve runtime fixes and role-aware uninstall behavior. This prompt rollback does not by itself resolve existing Supabase authentication failures.
+- Qualify upgrade/rollback against Ver23 R2.
+
 ## 23.0.0-2 — Ver23 R2
 
 - Allow explicit new/existing Supabase project and controller-secret selection during setup, retaining existing credentials by default.

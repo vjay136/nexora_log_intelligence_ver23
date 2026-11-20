@@ -4,7 +4,7 @@ Nexora Log Intelligence Ver23 is a deterministic, review-gated log parsing and f
 
 > Install from the single versioned release archive in a fresh directory. Verify its external `.sha256` file and the complete internal `SHA256SUMS`; never mix loose files from different releases.
 
-Release `23.0.0-2` upgrades Ver23 R1 `23.0.0-1`. See the [Ver23 R2 release notes](docs/V23_R2_RELEASE_NOTES.md) and the [installation guide](docs/INSTALLATION_AND_CONFIGURATION.md).
+Release `23.0.0-3` upgrades Ver23 R2 `23.0.0-2`. See the [Ver23 R3 release notes](docs/V23_R3_RELEASE_NOTES.md) and the [installation guide](docs/INSTALLATION_AND_CONFIGURATION.md).
 
 ## V18 upgrade baseline architecture
 
