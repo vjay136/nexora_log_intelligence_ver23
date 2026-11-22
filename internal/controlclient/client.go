@@ -996,10 +996,7 @@ func (c *Client) applyAssetBundle(ctx context.Context, data []byte) (string, err
 	parserBackup := c.cfg.ParserDir + ".bundle-backup"
 	_ = os.RemoveAll(staging)
 	_ = os.RemoveAll(parserStaging)
-	if err := os.MkdirAll(staging, 0750); err != nil {
-		return "", err
-	}
-	if err := ensureNLIGroupOwnership(staging); err != nil {
+	if err := prepareNLIGroupDirectory(staging); err != nil {
 		_ = os.RemoveAll(staging)
 		return "", err
 	}
@@ -1048,7 +1045,7 @@ func (c *Client) applyAssetBundle(ctx context.Context, data []byte) (string, err
 			continue
 		}
 		assetDir := filepath.Join(staging, dir)
-		if err := os.MkdirAll(assetDir, 0750); err != nil {
+		if err := prepareNLIGroupDirectory(assetDir); err != nil {
 			_ = os.RemoveAll(staging)
 			_ = os.RemoveAll(parserStaging)
 			return "", err
@@ -1247,13 +1244,7 @@ func copyParserDirectory(source, destination string) error {
 // Applying the RPM's root:nli / nli:nli ownership contract before rename keeps
 // the atomic swap and least-privilege service split intact.
 func prepareParserRuntimeDirectory(path string) error {
-	if err := os.MkdirAll(path, 0o750); err != nil {
-		return err
-	}
-	if err := os.Chmod(path, 0o750); err != nil {
-		return err
-	}
-	if err := ensureNLIGroupOwnership(path); err != nil {
+	if err := prepareNLIGroupDirectory(path); err != nil {
 		return err
 	}
 	quarantine := filepath.Join(path, "quarantine")
@@ -1264,6 +1255,19 @@ func prepareParserRuntimeDirectory(path string) error {
 		return err
 	}
 	return ensureNLIOwnership(quarantine)
+}
+
+// Bootstrap uses a private umask to protect enrollment credentials. Set the
+// final directory mode explicitly so the agent can traverse the generation
+// after the root-run client swaps it into place.
+func prepareNLIGroupDirectory(path string) error {
+	if err := os.MkdirAll(path, 0o750); err != nil {
+		return err
+	}
+	if err := os.Chmod(path, 0o750); err != nil {
+		return err
+	}
+	return ensureNLIGroupOwnership(path)
 }
 
 // writeSynchronizedAsset reapplies the final mode after creation so a

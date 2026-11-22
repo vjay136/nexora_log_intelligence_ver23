@@ -83,7 +83,7 @@ def main():
               "--mount", "type=volume,src=" + source_volume + ",dst=/src",
               images["GO_IMAGE"], "bash", "-c",
               "set -eu; git config --global --add safe.directory /seed; "
-              "if ! test -d /src/.git; then git clone --no-hardlinks /seed /src; fi; "
+              "if ! test -d /src/.git; then git clone --no-local --depth=1 /seed /src; fi; "
               "test \"$(git -C /src rev-parse HEAD)\" = " + revision + "; "
               "test -z \"$(git -C /src status --porcelain)\""])
         call(["docker", "run", "-d", "--name", builder, "--mount", source_mount,

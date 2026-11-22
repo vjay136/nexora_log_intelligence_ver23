@@ -70,11 +70,11 @@ var embeddedReferences = sync.OnceValue(func() map[embeddedReferenceKey]embedded
 	return references
 })
 
-// EmbeddedReferencePackID recognizes the exact original revision of a
-// ParserPack stage reference. The synchronized asset remains in the bundle
-// and the named embedded pack owns its runtime behavior.
+// EmbeddedReferencePackID recognizes the exact shipped payload of a
+// ParserPack stage reference. Restore creates a new catalog revision while
+// the named embedded pack continues to own the same runtime behavior.
 func EmbeddedReferencePackID(collection, id string, revision int, payload []byte) string {
-	if revision != 1 || (collection != "templates" && collection != "kv-config") {
+	if revision < 1 || (collection != "templates" && collection != "kv-config") {
 		return ""
 	}
 	reference, exists := embeddedReferences()[embeddedReferenceKey{collection, id}]

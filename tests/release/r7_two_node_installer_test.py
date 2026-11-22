@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Run the real R7 installers against systemd, including legacy-controller coexistence."""
-import argparse,json,pathlib,subprocess,time,uuid
+import argparse,json,os,pathlib,subprocess,time,uuid
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--release',type=pathlib.Path,required=True)
@@ -17,6 +17,15 @@ def main():
         args=['exec']+(['-i'] if input is not None else [])
         for key,value in (env or {}).items():args+=['-e',key+'='+value]
         return call(args+[node,'bash','-lc','set -euo pipefail\n'+command],input=input,ok=ok)
+    def wait_for_bundle(node,path):
+        # Enrollment and command polling are asynchronous. Test the persisted
+        # result within a bound rather than assuming installation is an ACK.
+        for _ in range(90):
+            result=execute(node,'test -s '+path+' && sha256sum '+path,ok=False)
+            if result.returncode==0:return result.stdout.split()[0]
+            time.sleep(1)
+        status=execute(node,'systemctl is-active nli-controller-agent.service nli-agent.service nli-client-control.service',ok=False).stdout
+        raise RuntimeError('Parser bundle was not persisted within 90 seconds: '+path+'; '+status)
     def start(name,hostname):
         args=['run','-d','--name',name,'--hostname',hostname,'--network',network,'--network-alias',hostname,
           '--privileged','--cgroupns=host','--tmpfs','/run','--tmpfs','/run/lock',
@@ -75,8 +84,13 @@ def main():
         execute(client,"/usr/bin/nli parse --service smtp --multiline=false - </src/tests/release/smtp_input.txt >/root/parsed.json; python3 -c 'import json; assert json.load(open(\"/root/parsed.json\"))==json.load(open(\"/src/tests/release/smtp_expected.json\"))'")
         version=execute(client,'/usr/bin/nli --version').stdout.strip();assert '23.0.0' in version
         print('Restarting controller and client services and verifying their persisted bundles',flush=True)
-        before_controller=execute(controller,'sha256sum /var/lib/nli-controller/parser-assets/bundle.json').stdout.split()[0]
-        before_client=execute(client,'sha256sum /var/lib/nli/parser-assets/bundle.json').stdout.split()[0]
+        before_controller=wait_for_bundle(controller,'/var/lib/nli-controller/parser-assets/bundle.json')
+        before_client=wait_for_bundle(client,'/var/lib/nli/parser-assets/bundle.json')
+        print('Testing live approved publication and versioned restore across both nodes',flush=True)
+        live_sync=execute(controller,'python3 /src/tests/release/r7_live_sync_restore.py').stdout
+        print(live_sync,flush=True)
+        before_controller=wait_for_bundle(controller,'/var/lib/nli-controller/parser-assets/bundle.json')
+        before_client=wait_for_bundle(client,'/var/lib/nli/parser-assets/bundle.json')
         execute(controller,'systemctl restart nli-controller-agent.service; systemctl is-active --quiet nli-controller-agent.service; systemctl is-enabled --quiet nli-controller-agent.service')
         execute(client,'systemctl restart nli-client-control.service nli-agent.service; systemctl is-active --quiet nli-client-control.service nli-agent.service; systemctl is-enabled --quiet nli-client-control.service nli-agent.service')
         assert execute(controller,'sha256sum /var/lib/nli-controller/parser-assets/bundle.json').stdout.split()[0]==before_controller
@@ -85,10 +99,13 @@ def main():
           'client_actual_bootstrap_installer_with_legacy_22_19_controller':'passed','both_existing_roles_match_bundle':True,
           'disabled_counterpart_remains_disabled_and_inactive':True,'controller_config_and_state_preserved':True,
           'tls_enrollment_and_initial_heartbeat':'passed','client_parser_and_control_services':'active',
-          'original_smtp_parser_sample':'passed','service_restart_and_bundle_preservation':'passed','native_version':version,'production_nodes_modified':False}
+          'original_smtp_parser_sample':'passed','service_restart_and_bundle_preservation':'passed','live_approved_publication_and_restore':json.loads(live_sync),'native_version':version,'production_nodes_modified':False}
         a.result.write_bytes((json.dumps(result,indent=2)+'\n').encode('utf-8'));print(json.dumps(result,indent=2),flush=True)
     finally:
-        for name in nodes:call(['rm','-f',name],ok=False)
-        call(['volume','rm',volume],ok=False);call(['network','rm',network],ok=False)
+        if os.environ.get('NLI_TEST_KEEP_NODES')=='1':
+            print(json.dumps({'debug_fixture_nodes':nodes,'network':network,'bootstrap_volume':volume}),flush=True)
+        else:
+            for name in nodes:call(['rm','-f',name],ok=False)
+            call(['volume','rm',volume],ok=False);call(['network','rm',network],ok=False)
 
 if __name__=='__main__':main()

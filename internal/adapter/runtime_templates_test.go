@@ -7,12 +7,107 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"nexora.local/nli-v20/internal/engine"
 	"nexora.local/nli-v20/internal/fieldmapping"
+	"nexora.local/nli-v20/telemetry"
 )
 
 const templateHeaderPrefix = "20250811 080053105+0100 aaa-gmailrgi009 smtp 3692 0 140026854221568 123456;Note;efgh;ijkl;mnop;SieveRuleMsg"
+
+func TestPublishedTemplateRetriesOnlyLocalTimeout(t *testing.T) {
+	ctx := context.Background()
+	baseline, err := NewParserPackAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{"config": fieldmapping.HeaderTemplate{
+		Engine: "re2", Pattern: `^(?P<component>CatalogTest)[ \t]+`, Fields: map[string]string{"component": "component"},
+		ResourceLimits: fieldmapping.HeaderTemplateLimits{TimeoutMS: 50},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, diagnostics, err := baseline.WithRuntimeTemplates(ctx, []RuntimeTemplateAsset{{
+		AssetClass: "templates", AssetID: "scheduling-probe", Revision: 1, Payload: payload,
+	}})
+	if err != nil || len(diagnostics) != 0 {
+		t.Fatalf("could not compile template: %v (%v)", diagnostics, err)
+	}
+	const input = "CatalogTest status=failed;reason=not needed"
+	const templateID = "template/scheduling-probe"
+	for _, test := range []struct {
+		name              string
+		input             string
+		delays            int
+		cancelParent      bool
+		competingTemplate bool
+		wantCalls         int
+		wantFailure       string
+		wantSuccess       bool
+	}{
+		{"brief scheduling pause", input, 1, false, false, 2, templateHeaderTimeout, true},
+		{"persistent local budget", input, 2, false, true, 2, templateHeaderTimeout, false},
+		{"caller cancellation", input, 0, true, false, 1, templateParseCancelled, false},
+		{"invalid tail", "CatalogTest status=failed;reason", 0, false, false, 1, "incomplete_structured_tail", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parent, cancel := context.WithCancel(ctx)
+			defer cancel()
+			adapter := *loaded
+			runtime := *loaded.templates
+			adapter.templates = &runtime
+			header := runtime.headers[0]
+			match := header.matchPrefix
+			calls := 0
+			header.matchPrefix = func(raw string) []int {
+				indices := match(raw)
+				calls++
+				if calls <= test.delays {
+					// The match finished before the goroutine could run the
+					// elapsed-time check. Simulate losing the CPU at that edge.
+					time.Sleep(header.timeout + 25*time.Millisecond)
+				}
+				if test.cancelParent {
+					cancel()
+				}
+				return indices
+			}
+			runtime.headers = []runtimeHeaderTemplate{header}
+			if test.competingTemplate {
+				peer := loaded.templates.headers[0]
+				peer.id = "template/competing"
+				runtime.headers = append(runtime.headers, peer)
+			}
+
+			result := adapter.TryParseV5ProductionContext(parent, test.input, engine.Source{Service: "auto"})
+			if calls != test.wantCalls || result.Success != test.wantSuccess || result.Quarantined == test.wantSuccess {
+				t.Fatalf("matcher calls=%d, result=%+v, telemetry=%+v", calls, result, result.ParseTelemetry)
+			}
+			attempts := result.ParseTelemetry.OrderedAttempts
+			if len(attempts) < test.wantCalls || attempts[0].ParserID != templateID || attempts[0].FailureReason != test.wantFailure {
+				t.Fatalf("timeout/failure provenance missing: %+v", attempts)
+			}
+			if test.wantSuccess {
+				expected := map[string]any{"component": "CatalogTest", "status": "failed", "reason": "not needed"}
+				if result.ParseTelemetry.ParserID != templateID || attempts[1].Outcome != telemetry.AttemptOutcomeSuccess ||
+					!reflect.DeepEqual(result.EventPayload.Fields, expected) {
+					t.Fatalf("retry changed parser or exact field output: %+v / %+v", result, attempts)
+				}
+			} else if result.EventPayload != nil {
+				t.Fatal("unresolved record emitted fields")
+			}
+			if test.delays == runtimeTemplateAttempts {
+				if attempts[1].FailureReason != templateHeaderTimeout || attempts[1].Outcome != telemetry.AttemptOutcomeFailed ||
+					!strings.Contains(strings.Join(result.ParseTelemetry.ErrorCodes, ","), templateHeaderTimeout) {
+					t.Fatalf("exhausted budget lost the two timeout attempts or quarantine reason: %+v", attempts)
+				}
+			}
+			t.Logf("match attempts=%d first_failure=%s selected=%s quarantined=%v", calls, attempts[0].FailureReason, result.ParseTelemetry.ParserID, result.Quarantined)
+		})
+	}
+}
 
 func TestPublishedHeaderTemplateUsesCompleteGlobalKV(t *testing.T) {
 	ctx := context.Background()

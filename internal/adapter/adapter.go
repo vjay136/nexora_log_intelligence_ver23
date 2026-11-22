@@ -262,7 +262,7 @@ func (adapter *ParserPackAdapter) TryParseV5ProductionContext(parent context.Con
 	if templateRun.matched {
 		metadata.OrderedAttempts = append(templateRun.attempts, metadata.OrderedAttempts...)
 		metadata.AttemptCount += len(templateRun.attempts)
-		if templateRun.result != nil && !templateRun.ambiguous {
+		if templateRun.result != nil && !templateRun.ambiguous && !templateRun.inconclusive {
 			selected := templateRun.result
 			selected.ParseTelemetry.OrderedAttempts = metadata.OrderedAttempts
 			selected.ParseTelemetry.AttemptCount = metadata.AttemptCount
@@ -270,7 +270,7 @@ func (adapter *ParserPackAdapter) TryParseV5ProductionContext(parent context.Con
 			selected.ParseTelemetry.LatencyMs = metadata.LatencyMs
 			return &V5ParseResult{EventPayload: selected.EventPayload, ParseTelemetry: selected.ParseTelemetry, Success: true, ReviewedMapping: true}
 		}
-		if templateRun.ambiguous || selectedIndex < 0 || !executions[selectedIndex].composed {
+		if templateRun.ambiguous || templateRun.inconclusive || selectedIndex < 0 || !executions[selectedIndex].composed {
 			metadata.Route, metadata.Result, metadata.Confidence = "quarantine", "quarantined", 0
 			metadata.FieldEvidence = nil
 			metadata.ParserID, metadata.PackID = "runtime_family_router", "runtime_family_router"

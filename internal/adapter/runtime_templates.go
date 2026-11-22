@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -31,6 +32,11 @@ const (
 	maxRuntimeKVTemplates      = 64
 	maxRuntimeAssetBundleBytes = 16 << 20
 	runtimeKVTimeout           = 500 * time.Millisecond
+	runtimeTemplateAttempts    = 2
+
+	templateHeaderTimeout  = "template_header_timeout"
+	templateKVTimeout      = "template_kv_timeout"
+	templateParseCancelled = "parser_execution_cancelled"
 )
 
 type RuntimeTemplateAsset struct {
@@ -55,13 +61,13 @@ type runtimeHeaderField struct {
 }
 
 type runtimeHeaderTemplate struct {
-	id         string
-	digest     string
-	version    string
-	pattern    *regexp.Regexp
-	fields     []runtimeHeaderField
-	timeout    time.Duration
-	inputLimit int
+	id          string
+	digest      string
+	version     string
+	matchPrefix func(string) []int
+	fields      []runtimeHeaderField
+	timeout     time.Duration
+	inputLimit  int
 }
 
 type runtimeKVTemplate struct {
@@ -284,7 +290,7 @@ func compileRuntimeHeader(asset RuntimeTemplateAsset, config json.RawMessage) (r
 	}
 	digest := sha256.Sum256(asset.Payload)
 	return runtimeHeaderTemplate{id: "template/" + asset.AssetID, digest: hex.EncodeToString(digest[:]),
-		version: fmt.Sprint(asset.Revision), pattern: re, fields: fields, timeout: timeout, inputLimit: maxInput}, nil
+		version: fmt.Sprint(asset.Revision), matchPrefix: re.FindStringSubmatchIndex, fields: fields, timeout: timeout, inputLimit: maxInput}, nil
 }
 
 func compileRuntimeKV(config *mixedkv.Config) (*fieldmapping.Compiled, error) {
@@ -313,6 +319,9 @@ func extractRuntimeKV(ctx context.Context, profiles []runtimeKVTemplate, tail st
 			break
 		}
 		current, err := profile.plan.Execute(ctx, tail)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fieldmapping.Result{}, "", ctxErr
+		}
 		if err != nil || len(current.Values) == 0 {
 			continue
 		}
@@ -336,11 +345,12 @@ func extractRuntimeKV(ctx context.Context, profiles []runtimeKVTemplate, tail st
 }
 
 type runtimeTemplateExecution struct {
-	result    *parserpolicy.ExecutionResult
-	end       int
-	matched   bool
-	ambiguous bool
-	attempts  []telemetry.ParserAttempt
+	result       *parserpolicy.ExecutionResult
+	end          int
+	matched      bool
+	ambiguous    bool
+	inconclusive bool
+	attempts     []telemetry.ParserAttempt
 }
 
 func (templates *runtimeTemplates) execute(ctx context.Context, raw, node string) runtimeTemplateExecution {
@@ -348,6 +358,7 @@ func (templates *runtimeTemplates) execute(ctx context.Context, raw, node string
 	if templates == nil || len(raw) > fieldmapping.MaxInputBytes || !utf8.ValidString(raw) || strings.ContainsRune(raw, 0) {
 		return output
 	}
+	unresolvedEnd := 0
 	for _, header := range templates.headers {
 		if ctx.Err() != nil {
 			break
@@ -355,37 +366,62 @@ func (templates *runtimeTemplates) execute(ctx context.Context, raw, node string
 		if len(raw) > header.inputLimit {
 			continue
 		}
-		started := time.Now()
-		match := header.pattern.FindStringSubmatchIndex(raw)
-		if len(match) == 0 || match[0] != 0 || match[1] == 0 {
-			continue
-		}
-		output.matched = true
-		var result *parserpolicy.ExecutionResult
-		failure := "template_header_timeout"
-		if time.Since(started) <= header.timeout {
-			result, failure = header.execute(ctx, templates.kv, raw, match, node)
-		}
-		attempt := telemetry.ParserAttempt{
-			ParserID: header.id, Outcome: telemetry.AttemptOutcomeFailed,
-			FailureReason: failure, LatencyMs: elapsedMillis(started),
-		}
-		if result != nil {
-			attempt.Outcome = telemetry.AttemptOutcomeSuccess
-			attempt.FieldsEmitted = result.EventPayload.FieldCount()
-			attempt.StageResults = result.ParseTelemetry.OrderedAttempts[0].StageResults
+		unresolvedHeaderEnd := 0
+		for attemptIndex := 0; attemptIndex < runtimeTemplateAttempts && ctx.Err() == nil; attemptIndex++ {
+			started := time.Now()
+			match := header.matchPrefix(raw)
+			if len(match) == 0 || match[0] != 0 || match[1] == 0 {
+				break
+			}
+			output.matched = true
+			var result *parserpolicy.ExecutionResult
+			var failure string
 			switch {
-			case output.result == nil || match[1] > output.end:
-				output.result, output.end, output.ambiguous = result, match[1], false
-			case match[1] == output.end:
-				if !reflect.DeepEqual(result.EventPayload.Fields, output.result.EventPayload.Fields) ||
-					!reflect.DeepEqual(result.ParseTelemetry.FieldEvidence, output.result.ParseTelemetry.FieldEvidence) {
-					output.ambiguous = true
+			case ctx.Err() != nil:
+				failure = templateParseCancelled
+			case time.Since(started) > header.timeout:
+				failure = templateHeaderTimeout
+			default:
+				result, failure = header.execute(ctx, templates.kv, raw, match, node)
+			}
+			attempt := telemetry.ParserAttempt{
+				ParserID: header.id, Outcome: telemetry.AttemptOutcomeFailed,
+				FailureReason: failure, LatencyMs: elapsedMillis(started),
+			}
+			if result != nil {
+				attempt.Outcome = telemetry.AttemptOutcomeSuccess
+				attempt.FieldsEmitted = result.EventPayload.FieldCount()
+				attempt.StageResults = result.ParseTelemetry.OrderedAttempts[0].StageResults
+				switch {
+				case output.result == nil || match[1] > output.end:
+					output.result, output.end, output.ambiguous = result, match[1], false
+				case match[1] == output.end:
+					if !reflect.DeepEqual(result.EventPayload.Fields, output.result.EventPayload.Fields) ||
+						!reflect.DeepEqual(result.ParseTelemetry.FieldEvidence, output.result.ParseTelemetry.FieldEvidence) {
+						output.ambiguous = true
+					}
 				}
 			}
+			output.attempts = append(output.attempts, attempt)
+			if failure == templateParseCancelled {
+				unresolvedHeaderEnd = match[1]
+				break
+			}
+			if failure == templateHeaderTimeout || failure == templateKVTimeout {
+				// A local wall-clock timeout can include time spent off CPU.
+				// Retry once with the same local limits and the original
+				// record context to recover from a brief scheduling pause.
+				unresolvedHeaderEnd = match[1]
+				continue
+			}
+			unresolvedHeaderEnd = 0
+			break
 		}
-		output.attempts = append(output.attempts, attempt)
+		unresolvedEnd = max(unresolvedEnd, unresolvedHeaderEnd)
 	}
+	// An unresolved match of equal or greater specificity can still change the
+	// winning field set. Keep the record quarantined until it can be evaluated.
+	output.inconclusive = unresolvedEnd > 0 && unresolvedEnd >= output.end
 	return output
 }
 
@@ -416,7 +452,14 @@ func (header runtimeHeaderTemplate) execute(ctx context.Context, profiles []runt
 	if strings.TrimSpace(suffix) != "" {
 		kvContext, cancel := context.WithTimeout(ctx, runtimeKVTimeout)
 		kv, kvProfile, err := extractRuntimeKV(kvContext, profiles, suffix)
+		kvErr := kvContext.Err()
 		cancel()
+		if ctx.Err() != nil {
+			return nil, templateParseCancelled
+		}
+		if errors.Is(kvErr, context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, templateKVTimeout
+		}
 		if err != nil {
 			return nil, "incomplete_structured_tail"
 		}
@@ -454,7 +497,10 @@ func (header runtimeHeaderTemplate) execute(ctx context.Context, profiles []runt
 				Start: offset + evidence.Start, End: offset + evidence.End, Spans: spans})
 		}
 	}
-	if ctx.Err() != nil || len(values) == 0 {
+	if ctx.Err() != nil {
+		return nil, templateParseCancelled
+	}
+	if len(values) == 0 {
 		return nil, "parser_execution_failed"
 	}
 	payload := &telemetry.EventPayload{Fields: values}

@@ -21,6 +21,14 @@ functional release with newly compiled executables and updated browser assets.
   evaluation record linked to that parser, not another live parser instance.
 - API errors retain their HTTP status and include a request ID and retry hint.
   Browser refreshes isolate optional metadata failures and preserve selection.
+- A local template/KV budget expiry receives one bounded fresh attempt while
+  the caller context remains live. Both attempts remain in diagnostic telemetry.
+  Malformed input, cancellation and persistent timeout remain fail-closed; the
+  per-attempt and overall execution budgets are unchanged.
+- Synchronized asset directories explicitly retain their protected group access
+  even under the installer's restrictive umask. The `nli` agent can load the
+  staged bundle before the client acknowledges it; failed readiness still
+  restores the prior generation and does not report successful synchronization.
 
 ## Backup & Restore
 

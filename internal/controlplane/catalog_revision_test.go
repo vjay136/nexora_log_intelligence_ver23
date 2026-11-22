@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	parsercatalog "nexora.local/nli-v20/configs/catalog"
 	"nexora.local/nli-v20/internal/adapter"
 	"nexora.local/nli-v20/internal/engine"
 	"nexora.local/nli-v20/internal/familyprofile"
@@ -116,6 +117,7 @@ func TestCatalogEmbeddedStageReferencesRetainBundleWithoutRuntimeWarnings(t *tes
 		t.Fatalf("exact original references generated standalone runtime errors: %v (%v)", diagnostics, err)
 	}
 	modified := original
+	modified.Revision++
 	var payload map[string]any
 	if err := json.Unmarshal(modified.Payload, &payload); err != nil {
 		t.Fatal(err)
@@ -125,9 +127,9 @@ func TestCatalogEmbeddedStageReferencesRetainBundleWithoutRuntimeWarnings(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherRevision := original
-	otherRevision.Revision++
-	for _, candidate := range []adapter.RuntimeTemplateAsset{modified, otherRevision} {
+	invalidRevision := original
+	invalidRevision.Revision = 0
+	for _, candidate := range []adapter.RuntimeTemplateAsset{modified, invalidRevision} {
 		if _, diagnostics, err := runtime.WithRuntimeTemplates(ctx, []adapter.RuntimeTemplateAsset{candidate}); err != nil ||
 			len(diagnostics) != 1 || diagnostics[0] != "Inactive in runtime: invalid or excess templates/sample-imap-event-template" {
 			t.Errorf("modified reference evaded diagnostics: %+v, %v", diagnostics, err)
@@ -165,6 +167,71 @@ func TestCatalogEmbeddedStageReferencesRetainBundleWithoutRuntimeWarnings(t *tes
 	row := decodeMap(t, body)
 	if row["runtime_disposition"] != "embedded_reference" || row["parser_pack_id"] != "nli_reviewed_imap" {
 		t.Fatalf("KV catalog omitted runtime provenance: %s", body)
+	}
+}
+
+func TestCatalogRestorePreservesEmbeddedStageReferences(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	initial, err := f.server.buildActiveParserBundle(ctx)
+	if err != nil || !isBuiltinEnrollmentBundle(initial) {
+		t.Fatalf("initial catalog did not verify for first enrollment: %v", err)
+	}
+	originalOwners := map[string]string{}
+	for _, asset := range initial.Assets {
+		if owner := parsercatalog.EmbeddedReferencePackID(asset.AssetClass, asset.AssetID, asset.Revision, asset.Payload); owner != "" {
+			originalOwners[asset.AssetClass+"/"+asset.AssetID] = owner
+		}
+	}
+	if len(originalOwners) != 16 {
+		t.Fatalf("expected 16 linked release references, got %d", len(originalOwners))
+	}
+
+	backup := createRecoveryTestBackup(t, f)
+	putRecoveryTestSetting(t, f.server, "restore-reference-check", `{"pattern":"^history$"}`)
+	restore := proposeRecoveryTestRestore(t, f, backup)
+	loginParserSyncApprover(t, f)
+	response, body := f.request(http.MethodPost, bundleRestoresRoute+"/"+restore.ID+"/approve", restoreTestApproval(restore))
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("approve catalog restore: %d %s", response.StatusCode, body)
+	}
+	current, err := f.server.buildActiveParserBundle(ctx)
+	if err != nil || len(current.Assets) != len(initial.Assets) || isBuiltinEnrollmentBundle(current) {
+		t.Fatalf("restore failed to produce a new approval-gated generation: %v", err)
+	}
+	assets, err := adapter.TemplateAssetsFromBundleFile(filepath.Join(f.state, "parser-assets", "bundle.json"))
+	if err != nil {
+		t.Fatalf("read verified restored bundle: %v", err)
+	}
+	verified := 0
+	for _, asset := range assets {
+		id := asset.AssetClass + "/" + asset.AssetID
+		want, exists := originalOwners[id]
+		if !exists {
+			continue
+		}
+		if owner := parsercatalog.EmbeddedReferencePackID(asset.AssetClass, asset.AssetID, asset.Revision, asset.Payload); owner != want || asset.Revision <= 1 {
+			t.Errorf("restored reference %s r%d owner=%q, want %q at a new revision", id, asset.Revision, owner, want)
+		}
+		verified++
+	}
+	if verified != len(originalOwners) {
+		t.Fatalf("restored materialized bundle has %d embedded references, expected %d", verified, len(originalOwners))
+	}
+	runtime, err := adapter.NewParserPackAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, diagnostics, err := runtime.WithRuntimeTemplates(ctx, assets); err != nil || len(diagnostics) != 0 {
+		t.Fatalf("restored references generated standalone runtime errors: %v (%v)", diagnostics, err)
+	}
+	response, body = f.request(http.MethodGet, "/api/v1/config/templates/sample-imap-event-template", nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("read restored catalog reference: %d %s", response.StatusCode, body)
+	}
+	row := decodeMap(t, body)
+	if row["runtime_disposition"] != "embedded_reference" || row["parser_pack_id"] != "nli_reviewed_imap" {
+		t.Fatalf("new catalog revision lost embedded provenance: %s", body)
 	}
 }
 
@@ -369,8 +436,10 @@ func verifyPublishedSMTP(t *testing.T, f *apiFixture, runtime *adapter.ParserPac
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	type workerReport struct {
-		mismatches int
-		firstError string
+		mismatches     int
+		firstError     string
+		headerTimeouts int
+		kvTimeouts     int
 	}
 	reports := make(chan workerReport, workers)
 	started := time.Now()
@@ -380,6 +449,17 @@ func verifyPublishedSMTP(t *testing.T, f *apiFixture, runtime *adapter.ParserPac
 			for i := 0; i < cycles*len(samples); i++ {
 				item := samples[(i+offset)%len(samples)]
 				parsed := runtime.TryParseV5ProductionContext(ctx, item.raw, engine.Source{Service: "auto"})
+				metadata := parsed.ParseTelemetry
+				if metadata != nil {
+					for _, attempt := range metadata.OrderedAttempts {
+						switch attempt.FailureReason {
+						case "template_header_timeout":
+							report.headerTimeouts++
+						case "template_kv_timeout":
+							report.kvTimeouts++
+						}
+					}
+				}
 				var actual map[string]any
 				if parsed.EventPayload != nil {
 					actual = parsed.EventPayload.Fields
@@ -388,24 +468,35 @@ func verifyPublishedSMTP(t *testing.T, f *apiFixture, runtime *adapter.ParserPac
 					if parsed.Quarantined && !parsed.Success && len(actual) == 0 {
 						continue
 					}
-				} else if parsed.Success && !parsed.Quarantined && parsed.ParseTelemetry.ParserID == parserID && reflect.DeepEqual(actual, item.expected) {
+				} else if parsed.Success && !parsed.Quarantined && metadata != nil && metadata.ParserID == parserID && reflect.DeepEqual(actual, item.expected) {
 					continue
 				}
 				report.mismatches++
 				if report.firstError == "" {
-					report.firstError = fmt.Sprintf("%s: success=%v quarantined=%v parser=%q actual=%v want=%v", item.name, parsed.Success, parsed.Quarantined, parsed.ParseTelemetry.ParserID, actual, item.expected)
+					report.firstError = fmt.Sprintf("%s: success=%v quarantined=%v actual=%v want=%v", item.name, parsed.Success, parsed.Quarantined, actual, item.expected)
+					if metadata != nil {
+						attempts := make([]string, 0, len(metadata.OrderedAttempts))
+						for _, attempt := range metadata.OrderedAttempts {
+							attempts = append(attempts, fmt.Sprintf("%s/%s/%s(%vms)", attempt.ParserID, attempt.Outcome, attempt.FailureReason, attempt.LatencyMs))
+						}
+						report.firstError += fmt.Sprintf(" parser=%q codes=%v attempts=%v", metadata.ParserID, metadata.ErrorCodes, attempts)
+					}
 				}
 			}
 			reports <- report
 		}(worker)
 	}
+	headerTimeouts, kvTimeouts := 0, 0
 	for worker := 0; worker < workers; worker++ {
 		report := <-reports
+		headerTimeouts += report.headerTimeouts
+		kvTimeouts += report.kvTimeouts
 		if report.mismatches != 0 {
 			t.Errorf("worker got %d incorrect results, first %s", report.mismatches, report.firstError)
 		}
 	}
 	total := workers * cycles * len(samples)
 	elapsed := time.Since(started)
-	t.Logf("checked %d concurrent runtime parses across %d workers in %s (%.0f records/sec) and validated %d Assurance API responses", total, workers, elapsed, float64(total)/elapsed.Seconds(), len(samples)+1)
+	t.Logf("checked %d concurrent runtime parses across %d workers in %s (%.0f records/sec) and validated %d Assurance API responses; template timeout attempts: header=%d KV=%d",
+		total, workers, elapsed, float64(total)/elapsed.Seconds(), len(samples)+1, headerTimeouts, kvTimeouts)
 }
