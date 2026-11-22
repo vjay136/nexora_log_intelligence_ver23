@@ -9,10 +9,11 @@ import argparse, gzip, hashlib, io, json, os, pathlib, re, shutil
 import subprocess, sys, tarfile, tempfile, zipfile
 
 VERSION = '23.0.0'
-RELEASE = '5'
-TAG = 'v23.0.0-5'
+RELEASE = '6'
+TAG = 'v23.0.0-6'
 BASE = 'v22.19.1-0'
 REVISION = '77f95a94885ab1e1843bcd214d44e70a495ee85c'
+COINSTALL_NOTICE = b'''\n\n## R6 existing-role package compatibility\n\nThe installer checks for an already-installed opposite NLI role. If its release differs, both matching RPMs from this complete bundle are installed in one DNF transaction because they share /usr/bin/nli. A clean single-role node does not acquire the opposite role. Existing configuration and state are retained. Upgrade scriptlets do not enable or start an inactive counterpart; previously active counterpart daemons are restarted after the transaction. No role is removed automatically. Manual RPM installs on mixed-role hosts must supply both matching RPMs together. The interactive installation and enrollment steps are unchanged.\n'''
 
 def sha(path):
     with path.open('rb') as f:
@@ -26,12 +27,29 @@ def run(args, **kwargs):
 def identity(data):
     return (data.replace(b'ver22', b'ver23').replace(b'Ver22', b'Ver23')
             .replace(b'-v22.sh', b'-v23.sh')
-            .replace(b'22.19.1-0', b'23.0.0-5')
+            .replace(b'22.19.1-0', b'23.0.0-6')
             .replace(b'^22[.]', b'^23[.]')
-            .replace(b'V22_19_1_RELEASE_NOTES', b'V23_R5_RELEASE_NOTES'))
+            .replace(b'V22_19_1_RELEASE_NOTES', b'V23_R6_RELEASE_NOTES'))
 
 def rename(name):
     return identity(name.encode()).decode()
+
+def installer_identity(data, name, source):
+    data=identity(data)
+    if name in ('install-client-ver22.sh','install-controller-ver22.sh'):
+        role='client' if name=='install-client-ver22.sh' else 'controller'
+        needle=b'dnf -y install "$rpm_path"'
+        assert data.count(needle)==1,'original installer transaction point changed'
+        block=(source/'scripts/release/install-role-coherence.sh').read_bytes()
+        data=data.replace(needle,block+b'\nnli_install_role_set '+role.encode()+b' "$rpm_path" "$script_dir"')
+    return data
+
+def expected_upgrade_scriptlets(original, role):
+    bootstrap=f'nli-{role}-bootstrap.service'
+    profile='/etc/nli/bootstrap.env' if role=='client' else '/etc/nli/controller-bootstrap.env'
+    enable=f'systemctl enable {bootstrap} >/dev/null 2>&1 || :'.encode()
+    start=f'if [ -s {profile} ]; then systemctl start'.encode()
+    return original.replace(enable,b'if [ "$1" -eq 1 ]; then '+enable+b'; fi').replace(start,f'if [ "$1" -eq 1 ] && [ -s {profile} ]; then systemctl start'.encode())
 
 def files(root):
     return {str(p.relative_to(root)):p for p in root.rglob('*') if p.is_file()}
@@ -68,15 +86,15 @@ def repack(role, baseline, output, source, work, epoch):
     note=payload/f'usr/share/doc/{package}/V22_19_1_RELEASE_NOTES.md'
     if note.exists():
         change(note,identity,edits,str(note.relative_to(payload)))
-        note.rename(note.with_name('V23_R5_RELEASE_NOTES.md'))
+        note.rename(note.with_name('V23_R6_RELEASE_NOTES.md'))
     spec=(source/f'packaging/rpm/{package}.spec').read_text()
     header=spec.split('%prep\n',1)[0]
-    header=header.replace('nli_version 22.19.1','nli_version 23.0.0').replace('nli_release 0','nli_release 5')
+    header=header.replace('nli_version 22.19.1','nli_version 23.0.0').replace('nli_release 0','nli_release 6')
     header=header.replace('Ver22','Ver23').replace('nexora_log_intelligence_ver21.git','nexora_log_intelligence_ver23.git')
     header=header.replace('Source0:', '# Source0:')
     maint='%pre\n'+spec.split('%pre\n',1)[1].split('%files',1)[0]
     listing='%files'+spec.split('%files',1)[1].split('%changelog',1)[0]
-    listing=listing.replace(' -f parser-files.list','').replace('V22_19_1_RELEASE_NOTES','V23_R5_RELEASE_NOTES')
+    listing=listing.replace(' -f parser-files.list','').replace('V22_19_1_RELEASE_NOTES','V23_R6_RELEASE_NOTES')
     if role=='client':
         listing+='\n%dir %attr(0750,root,nli) /etc/nli/parsers\n'
         for p in sorted((payload/'etc/nli/parsers').glob('*.json')):
@@ -109,12 +127,13 @@ def repack(role, baseline, output, source, work, epoch):
         (output/destination.name.replace('.rpm',suffix if suffix!='.rpm.info.txt' else suffix)).write_text(text)
     oldscripts=run(['rpm','-qp','--scripts',str(original)],capture_output=True).stdout
     newscripts=run(['rpm','-qp','--scripts',str(destination)],capture_output=True).stdout
-    assert oldscripts==newscripts, 'Maintainer script behavior changed'
+    assert expected_upgrade_scriptlets(oldscripts,role)==newscripts, 'Unexpected maintainer script changes'
     binary_proof={n:sha(p) for n,p in current.items() if n.startswith('usr/bin/')}
     assert all(h==original_files[n] for n,h in binary_proof.items())
-    return {'package':package,'original_rpm_sha256':sha(original),'r5_rpm_sha256':sha(destination),
+    return {'package':package,'original_rpm_sha256':sha(original),'r6_rpm_sha256':sha(destination),
             'files_compared':len(current),'unchanged_binaries':binary_proof,'identity_edits':edits,
-            'maintainer_scripts_identical':True}
+            'maintainer_scripts_identical':False,
+            'maintainer_script_packaging_change':'bootstrap activation remains unchanged on fresh install; upgrade preserves existing enablement and does not start an inactive counterpart'}
 
 def main():
     a=argparse.ArgumentParser();a.add_argument('--baseline',type=pathlib.Path,required=True)
@@ -133,8 +152,10 @@ def main():
         if old.name in skip or '.tar.gz' in old.name or '.rpm' in old.name or old.name.endswith(('.files.txt','.permissions.txt')):continue
         new=output/rename(old.name)
         shutil.copyfile(old,new)
-        if old.suffix=='.sh' or old.name in ['INSTALLATION_AND_CONFIGURATION.md','V22_19_1_RELEASE_NOTES.md']:
-            new.write_bytes(identity(old.read_bytes()))
+        if old.suffix=='.sh':
+            new.write_bytes(installer_identity(old.read_bytes(),old.name,source))
+        elif old.name in ['INSTALLATION_AND_CONFIGURATION.md','V22_19_1_RELEASE_NOTES.md']:
+            new.write_bytes(identity(old.read_bytes())+(COINSTALL_NOTICE if old.name=='INSTALLATION_AND_CONFIGURATION.md' else b''))
     for name in ['RELEASE_MANIFEST.json','SBOM.spdx.json','provenance.intoto.json']:
         shutil.copyfile(baseline/name,output/('BASELINE_'+name))
     # Standalone webapp remains byte-for-byte identical, only its filename changes.
@@ -146,7 +167,7 @@ def main():
             entry.compress_type=old.compress_type;entry.external_attr=old.external_attr
             dst.writestr(entry,src.read(old.filename))
     epoch=int(run(['rpm','-qp','--qf','%{BUILDTIME}',str(baseline/'nli_client_ver22.rpm')],capture_output=True,text=True).stdout)
-    with tempfile.TemporaryDirectory(prefix='nli-r5-replica-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='nli-r6-replica-') as tmp:
         proof=[repack(role,baseline,output,source,pathlib.Path(tmp),epoch) for role in ['client','controller']]
     (output/'RELEASE_ID').write_bytes(f'NLI_VERSION={VERSION}\nNLI_RELEASE={RELEASE}\nNLI_ARCH=x86_64\nSOURCE_REVISION={REVISION}\n'.encode('utf-8'))
     report={'release':TAG,'mode':'local artifact replication, no compilation','baseline':BASE,
@@ -154,11 +175,13 @@ def main():
             'packages':proof,'webapp_zip_byte_identical':True,
             'supabase_changes':'release labels only; ownership and authentication logic unchanged'}
     (output/'REPLICATION_MANIFEST.json').write_text(json.dumps(report,indent=2)+'\n')
-    (output/'REPLICATION_NOTES.md').write_text('''# NLI Ver23 R5 — v23.0.0-5
+    (output/'REPLICATION_NOTES.md').write_text('''# NLI Ver23 R6 — v23.0.0-6
 
-Replicated locally from the exact local v22.19.1-0 release artifacts. No runtime compilation or feature fixes were applied. RPM package version/release is 23.0.0-5; embedded executables remain the original bytes and report 22.19.1. Original configuration, parsers, browser application and maintainer-script behavior are retained. Only release identity, artifact names, desktop ZIP root and necessary filename references change.
+Replicated locally from the exact local v22.19.1-0 release artifacts. No runtime compilation or parsing-feature fixes were applied. RPM package version/release is 23.0.0-6; embedded executables remain original bytes and report 22.19.1. Original configuration, parsers and browser application are retained.
 
-R5 corrects release packaging only: LF checksum files, baseline executable permissions and the original versioned tar directory layout. Both Linux installer verification entrypoints are checked from fresh extraction.
+R6 fixes mixed-role RPM installation: if the opposite role is already installed at an older release, its matching local bundle RPM is included in the same DNF transaction. Clean single-role installations do not add the opposite role. Existing configuration/state is retained; inactive counterpart daemons and disabled bootstrap services stay inactive/disabled during upgrades. Previously active counterpart daemons are restarted to use the matching installed version. No role is automatically removed and no shared-file force-overwrite is used. Direct RPM users on mixed-role hosts must supply both matching RPMs in one transaction.
+
+R6 corrects release packaging only: LF checksum files, baseline executable permissions and the original versioned tar directory layout. Both Linux installer verification entrypoints are checked from fresh extraction.
 
 Original API/sync issues are inherited. Supabase controller-secret ownership/authentication is unchanged; an existing secret mismatch is not fixed by replication. No live database or AWS node was modified. REPLICATION_MANIFEST.json records original hashes and per-package binary identity verification.
 ''')

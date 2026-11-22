@@ -1,10 +1,14 @@
-# NLI Ver23 R5 — local artifact replica
+# R6 mixed-role packaging correction
 
-R5 (`v23.0.0-5`) is an identity-only repackage of the exact local `releases/v22.19.1-0` artifacts, not a continuation of the Ver23 R1–R3 runtime changes. Runtime source: `77f95a94885ab1e1843bcd214d44e70a495ee85c`.
+The runtime and webapp remain the exact local Ver22.19 bytes. Existing opposite roles are upgraded together from the local matching bundle when needed to avoid `/usr/bin/nli` conflicts. A clean client/controller host installs only its selected role. Upgrades retain existing bootstrap enablement and do not activate an inactive counterpart; existing active counterpart daemons are restarted after the paired transaction. Configuration/state is preserved. No forced shared-file replacement or automatic role erasure is used.
+
+# NLI Ver23 R6 — local artifact replica
+
+R6 (`v23.0.0-6`) is an identity-only repackage of the exact local `releases/v22.19.1-0` artifacts, not a continuation of the Ver23 R1–R3 runtime changes. Runtime source: `77f95a94885ab1e1843bcd214d44e70a495ee85c`.
 
 R5 corrects release-only packaging: LF checksum manifests, original executable tar permissions and versioned archive layout. Both actual installer `--verify-only` entrypoints must pass after fresh Linux extraction, including an archive finalized on Windows.
 
-Prepare and verify artifacts in the local release folder before uploading those same bytes to GitHub. `scripts/release/replicate-local-v2219.py` uses original RPM payloads without compiling runtime code. Native executables and the webapp ZIP remain byte-identical to the original release; native version commands still report `22.19.1`. RPM package identity is `23.0.0-5`.
+Prepare and verify artifacts in the local release folder before uploading those same bytes to GitHub. `scripts/release/replicate-local-v2219.py` uses original RPM payloads without compiling runtime code. Native executables and the webapp ZIP remain byte-identical to the original release; native version commands still report `22.19.1`. RPM package identity is `23.0.0-6`.
 
 No existing API, parser-sync or Supabase authentication issue is claimed fixed. Stable service/configuration/protocol paths and SQL ownership checks remain unchanged. The release's `REPLICATION_MANIFEST.json` records binary hashes and identity edits. The manual GitHub workflow verifies published checksums only, with no remote rebuild.
 

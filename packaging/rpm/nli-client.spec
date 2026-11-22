@@ -1,5 +1,5 @@
 %{!?nli_version:%global nli_version 23.0.0}
-%{!?nli_release:%global nli_release 5}
+%{!?nli_release:%global nli_release 6}
 Name:           nli-client
 Version:        %{nli_version}
 Release:        %{nli_release}%{?dist}
@@ -68,8 +68,8 @@ done
 if [ -f /var/lib/nli-control-client/install.id ]; then chgrp nli /var/lib/nli-control-client/install.id; chmod 0640 /var/lib/nli-control-client/install.id; fi
 if [ -f /var/lib/nli-control-client/node.token ]; then chgrp nli /var/lib/nli-control-client/node.token; chmod 0640 /var/lib/nli-control-client/node.token; fi
 if [ ! -e /var/log/nli/quarantine.jsonl ]; then install -o nli -g nli -m 0640 /dev/null /var/log/nli/quarantine.jsonl; fi
-systemctl enable nli-client-bootstrap.service >/dev/null 2>&1 || :
-if [ -s /etc/nli/bootstrap.env ]; then systemctl start nli-client-bootstrap.service >/dev/null 2>&1 || :; fi
+if [ "$1" -eq 1 ]; then systemctl enable nli-client-bootstrap.service >/dev/null 2>&1 || :; fi
+if [ "$1" -eq 1 ] && [ -s /etc/nli/bootstrap.env ]; then systemctl start nli-client-bootstrap.service >/dev/null 2>&1 || :; fi
 
 %preun
 if [ "$1" -eq 0 ]; then

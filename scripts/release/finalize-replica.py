@@ -15,12 +15,12 @@ def sha(p):
 
 def finalize(root, baseline):
     proof=json.loads((root/'REPLICATION_MANIFEST.json').read_text(encoding='utf-8'))
-    assert proof['release']=='v23.0.0-5'
+    assert proof['release']=='v23.0.0-6'
     for package in proof['packages']:
         name='nli_client_ver23.rpm' if package['package']=='nli-client' else 'nli_controller_agent_ver23.rpm'
-        assert sha(root/name)==package['r5_rpm_sha256']
+        assert sha(root/name)==package['r6_rpm_sha256']
     assert sha(root/'webapp_ver23.zip')==sha(baseline/'webapp_ver22.zip')
-    archive=root/'nli-v23.0.0-5-x86_64.tar.gz'
+    archive=root/'nli-v23.0.0-6-x86_64.tar.gz'
     exclude={'SHA256SUMS',archive.name,archive.name+'.sha256','RELEASE_MANIFEST.json','SBOM.spdx.json','provenance.intoto.json'}
     assets=[p for p in sorted(root.iterdir()) if p.is_file() and p.name not in exclude]
     stamp='2026-11-22T00:00:00Z'
@@ -29,25 +29,25 @@ def finalize(root, baseline):
     prov={'_type':'https://in-toto.io/Statement/v1','subject':subjects,
           'predicateType':'https://slsa.dev/provenance/v1','predicate':{
            'buildDefinition':{'buildType':'https://nexora.local/buildtypes/local-rpm-artifact-repack/v1',
-            'externalParameters':{'release':'v23.0.0-5','baseline':'v22.19.1-0','runtimeRecompiled':False},
+            'externalParameters':{'release':'v23.0.0-6','baseline':'v22.19.1-0','runtimeRecompiled':False},
             'resolvedDependencies':[{'uri':'local:v22.19.1-0/'+a['name'],'digest':{'sha256':a['sha256']}} for a in proof['baseline_artifacts']]},
-           'runDetails':{'builder':{'id':'local-verified-artifact-replication'},'metadata':{'invocationId':'v23.0.0-5-local-replica'}}}}
+           'runDetails':{'builder':{'id':'local-verified-artifact-replication'},'metadata':{'invocationId':'v23.0.0-6-local-replica'}}}}
     write_lf(root/'provenance.intoto.json',json.dumps(prov,indent=2)+'\n')
     packages=[]; relationships=[]
     for i,p in enumerate(assets):
         ident='SPDXRef-Artifact-'+str(i)
-        packages.append({'SPDXID':ident,'name':p.name,'versionInfo':'23.0.0-5','downloadLocation':'NOASSERTION',
+        packages.append({'SPDXID':ident,'name':p.name,'versionInfo':'23.0.0-6','downloadLocation':'NOASSERTION',
           'filesAnalyzed':False,'checksums':[{'algorithm':'SHA256','checksumValue':sha(p)}],
           'licenseConcluded':'NOASSERTION','licenseDeclared':'NOASSERTION','copyrightText':'NOASSERTION'})
         relationships.append({'spdxElementId':'SPDXRef-DOCUMENT','relationshipType':'DESCRIBES','relatedSpdxElement':ident})
     sbom={'spdxVersion':'SPDX-2.3','dataLicense':'CC0-1.0','SPDXID':'SPDXRef-DOCUMENT',
-      'name':'NLI Ver23 R5 local artifact replica','documentNamespace':'https://nexora.local/spdx/v23.0.0-5-local-replica',
+      'name':'NLI Ver23 R6 local artifact replica','documentNamespace':'https://nexora.local/spdx/v23.0.0-6-local-replica',
       'creationInfo':{'created':stamp,'creators':['Tool: NLI-local-artifact-replication'],
         'comment':'Artifact inventory; original unchanged runtime dependency inventory retained in BASELINE_SBOM.spdx.json. Native runtime reports 22.19.1.'},
       'packages':packages,'relationships':relationships}
     write_lf(root/'SBOM.spdx.json',json.dumps(sbom,indent=2)+'\n')
     evidence=assets+[root/'SBOM.spdx.json',root/'provenance.intoto.json']
-    manifest={'release':'v23.0.0-5','version':'23.0.0','rpm_release':'5','architecture':'x86_64',
+    manifest={'release':'v23.0.0-6','version':'23.0.0','rpm_release':'6','architecture':'x86_64',
       'source_revision':proof['source_revision'],'runtime_version':'22.19.1','runtime_recompiled':False,
       'baseline':'v22.19.1-0','verification':'REPLICATION_MANIFEST.json','artifacts':[entry(p) for p in evidence]}
     write_lf(root/'RELEASE_MANIFEST.json',json.dumps(manifest,indent=2)+'\n')
@@ -59,7 +59,7 @@ def finalize(root, baseline):
         epoch=int(original_members[0].mtime)
         original_modes={m.name.rsplit('/',1)[-1]:m.mode for m in original_members if m.isfile()}
     def original_name(name):
-        return name.replace('ver23','ver22').replace('-v23.sh','-v22.sh').replace('V23_R5_RELEASE_NOTES','V22_19_1_RELEASE_NOTES')
+        return name.replace('ver23','ver22').replace('-v23.sh','-v22.sh').replace('V23_R6_RELEASE_NOTES','V22_19_1_RELEASE_NOTES')
     prefix=archive.name[:-len('.tar.gz')]
     with archive.open('wb') as raw,gzip.GzipFile(fileobj=raw,mode='wb',mtime=epoch,filename='') as compressed,tarfile.open(fileobj=compressed,mode='w') as tar:
         directory=tarfile.TarInfo(prefix);directory.type=tarfile.DIRTYPE

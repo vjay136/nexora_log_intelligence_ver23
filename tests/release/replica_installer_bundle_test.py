@@ -14,11 +14,11 @@ def run_installer(folder, role, direct=False, expected=True):
 
 def check(output):
     assert os.name!='nt','Execute with Linux tools, not a Windows text-reader simulation'
-    archive=output/'nli-v23.0.0-5-x86_64.tar.gz';prefix=archive.name[:-len('.tar.gz')]
+    archive=output/'nli-v23.0.0-6-x86_64.tar.gz';prefix=archive.name[:-len('.tar.gz')]
     raw=(output/'SHA256SUMS').read_bytes()
     assert b'\r' not in raw and raw.endswith(b'\n'),'checksum manifest must be LF-only'
     assert b'\r' not in (output/'RELEASE_ID').read_bytes()
-    with tempfile.TemporaryDirectory(prefix='nli-r5-entrypoint-') as temp:
+    with tempfile.TemporaryDirectory(prefix='nli-r6-entrypoint-') as temp:
         dest=pathlib.Path(temp)
         with tarfile.open(archive,'r:gz') as tar:
             members=tar.getmembers()
@@ -54,7 +54,7 @@ def check(output):
         normal=subprocess.run(['bash','./install-controller-ver23.sh'],cwd=folder,env=env,
                               stdin=subprocess.DEVNULL,text=True,capture_output=True)
         assert normal.returncode==73,(normal.stdout,normal.stderr)
-        assert 'installing nli-controller-agent-23.0.0-5.el9.x86_64' in normal.stdout
+        assert 'installing nli-controller-agent-23.0.0-6.el9.x86_64' in normal.stdout
         assert '-y install ' in dnf_call.read_text()
         # Prove the unchanged original fail-closed validation still detects
         # both missing required entries and a present-but-tampered RPM.
@@ -67,7 +67,7 @@ def check(output):
         with rpm.open('ab') as f:f.write(b'tamper fixture')
         bad=run_installer(folder,'controller',expected=False)
         assert 'checksum verification failed' in bad.stderr,bad.stderr
-    return {'release':'v23.0.0-5','checksum_entries':hashes,'LF_only_manifest':True,
+    return {'release':'v23.0.0-6','checksum_entries':hashes,'LF_only_manifest':True,
       'archive_versioned_directory':True,'shell_modes':'0755','world_writable_entries':0,
       'controller_and_client_bash_verify_only':'passed','controller_and_client_direct_verify_only':'passed',
       'controller_default_command_passes_checksum_stage':True,

@@ -1,5 +1,5 @@
 %{!?nli_version:%global nli_version 23.0.0}
-%{!?nli_release:%global nli_release 5}
+%{!?nli_release:%global nli_release 6}
 Name:           nli-controller-agent
 Version:        %{nli_version}
 Release:        %{nli_release}%{?dist}
@@ -60,10 +60,10 @@ secret_file=%{_sysconfdir}/nli/controller.env
 chown root:nli "$secret_file"
 chmod 0640 "$secret_file"
 systemctl daemon-reload >/dev/null 2>&1 || :
-systemctl enable nli-controller-bootstrap.service >/dev/null 2>&1 || :
+if [ "$1" -eq 1 ]; then systemctl enable nli-controller-bootstrap.service >/dev/null 2>&1 || :; fi
 # The GeoIP timer remains disabled until an administrator accepts the upstream
 # license in /etc/nli/geoip.env and deliberately enables it.
-if [ -s /etc/nli/controller-bootstrap.env ]; then systemctl start nli-controller-bootstrap.service >/dev/null 2>&1 || :; fi
+if [ "$1" -eq 1 ] && [ -s /etc/nli/controller-bootstrap.env ]; then systemctl start nli-controller-bootstrap.service >/dev/null 2>&1 || :; fi
 
 %preun
 if [ "$1" -eq 0 ]; then

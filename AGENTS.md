@@ -7,3 +7,5 @@
 - Publication must upload the already-verified local artifacts; do not let a remote rebuild replace their bytes.
 
 - R5 packaging regression (2026-11-22): write checksum/identity files as explicit UTF-8 bytes with LF line endings, preserve baseline executable modes and versioned directory layout in release tarballs, and run both actual installer `--verify-only` commands from a fresh Linux archive extraction before publication. Windows text readers normalize CRLF and do not prove Linux installer compatibility.
+
+- R6 packaging regression: test a real legacy opposite-role RPM on the same node. Both roles own /usr/bin/nli; differing releases require a coordinated transaction using the matching local bundle. Never force-overwrite the shared file, silently erase a role, or enable an inactive counterpart during an upgrade. Preserve configuration, state and existing service enablement.
