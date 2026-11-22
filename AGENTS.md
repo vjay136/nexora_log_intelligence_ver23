@@ -5,3 +5,5 @@
 - For R4, replicate that baseline with release identity, filenames and necessary filename-reference changes only. Preserve executable, parser, configuration and application behavior. Do not silently apply bug fixes or claim existing API/sync/authentication problems are resolved.
 - Never put live credentials or installation transcripts containing secrets into releases or GitHub.
 - Publication must upload the already-verified local artifacts; do not let a remote rebuild replace their bytes.
+
+- R5 packaging regression (2026-11-22): write checksum/identity files as explicit UTF-8 bytes with LF line endings, preserve baseline executable modes and versioned directory layout in release tarballs, and run both actual installer `--verify-only` commands from a fresh Linux archive extraction before publication. Windows text readers normalize CRLF and do not prove Linux installer compatibility.

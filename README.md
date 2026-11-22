@@ -1,8 +1,10 @@
-# NLI Ver23 R4 — local artifact replica
+# NLI Ver23 R5 — local artifact replica
 
-R4 (`v23.0.0-4`) is an identity-only repackage of the exact local `releases/v22.19.1-0` artifacts, not a continuation of the Ver23 R1–R3 runtime changes. Runtime source: `77f95a94885ab1e1843bcd214d44e70a495ee85c`.
+R5 (`v23.0.0-5`) is an identity-only repackage of the exact local `releases/v22.19.1-0` artifacts, not a continuation of the Ver23 R1–R3 runtime changes. Runtime source: `77f95a94885ab1e1843bcd214d44e70a495ee85c`.
 
-Prepare and verify artifacts in the local release folder before uploading those same bytes to GitHub. `scripts/release/replicate-local-v2219.py` uses original RPM payloads without compiling runtime code. Native executables and the webapp ZIP remain byte-identical to the original release; native version commands still report `22.19.1`. RPM package identity is `23.0.0-4`.
+R5 corrects release-only packaging: LF checksum manifests, original executable tar permissions and versioned archive layout. Both actual installer `--verify-only` entrypoints must pass after fresh Linux extraction, including an archive finalized on Windows.
+
+Prepare and verify artifacts in the local release folder before uploading those same bytes to GitHub. `scripts/release/replicate-local-v2219.py` uses original RPM payloads without compiling runtime code. Native executables and the webapp ZIP remain byte-identical to the original release; native version commands still report `22.19.1`. RPM package identity is `23.0.0-5`.
 
 No existing API, parser-sync or Supabase authentication issue is claimed fixed. Stable service/configuration/protocol paths and SQL ownership checks remain unchanged. The release's `REPLICATION_MANIFEST.json` records binary hashes and identity edits. The manual GitHub workflow verifies published checksums only, with no remote rebuild.
 

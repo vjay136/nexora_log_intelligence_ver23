@@ -9,8 +9,8 @@ import argparse, gzip, hashlib, io, json, os, pathlib, re, shutil
 import subprocess, sys, tarfile, tempfile, zipfile
 
 VERSION = '23.0.0'
-RELEASE = '4'
-TAG = 'v23.0.0-4'
+RELEASE = '5'
+TAG = 'v23.0.0-5'
 BASE = 'v22.19.1-0'
 REVISION = '77f95a94885ab1e1843bcd214d44e70a495ee85c'
 
@@ -26,9 +26,9 @@ def run(args, **kwargs):
 def identity(data):
     return (data.replace(b'ver22', b'ver23').replace(b'Ver22', b'Ver23')
             .replace(b'-v22.sh', b'-v23.sh')
-            .replace(b'22.19.1-0', b'23.0.0-4')
+            .replace(b'22.19.1-0', b'23.0.0-5')
             .replace(b'^22[.]', b'^23[.]')
-            .replace(b'V22_19_1_RELEASE_NOTES', b'V23_R4_RELEASE_NOTES'))
+            .replace(b'V22_19_1_RELEASE_NOTES', b'V23_R5_RELEASE_NOTES'))
 
 def rename(name):
     return identity(name.encode()).decode()
@@ -68,15 +68,15 @@ def repack(role, baseline, output, source, work, epoch):
     note=payload/f'usr/share/doc/{package}/V22_19_1_RELEASE_NOTES.md'
     if note.exists():
         change(note,identity,edits,str(note.relative_to(payload)))
-        note.rename(note.with_name('V23_R4_RELEASE_NOTES.md'))
+        note.rename(note.with_name('V23_R5_RELEASE_NOTES.md'))
     spec=(source/f'packaging/rpm/{package}.spec').read_text()
     header=spec.split('%prep\n',1)[0]
-    header=header.replace('nli_version 22.19.1','nli_version 23.0.0').replace('nli_release 0','nli_release 4')
+    header=header.replace('nli_version 22.19.1','nli_version 23.0.0').replace('nli_release 0','nli_release 5')
     header=header.replace('Ver22','Ver23').replace('nexora_log_intelligence_ver21.git','nexora_log_intelligence_ver23.git')
     header=header.replace('Source0:', '# Source0:')
     maint='%pre\n'+spec.split('%pre\n',1)[1].split('%files',1)[0]
     listing='%files'+spec.split('%files',1)[1].split('%changelog',1)[0]
-    listing=listing.replace(' -f parser-files.list','').replace('V22_19_1_RELEASE_NOTES','V23_R4_RELEASE_NOTES')
+    listing=listing.replace(' -f parser-files.list','').replace('V22_19_1_RELEASE_NOTES','V23_R5_RELEASE_NOTES')
     if role=='client':
         listing+='\n%dir %attr(0750,root,nli) /etc/nli/parsers\n'
         for p in sorted((payload/'etc/nli/parsers').glob('*.json')):
@@ -112,7 +112,7 @@ def repack(role, baseline, output, source, work, epoch):
     assert oldscripts==newscripts, 'Maintainer script behavior changed'
     binary_proof={n:sha(p) for n,p in current.items() if n.startswith('usr/bin/')}
     assert all(h==original_files[n] for n,h in binary_proof.items())
-    return {'package':package,'original_rpm_sha256':sha(original),'r4_rpm_sha256':sha(destination),
+    return {'package':package,'original_rpm_sha256':sha(original),'r5_rpm_sha256':sha(destination),
             'files_compared':len(current),'unchanged_binaries':binary_proof,'identity_edits':edits,
             'maintainer_scripts_identical':True}
 
@@ -146,31 +146,25 @@ def main():
             entry.compress_type=old.compress_type;entry.external_attr=old.external_attr
             dst.writestr(entry,src.read(old.filename))
     epoch=int(run(['rpm','-qp','--qf','%{BUILDTIME}',str(baseline/'nli_client_ver22.rpm')],capture_output=True,text=True).stdout)
-    with tempfile.TemporaryDirectory(prefix='nli-r4-replica-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='nli-r5-replica-') as tmp:
         proof=[repack(role,baseline,output,source,pathlib.Path(tmp),epoch) for role in ['client','controller']]
-    (output/'RELEASE_ID').write_text(f'NLI_VERSION={VERSION}\nNLI_RELEASE={RELEASE}\nNLI_ARCH=x86_64\nSOURCE_REVISION={REVISION}\n')
+    (output/'RELEASE_ID').write_bytes(f'NLI_VERSION={VERSION}\nNLI_RELEASE={RELEASE}\nNLI_ARCH=x86_64\nSOURCE_REVISION={REVISION}\n'.encode('utf-8'))
     report={'release':TAG,'mode':'local artifact replication, no compilation','baseline':BASE,
             'source_revision':REVISION,'embedded_runtime_version':'22.19.1','baseline_artifacts':entries,
             'packages':proof,'webapp_zip_byte_identical':True,
             'supabase_changes':'release labels only; ownership and authentication logic unchanged'}
     (output/'REPLICATION_MANIFEST.json').write_text(json.dumps(report,indent=2)+'\n')
-    (output/'REPLICATION_NOTES.md').write_text('''# NLI Ver23 R4 — v23.0.0-4
+    (output/'REPLICATION_NOTES.md').write_text('''# NLI Ver23 R5 — v23.0.0-5
 
-Replicated locally from the exact local v22.19.1-0 release artifacts. No runtime compilation or feature fixes were applied. RPM package version/release is 23.0.0-4; embedded executables remain the original bytes and report 22.19.1. Original configuration, parsers, browser application and maintainer-script behavior are retained. Only release identity, artifact names, desktop ZIP root and necessary filename references change.
+Replicated locally from the exact local v22.19.1-0 release artifacts. No runtime compilation or feature fixes were applied. RPM package version/release is 23.0.0-5; embedded executables remain the original bytes and report 22.19.1. Original configuration, parsers, browser application and maintainer-script behavior are retained. Only release identity, artifact names, desktop ZIP root and necessary filename references change.
+
+R5 corrects release packaging only: LF checksum files, baseline executable permissions and the original versioned tar directory layout. Both Linux installer verification entrypoints are checked from fresh extraction.
 
 Original API/sync issues are inherited. Supabase controller-secret ownership/authentication is unchanged; an existing secret mismatch is not fixed by replication. No live database or AWS node was modified. REPLICATION_MANIFEST.json records original hashes and per-package binary identity verification.
 ''')
     for p in sorted(output.glob('*.sh')):run(['bash','-n',str(p)])
     for name in ['webapp_ver23.zip','webview_ver23.zip']:
         with zipfile.ZipFile(output/name) as z:assert z.testzip() is None
-    (output/'SHA256SUMS').write_text(''.join(sha(p)+'  '+p.name+'\n' for p in sorted(output.iterdir()) if p.is_file() and p.name!='SHA256SUMS'))
-    archive=output/'nli-v23.0.0-4-x86_64.tar.gz'
-    members=sorted(output.iterdir())
-    with archive.open('wb') as raw,gzip.GzipFile(fileobj=raw,mode='wb',mtime=epoch,filename='') as compressed,tarfile.open(fileobj=compressed,mode='w') as tar:
-        for p in members:
-            info=tar.gettarinfo(str(p),p.name);info.uid=info.gid=0;info.uname=info.gname='root';info.mtime=epoch
-            with p.open('rb') as f:tar.addfile(info,f)
-    (output/(archive.name+'.sha256')).write_text(sha(archive)+'  '+archive.name+'\n')
     run([sys.executable,str(source/'scripts/release/finalize-replica.py'),'--output',str(output),'--baseline',str(baseline)])
     print(json.dumps({'release':TAG,'verified_original_manifest_entries':59,'packages':proof,'output':str(output)},indent=2))
 

@@ -1,5 +1,5 @@
 %{!?nli_version:%global nli_version 23.0.0}
-%{!?nli_release:%global nli_release 4}
+%{!?nli_release:%global nli_release 5}
 Name:           nli-client
 Version:        %{nli_version}
 Release:        %{nli_release}%{?dist}
