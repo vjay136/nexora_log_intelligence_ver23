@@ -6,6 +6,7 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--release',type=pathlib.Path,required=True)
     p.add_argument('--legacy',type=pathlib.Path,required=True);p.add_argument('--result',type=pathlib.Path,required=True)
     p.add_argument('--reciprocal-only',action='store_true')
+    p.add_argument('--image',default='nli-rocky-test:rocky9')
     a=p.parse_args();root=pathlib.Path(__file__).resolve().parents[2]
     suffix=uuid.uuid4().hex[:10];network='nli-r7-net-'+suffix;volume='nli-r7-boot-'+suffix
     controller='nli-r7-controller-'+suffix;client='nli-r7-client-'+suffix;nodes=[]
@@ -32,7 +33,7 @@ def main():
           '--mount','type=bind,src='+a.release.resolve().as_posix()+',dst=/artifacts,readonly',
           '--mount','type=bind,src='+a.legacy.resolve().as_posix()+',dst=/legacy,readonly',
           '--mount','type=bind,src='+root.as_posix()+',dst=/src,readonly',
-          '--mount','type=volume,src='+volume+',dst=/bootstrap','nli-rocky-test:rocky9']
+          '--mount','type=volume,src='+volume+',dst=/bootstrap',a.image]
         call(args);nodes.append(name)
         for _ in range(60):
             state=execute(name,'systemctl is-system-running',ok=False).stdout.strip()
@@ -56,7 +57,7 @@ def main():
             for unit in ['nli-agent.service','nli-client-control.service','nli-client-bootstrap.service']:
                 assert execute(controller,'systemctl is-active --quiet '+unit,ok=False).returncode!=0
                 assert execute(controller,'systemctl is-enabled --quiet '+unit,ok=False).returncode!=0
-            result={'release':'v23.0.0-7','actual_controller_installer_with_legacy_22_19_client':'passed',
+            result={'release':'v23.0.0-7','test_image':a.image,'actual_controller_installer_with_legacy_22_19_client':'passed',
               'disabled_client_counterpart_remains_disabled_and_inactive':True,'client_config_and_state_preserved':True,
               'controller_service':'active','production_nodes_modified':False}
             a.result.write_bytes((json.dumps(result,indent=2)+'\n').encode('utf-8'));print(json.dumps(result,indent=2),flush=True)
@@ -95,7 +96,7 @@ def main():
         execute(client,'systemctl restart nli-client-control.service nli-agent.service; systemctl is-active --quiet nli-client-control.service nli-agent.service; systemctl is-enabled --quiet nli-client-control.service nli-agent.service')
         assert execute(controller,'sha256sum /var/lib/nli-controller/parser-assets/bundle.json').stdout.split()[0]==before_controller
         assert execute(client,'sha256sum /var/lib/nli/parser-assets/bundle.json').stdout.split()[0]==before_client
-        result={'release':'v23.0.0-7','fresh_controller_actual_installer':'passed','fresh_controller_does_not_add_client':True,
+        result={'release':'v23.0.0-7','test_image':a.image,'fresh_controller_actual_installer':'passed','fresh_controller_does_not_add_client':True,
           'client_actual_bootstrap_installer_with_legacy_22_19_controller':'passed','both_existing_roles_match_bundle':True,
           'disabled_counterpart_remains_disabled_and_inactive':True,'controller_config_and_state_preserved':True,
           'tls_enrollment_and_initial_heartbeat':'passed','client_parser_and_control_services':'active',

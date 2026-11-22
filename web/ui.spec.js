@@ -402,6 +402,70 @@ test('R7 embedded configuration references identify the parser pack in the catal
   await expect(row).not.toContainText('Automatic rollout is off');
 });
 
+test('R7 dashboard charts and review wrapping work under the packaged WebView CSP',async({page})=>{
+  const reason=`Exact checksum reviewed.\n${'long-review-token-'.repeat(9)}`;
+  const approved={id:'style-review',state:'approved',payload:{name:'CSP review fixture',type:'config_push',approved_by:'reviewer',approval_reason:reason}};
+  const {observed}=await mockController(page,{rolloutSeed:[approved]});
+  const middleware=await readFile(new URL('../internal/middleware/rbac.go',import.meta.url),'utf8');
+  const policy=middleware.match(/Set\("Content-Security-Policy", "([^"]+)"\)/)?.[1];
+  expect(policy).toContain("style-src 'self'");
+  await page.route(`${origin}/`,route=>route.fulfill({contentType:'text/html',headers:{'Content-Security-Policy':policy},body:assets['index.html']}));
+  await page.addInitScript(()=>{
+    window.nliCSSViolations=[];
+    document.addEventListener('securitypolicyviolation',event=>{
+      window.nliCSSViolations.push({directive:event.effectiveDirective,url:event.blockedURI});
+    });
+    window.EventSource=class extends EventTarget {
+      constructor(){super();window.nliTestStream=this;queueMicrotask(()=>this.onopen?.());}
+      close(){}
+    };
+  });
+  // Exercise the documented combined-snapshot fallback with host CPU/memory
+  // metrics. The canonical test snapshots used below have source metrics only.
+  await page.route('**/api/v1/sync/snapshot',route=>route.fulfill({status:503,json:{error:'Test fixture uses the combined dashboard snapshot'}}));
+  await page.route('**/api/v1/parser-sync/runtime',route=>route.fulfill({json:{controller:{status:'applied',bundle_hash:'a'.repeat(64),bundle_path:`/var/lib/nli/${'path-token-'.repeat(20)}`,parsers:[]},clients:[]}}));
+  await page.clock.install();
+  await login(page);
+  const legend=page.locator('.multi-chart .chart-legend i').first();
+  await expect(legend).toHaveCSS('background-color','rgb(83, 165, 255)');
+  const bar=page.locator('.stack-column .stack-parsed').first();
+  await expect.poll(()=>bar.evaluate(node=>node.getBoundingClientRect().height)).toBeGreaterThan(0);
+  await expect(bar).toHaveCSS('background-color','rgb(61, 213, 152)');
+  const widthRatios=async selector=>page.locator(selector).evaluateAll(nodes=>nodes.map(node=>node.getBoundingClientRect().width/node.parentElement.clientWidth));
+  const pipeline=await widthRatios('.pipeline-row i');
+  expect(pipeline).toHaveLength(3);
+  expect(pipeline[0]).toBeCloseTo(1/6,2);
+  expect(pipeline[1]).toBeCloseTo(2/6,2);
+  expect(pipeline[2]).toBeCloseTo(3/6,2);
+  const meters=await widthRatios('.health-meter i');
+  expect(meters).toHaveLength(2);
+  expect(meters[0]).toBeCloseTo(.18,2);
+  expect(meters[1]).toBeCloseTo(.31,2);
+  const historyReads=observed.filter(item=>item.startsWith('GET /api/v1/metrics/timeseries')).length;
+  await page.locator('#dashboard-range').focus();
+  await page.clock.fastForward(5500);
+  await expect.poll(()=>observed.filter(item=>item.startsWith('GET /api/v1/metrics/timeseries')).length).toBeGreaterThan(historyReads);
+  await expect(page.locator('#dashboard-history-content .chart-legend i').first()).toHaveCSS('background-color','rgb(83, 165, 255)');
+
+  await page.evaluate(()=>{
+    const snapshot=(revision,count)=>({schema_version:'nli.sync.v1',revision,generated_at:new Date(Date.now()+revision).toISOString(),target_interval_ms:1000,aggregate:{nli_source_records_read_total:count,nli_parser_records_succeeded_total:count-1,nli_quarantined_records_total:1},sources:[]});
+    for(const [revision,count] of [[31,52],[32,61]])window.nliTestStream.dispatchEvent(new MessageEvent('sync_snapshot',{data:JSON.stringify(snapshot(revision,count))}));
+  });
+  await page.getByTestId('nav-monitoring').click();
+  await expect(page.locator('[data-monitoring-panel=overview] .chart-legend .chart-fill-green').first()).toHaveCSS('background-color','rgb(61, 213, 152)');
+  await page.getByTestId('nav-performance').click();
+  await expect(page.locator('#page .chart-legend .chart-fill-amber').first()).toHaveCSS('background-color','rgb(248, 193, 92)');
+  await page.getByTestId('nav-rollouts').click();
+  const rationale=page.locator('.approval-details p').filter({hasText:'Exact checksum reviewed.'});
+  await expect(rationale).toHaveCSS('white-space','pre-wrap');
+  await expect(rationale).toHaveCSS('overflow-wrap','anywhere');
+  await page.getByTestId('nav-parsers').click();
+  const paths=page.locator('p.parser-inventory-path');
+  await expect(paths).toHaveCount(2);
+  for(const path of await paths.all())await expect(path).toHaveCSS('overflow-wrap','anywhere');
+  expect(await page.evaluate(()=>window.nliCSSViolations)).toEqual([]);
+});
+
 test('refresh shows only a spinner while the existing page reload runs',async({page})=>{
   await mockController(page);
   await login(page);

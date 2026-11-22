@@ -21,6 +21,9 @@ functional release with newly compiled executables and updated browser assets.
   evaluation record linked to that parser, not another live parser instance.
 - API errors retain their HTTP status and include a request ID and retry hint.
   Browser refreshes isolate optional metadata failures and preserve selection.
+- Charts, utilization bars and text wrapping use stylesheet classes and bounded
+  DOM style properties. They render under the existing strict CSP without
+  permitting inline styles or scripts in the page policy.
 - A local template/KV budget expiry receives one bounded fresh attempt while
   the caller context remains live. Both attempts remain in diagnostic telemetry.
   Malformed input, cancellation and persistent timeout remain fail-closed; the

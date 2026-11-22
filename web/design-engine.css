@@ -81,12 +81,12 @@ html[data-design="liquid-glass"] :is(.card,.panel){border-top-color:var(--muted)
 .design-dialog-fallback[open]{display:block;position:fixed;inset:5vh auto auto 50%;transform:translateX(-50%);z-index:1000;max-height:90vh}.design-dialog-fallback:not([open]){display:none}
 html[data-adaptive="true"] .stack-parsed{background:var(--green)}html[data-adaptive="true"] .stack-quarantine{background:var(--amber)}html[data-adaptive="true"] .stack-errors{background:var(--red)}
 .design-thumbnail[data-design="bento-grid"]{grid-template-columns:28px 2fr 1fr}.design-thumbnail[data-design="retro-y2k"]{background-image:var(--design-texture);background-size:12px 12px}.design-thumbnail[data-design="liquid-glass"]{background-image:var(--design-texture)}
-html[data-adaptive="true"] svg [stroke="#53a5ff"]{stroke:var(--blue)}html[data-adaptive="true"] svg [fill="#53a5ff"]{fill:var(--blue)}html[data-adaptive="true"] :is(.chart-legend i,.pipeline-row b)[style*="#53a5ff"]{background:var(--blue)!important}
-html[data-adaptive="true"] svg [stroke="#36d7db"]{stroke:var(--cyan)}html[data-adaptive="true"] svg [fill="#36d7db"]{fill:var(--cyan)}html[data-adaptive="true"] :is(.chart-legend i,.pipeline-row b)[style*="#36d7db"]{background:var(--cyan)!important}
-html[data-adaptive="true"] svg [stroke="#3dd598"]{stroke:var(--green)}html[data-adaptive="true"] svg [fill="#3dd598"]{fill:var(--green)}html[data-adaptive="true"] :is(.chart-legend i,.pipeline-row b)[style*="#3dd598"]{background:var(--green)!important}
-html[data-adaptive="true"] svg [stroke="#ff6b7d"]{stroke:var(--red)}html[data-adaptive="true"] svg [fill="#ff6b7d"]{fill:var(--red)}html[data-adaptive="true"] :is(.chart-legend i,.pipeline-row b)[style*="#ff6b7d"]{background:var(--red)!important}
-html[data-adaptive="true"] svg [stroke="#f8c15c"]{stroke:var(--amber)}html[data-adaptive="true"] svg [fill="#f8c15c"]{fill:var(--amber)}html[data-adaptive="true"] :is(.chart-legend i,.pipeline-row b)[style*="#f8c15c"]{background:var(--amber)!important}
-html[data-adaptive="true"] svg [stroke="#8b7cff"]{stroke:var(--violet)}html[data-adaptive="true"] svg [fill="#8b7cff"]{fill:var(--violet)}html[data-adaptive="true"] :is(.chart-legend i,.pipeline-row b)[style*="#8b7cff"]{background:var(--violet)!important}
+html[data-adaptive="true"] svg [stroke="#53a5ff"]{stroke:var(--blue)}html[data-adaptive="true"] svg [fill="#53a5ff"]{fill:var(--blue)}
+html[data-adaptive="true"] svg [stroke="#36d7db"]{stroke:var(--cyan)}html[data-adaptive="true"] svg [fill="#36d7db"]{fill:var(--cyan)}
+html[data-adaptive="true"] svg [stroke="#3dd598"]{stroke:var(--green)}html[data-adaptive="true"] svg [fill="#3dd598"]{fill:var(--green)}
+html[data-adaptive="true"] svg [stroke="#ff6b7d"]{stroke:var(--red)}html[data-adaptive="true"] svg [fill="#ff6b7d"]{fill:var(--red)}
+html[data-adaptive="true"] svg [stroke="#f8c15c"]{stroke:var(--amber)}html[data-adaptive="true"] svg [fill="#f8c15c"]{fill:var(--amber)}
+html[data-adaptive="true"] svg [stroke="#8b7cff"]{stroke:var(--violet)}html[data-adaptive="true"] svg [fill="#8b7cff"]{fill:var(--violet)}
 
 /* Grid min-content must never force a table's intrinsic width onto the page. Tables scroll inside their existing wrapper. */
 html[data-design] :is(.panel,.card,.dashboard-kpi,.monitoring-view,.monitor-grid,.grid,.split,.section-head>div){min-width:0;max-width:100%}
