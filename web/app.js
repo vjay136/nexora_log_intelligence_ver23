@@ -986,7 +986,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       ${helpDesk?`<label class="field">NLI workspace<select name="help_workspace"><option value="reference-ai">General NLI question</option>${NAV.filter(([,id])=>id!=='reference-ai').map(([,id,title])=>`<option value="${esc(id)}">${esc(title)}</option>`).join('')}</select></label><label class="field">Tab or step (optional)<input name="help_tab" maxlength="128" placeholder="Example: Step 4 - Map"></label><label class="field wide">What happened? (optional)<textarea name="help_issue" rows="3" maxlength="1400" placeholder="Paste the exact error, the result you expected, and what you already tried. Do not include credentials."></textarea></label>`:''}
       ${mode==='fix'?'<label class="field">Draft type<select name="artifact"><option value="">Recommend the next action</option>'+WORKSPACE_ARTIFACTS.map(([id,label])=>`<option value="${id}" ${id===defaultArtifact?'selected':''}>${label}</option>`).join('')+'</select></label>':''}
       <label class="field">Sample origin<select name="evidence_source"><option value="manual">Manual test sample</option><option value="production">Production evidence</option></select></label>${references.length?'<label class="field">Existing reference<select name="reference"><option value="">No reference</option>'+references.map(({kind,id,revision,label})=>`<option value="${esc(JSON.stringify({kind,id,revision}))}">${esc(label)}</option>`).join('')+'</select></label>':''}
-      <label class="field wide">Sample record · optional for guidance<textarea name="raw" rows="4" maxlength="65536">${esc(raw)}</textarea></label>${mode==='fix'?'<label class="field wide">Expected mapping output (optional JSON object)<textarea name="desired" rows="3"></textarea></label>':''}<p class="hint wide">The controller masks sample evidence before sending it to the configured provider. Review the proposal before applying it to your editor.</p><div class="actions wide"><button type="button" class="primary" data-action="workspace-ai-run">${mode==='ask'?'Get guidance':'Build draft'}</button><button type="reset" class="secondary">Reset form</button><button type="button" class="secondary" data-action="workspace-ai-import" hidden>Apply mapping to editor</button><button type="button" class="secondary" data-action="workspace-ai-download" hidden>Download draft</button></div><pre class="json-output wide" data-workspace-ai-result role="status"></pre></form>`;
+      <label class="field wide">Sample record · optional for guidance<textarea name="raw" rows="4" maxlength="65536">${esc(raw)}</textarea></label>${mode==='fix'?'<label class="field wide">Expected mapping output (optional JSON object)<textarea name="desired" rows="3"></textarea></label>':''}<p class="hint wide">The controller masks sample evidence before sending it to the configured provider. Review the proposal before applying it to your editor.</p><div class="actions wide"><button type="button" class="primary" data-action="workspace-ai-run">${mode==='ask'?'Get guidance':'Build draft'}</button><button type="reset" class="secondary">Reset form</button><button type="button" class="secondary" data-action="workspace-ai-import" hidden>Apply mapping to editor</button><button type="button" class="secondary" data-action="workspace-ai-download" hidden>Download draft</button></div><section class="callout wide" data-workspace-ai-guidance aria-label="Controller-verified guidance" hidden></section><pre class="json-output wide" data-workspace-ai-result role="status"></pre></form>`;
   }
   async function loadReferenceAI(){
     const sources=[['parser','/assurance/parsers'],['regex',CONFIG.regex[0]],['template',CONFIG['header-templates'][0]],['pattern',CONFIG.static[0]],['keys',CONFIG.knownkeys[0]],['kv_template',CONFIG['kv-templates'][0]]];
@@ -1250,11 +1250,30 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     }
   }
 
+  function renderVerifiedWorkspaceGuidance(form, guidance) {
+    const host=form.querySelector('[data-workspace-ai-guidance]');
+    const selected=guidance?.selected;
+    host.hidden=!selected?.label;
+    if (host.hidden) {
+      host.replaceChildren();
+      return;
+    }
+    const scope=guidance.scope || {}, catalog=guidance.catalog || {};
+    const workspace=guidance.workspace_label || TITLES[scope.workspace] || scope.workspace || 'Unavailable';
+    const tab=guidance.tab_label || scope.tab || 'Workspace controls';
+    host.innerHTML=`<h4>Controller-verified guidance</h4>
+      <p>${esc(workspace)} · ${esc(tab)}</p>
+      <p><strong>${esc(selected.label)}</strong></p><p>${esc(selected.guidance || '')}</p>
+      <p>Catalog release ${esc(catalog.release ?? 'Unavailable')} · version ${esc(catalog.version ?? 'Unavailable')}<br>SHA-256 <code class="recovery-hash">${esc(catalog.sha256 || 'Unavailable')}</code></p>
+      <a href="#ai-guidance">Open AI Guidance &amp; Revisions</a>`;
+  }
+
   async function runWorkspaceAI(button){
     const form=button.closest('form');
     if(form.aiAutoSource)form.elements.raw.value=workspaceAISample(form.aiAutoSource);
     const data=formObject(form), raw=data.raw||'';
     const resultHost=form.querySelector('[data-workspace-ai-result]');
+    renderVerifiedWorkspaceGuidance(form,null);
     for(const selector of ['workspace-ai-import','workspace-ai-download'])form.querySelector(`[data-action=${selector}]`).hidden=true;
     delete form.aiResult;
     form.querySelector('[data-ai-field-guidance]')?.remove();
@@ -1300,11 +1319,12 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
         return;
       }
       form.aiResult={result,raw,mappingSignature};
+      renderVerifiedWorkspaceGuidance(form,result.verified_guidance);
       resultHost.textContent=result.proposal?.plan
         ?[boardIssue,result.answer,result.next_action, 'Exact sample preview', pretty(evidenceOrdered(result.validation?.actual || {}, (result.validation?.field_order || []).map(field => ({field})))), ...(result.validation?.errors||[])].filter(Boolean).join('\n\n')
         :result.proposal?[result.proposal_origin==='native_fallback'?'Verified native draft':result.answer,
           result.next_action,pretty(result.validation?.actual??result.proposal.config??result.proposal)].filter(Boolean).join('\n\n')
-        :result.answer||pretty(result);
+        :result.answer ? `${result.answer_origin==='provider'||result.verified_guidance?'Provider answer\n\n':''}${result.answer}` : result.verified_guidance ? '' : pretty(result);
       renderAIFieldGuidance(form,result);
       const apply=form.querySelector('[data-action=workspace-ai-import]');
       apply.hidden=!(result.proposal?.plan?.fields?.length||result.proposal?.config);
@@ -2348,6 +2368,11 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     if(state.page==='fleet')applyFleetFocus(state.fleetFocus||0);
   }
 
+  function embeddedReferenceDetails(asset) {
+    if(asset.runtime_disposition!=='embedded_reference')return '';
+    return `<div><b>Embedded parser reference</b>${asset.parser_pack_id?`<br><small>Parser pack <code>${esc(asset.parser_pack_id)}</code></small>`:''}</div>`;
+  }
+
   async function loadParserSync() {
     let data;
     try { data = await api('/parser-sync',{allowStale:true}); }
@@ -2363,7 +2388,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       const total = Number(rollout.total_nodes || 0), done = Number(rollout.done_nodes || 0), failed = Number(rollout.failed_nodes || 0);
       const progress = total ? Math.max(0, Math.min(100, Math.round(done / total * 100))) : 0;
       const rolloutErrors = Array.isArray(rollout.errors) ? rollout.errors : rollout.errors ? [rollout.errors] : [];
-      return `<tr><td><b>${esc(asset.name || asset.asset_id || 'Unnamed asset')}</b><br><small>${esc(asset.asset_class || 'Unclassified')}</small><br><small class="mono">${esc(asset.asset_id || '—')}</small></td><td>${badge(desired.state || 'unknown')}<br><b>Revision ${esc(desired.revision || '—')}</b><br><code title="${esc(desired.sha256 || '')}">${esc((desired.sha256 || '—').slice(0, 20))}</code></td><td>${badge(controller.status || 'unknown')}<br><b>Revision ${esc(controller.revision || '—')}</b><br><code title="${esc(controller.sha256 || '')}">${esc((controller.sha256 || '—').slice(0, 20))}</code></td><td>${badge(rollout.status || 'not scheduled')}<br><small>${done} / ${total} complete · ${failed} failed</small>${total ? `<progress class="sync-progress" max="100" value="${progress}" aria-label="Rollout ${progress}% complete"></progress>` : ''}${rolloutErrors.length ? `<ul class="sync-errors">${rolloutErrors.map(item => `<li>${esc(typeof item === 'string' ? item : item.message || pretty(item))}</li>`).join('')}</ul>` : ''}</td><td>${badge(policy.enabled ? policy.status || 'enabled' : 'disabled')}<br><small>${policy.enabled ? 'Published revisions roll out automatically' : 'Automatic rollout is off'}</small><br><small>${esc(policy.description || '')}</small></td><td class="sync-actions"><button class="secondary small" data-action="parser-sync-verify" ${stale?'disabled':''} data-class="${esc(asset.asset_class)}" data-id="${esc(asset.asset_id)}">Verify</button><button class="secondary small" data-action="parser-sync-retry" ${stale?'disabled':''} data-class="${esc(asset.asset_class)}" data-id="${esc(asset.asset_id)}">Propose retry</button></td></tr>`;
+      return `<tr><td><b>${esc(asset.name || asset.asset_id || 'Unnamed asset')}</b><br><small>${esc(asset.asset_class || 'Unclassified')}</small><br><small class="mono">${esc(asset.asset_id || '—')}</small></td><td>${badge(desired.state || 'unknown')}<br><b>Revision ${esc(desired.revision || '—')}</b><br><code title="${esc(desired.sha256 || '')}">${esc((desired.sha256 || '—').slice(0, 20))}</code></td><td>${badge(controller.status || 'unknown')}<br><b>Revision ${esc(controller.revision || '—')}</b><br><code title="${esc(controller.sha256 || '')}">${esc((controller.sha256 || '—').slice(0, 20))}</code></td><td>${badge(rollout.status || 'not scheduled')}<br><small>${done} / ${total} complete · ${failed} failed</small>${total ? `<progress class="sync-progress" max="100" value="${progress}" aria-label="Rollout ${progress}% complete"></progress>` : ''}${rolloutErrors.length ? `<ul class="sync-errors">${rolloutErrors.map(item => `<li>${esc(typeof item === 'string' ? item : item.message || pretty(item))}</li>`).join('')}</ul>` : ''}</td><td>${embeddedReferenceDetails(asset) || `${badge(policy.enabled ? policy.status || 'enabled' : 'disabled')}<br><small>${policy.enabled ? 'Published revisions roll out automatically' : 'Automatic rollout is off'}</small><br><small>${esc(policy.description || '')}</small>`}</td><td class="sync-actions"><button class="secondary small" data-action="parser-sync-verify" ${stale?'disabled':''} data-class="${esc(asset.asset_class)}" data-id="${esc(asset.asset_id)}">Verify</button><button class="secondary small" data-action="parser-sync-retry" ${stale?'disabled':''} data-class="${esc(asset.asset_class)}" data-id="${esc(asset.asset_id)}">Propose retry</button></td></tr>`;
     });
     const exactClient=client=>exactRecoveryHash(data.bundle?.desired_hash) && client.desired_hash===data.bundle.desired_hash && client.applied_hash===data.bundle.desired_hash && client.exact_acknowledgement===true && client.drifted!==true;
     const clientRows = clients.map(client => `<tr><td><b>${esc(client.hostname || client.node_id || 'Unknown client')}</b><br><small class="mono">${esc(client.node_id || '—')}</small></td><td>${badge(client.status || 'unknown')}<br><small>Heartbeat ${time(client.last_seen)}</small></td><td>${esc(client.applied_revision || '—')}<br><code title="${esc(client.applied_hash || '')}">${esc((client.applied_hash || '—').slice(0, 16))}</code></td><td>${badge(client.drifted ? 'drifted' : exactClient(client) ? 'Exact acknowledgement' : client.status === 'offline' ? 'offline' : 'pending acknowledgement')}<br><small>Target ${esc(client.desired_revision || '—')} · ${esc((client.desired_hash || '—').slice(0, 12))}</small>${client.error ? `<br><small class="sync-error">${esc(client.error)}</small>` : ''}</td></tr>`);
@@ -2531,7 +2556,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       const activeRevision=Number(doc.payload?.previous_active_revision);
       const edit=editable||published?`<button class="secondary small" data-action="config-action" data-kind="${kind}" data-id="${esc(doc.id)}" data-value="edit">${editable?'Edit draft':'Create revision draft'}</button>`:'';
       const discard=editable?` <button class="danger small" data-action="config-action" data-kind="${kind}" data-id="${esc(doc.id)}" data-revision="${doc.revision}" data-value="delete">Discard draft</button>`:'';
-      return `<tr><td>${esc(doc.payload?.name||doc.id)}</td><td class="mono">${esc(doc.id)}</td><td>${doc.revision}</td><td>${badge(doc.state)}${activeRevision>0?` <small>Active r${activeRevision}</small>`:''}${approvalDetails(doc)}</td><td>${time(doc.updated_at)}</td><td><details><summary>View full content</summary><pre class="json-output">${esc(pretty(doc.payload?.config))}</pre></details></td><td>${edit} <button class="secondary small" data-action="config-action" data-kind="${kind}" data-id="${esc(doc.id)}" data-value="download">Download JSON</button>${discard}${lifecycle(doc)}</td></tr>`;
+      return `<tr><td>${esc(doc.payload?.name||doc.id)}</td><td class="mono">${esc(doc.id)}</td><td>${doc.revision}</td><td>${badge(doc.state)}${activeRevision>0?` <small>Active r${activeRevision}</small>`:''}${embeddedReferenceDetails(doc)}${approvalDetails(doc)}</td><td>${time(doc.updated_at)}</td><td><details><summary>View full content</summary><pre class="json-output">${esc(pretty(doc.payload?.config))}</pre></details></td><td>${edit} <button class="secondary small" data-action="config-action" data-kind="${kind}" data-id="${esc(doc.id)}" data-value="download">Download JSON</button>${discard}${lifecycle(doc)}</td></tr>`;
     });
     const editor=`<form id="config-form" data-kind="${kind}" class="form-grid">
       <label class="field">ID<input name="id" required title="Stable identifier for this asset."></label>
@@ -2542,7 +2567,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       <button class="primary" type="submit">${known?'Create known key draft':'Save draft revision'}</button>
     </form>`;
     renderPage(kind,warning+quickKnownKey+templateWorkbench+
-      panel(title,'Publish an approved revision to request fleet synchronization.',table(['Name','ID','Revision','State','Updated','Configuration','Actions'],assetRows))+
+      panel(title,items.some(item=>item.runtime_disposition==='embedded_reference')?'Embedded references use their listed parser pack. Publish other approved revisions to request fleet synchronization.':'Publish an approved revision to request fleet synchronization.',table(['Name','ID','Revision','State','Updated','Configuration','Actions'],assetRows))+
       panel('Create or revise definition','The published revision continues parsing during draft review.',editor));
     const form=el('config-form');
     if(state.page!==kind||!form)return;
@@ -4648,6 +4673,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     form.aiRequestID=(form.aiRequestID||0)+1;
     delete form.aiResult;
     form.querySelector('[data-workspace-ai-result]').textContent='';
+    renderVerifiedWorkspaceGuidance(form,null);
     for(const button of form.querySelectorAll('[data-action=workspace-ai-import],[data-action=workspace-ai-download]'))button.hidden=true;
   });
   const AI_REQUEST_ACTIONS=new Set(['workspace-ai-run','workspace-ai-auto','mapping-ai-suggest','mapping-ai-readiness','nfi-ai-status','request-ai-proposal','test-ai-provider']);

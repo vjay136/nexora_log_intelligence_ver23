@@ -1,3 +1,7 @@
+# NLI Ver23 R7 — v23.0.0-7
+
+Parser activation, NAPI runtime validation, versioned Backup & Restore, and verified AI guidance. Read [R7 release notes](docs/V23_R7_RELEASE_NOTES.md) for scope and operational limits. Installers retain modes 1–10 and coordinated mixed-role updates.
+
 # R6 mixed-role packaging correction
 
 The runtime and webapp remain the exact local Ver22.19 bytes. Existing opposite roles are upgraded together from the local matching bundle when needed to avoid `/usr/bin/nli` conflicts. A clean client/controller host installs only its selected role. Upgrades retain existing bootstrap enablement and do not activate an inactive counterpart; existing active counterpart daemons are restarted after the paired transaction. Configuration/state is preserved. No forced shared-file replacement or automatic role erasure is used.

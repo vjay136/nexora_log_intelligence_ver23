@@ -59,7 +59,8 @@ def main():
     for name in ("pass1", "pass2", "pass1-rpm", "pass2-rpm", "pass1-work", "pass2-work"):
         (work / name).mkdir()
     builder = "nli-source-rpm-" + uuid.uuid4().hex[:12]
-    source_mount = "type=bind,src=" + ROOT.as_posix() + ",dst=/src,readonly"
+    source_volume = "nli-source-" + revision[:16]
+    source_mount = "type=volume,src=" + source_volume + ",dst=/src,readonly"
     common_env = ["-e", "SOURCE_REVISION=" + revision, "-e", "SOURCE_DATE_EPOCH=" + epoch]
 
     def go(command, destination=None, extra_env=None):
@@ -72,9 +73,19 @@ def main():
         for key, value in (extra_env or {}).items():
             command_args += ["-e", key + "=" + value]
         call(command_args + [images["GO_IMAGE"], "bash", "-c",
-             "export PATH=/usr/local/go/bin:/usr/bin:/bin; " + command])
+             "export PATH=/usr/local/go/bin:/usr/bin:/bin; set -euo pipefail; " + command])
 
     try:
+        # Keep repeated Git/VCS scans on the Linux filesystem. Only committed
+        # source enters the build, excluding untracked files and local settings.
+        call(["docker", "run", "--rm", "--mount",
+              "type=bind,src=" + ROOT.as_posix() + ",dst=/seed,readonly",
+              "--mount", "type=volume,src=" + source_volume + ",dst=/src",
+              images["GO_IMAGE"], "bash", "-c",
+              "set -eu; git config --global --add safe.directory /seed; "
+              "if ! test -d /src/.git; then git clone --no-hardlinks /seed /src; fi; "
+              "test \"$(git -C /src rev-parse HEAD)\" = " + revision + "; "
+              "test -z \"$(git -C /src status --porcelain)\""])
         call(["docker", "run", "-d", "--name", builder, "--mount", source_mount,
               "--mount", "type=bind,src=" + work.as_posix() + ",dst=/build",
               "--mount", "type=bind,src=" + output.as_posix() + ",dst=/artifacts",

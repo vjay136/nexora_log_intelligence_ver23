@@ -136,6 +136,9 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 %doc %{_docdir}/%{name}/V22_19_1_RELEASE_NOTES.md
 
 %changelog
+* Sun Nov 22 2026 Nexora Engineering <engineering@nexora.local> - 23.0.0-7
+- Correct parser activation and NAPI; add versioned parser recovery and verified AI guidance.
+
 * Fri Nov 13 2026 Nexora Engineering <engineering@nexora.local> - 22.19.1-0
 - Improve rollout recovery and field mapping previews.
 

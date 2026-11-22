@@ -115,20 +115,25 @@ def validate(root: Path, output: Path, client: Path, controller: Path) -> None:
                 fail(f"{relative} does not reference packaged artifact {name}")
 
     workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    for claim in ("NLI V22 release", "nli-v22-unsigned-release", "docs/V22_19_1_RELEASE_NOTES.md", "v22.18.1-0"):
+    for claim in ("Verify local-first NLI release", "workflow_dispatch", "sha256sum -c SHA256SUMS", "v23.0.0-7"):
         if claim not in workflow:
-            fail(f"release workflow does not identify the Ver22 workflow and Ver22 baseline: {claim!r}")
+            fail(f"release workflow does not preserve the local-first Ver23 contract: {claim!r}")
 
     release_env = (root / "packaging/release.env").read_text(encoding="utf-8")
-    if "NLI_VERSION=22.19.1" not in release_env or "NLI_RELEASE=0" not in release_env.splitlines():
-        fail("packaging release identity is not 22.19.1-0")
+    if "NLI_VERSION=23.0.0" not in release_env or "NLI_RELEASE=7" not in release_env.splitlines():
+        fail("packaging release identity is not 23.0.0-7")
 
     for relative in (
-        "README.md", "CHANGELOG.md", "docs/V22_19_1_RELEASE_NOTES.md",
+        "README.md", "CHANGELOG.md", "docs/V23_R7_RELEASE_NOTES.md",
         "packaging/rpm/nli-client.spec", "packaging/rpm/nli-controller-agent.spec",
     ):
-        if "22.19.1-0" not in (root / relative).read_text(encoding="utf-8"):
+        if "23.0.0-7" not in (root / relative).read_text(encoding="utf-8"):
             fail(f"{relative} does not identify the current release")
+
+    current_note = (root / "docs/V23_R7_RELEASE_NOTES.md").read_bytes()
+    for target_dir in (output, client, controller):
+        if (target_dir / "V23_R7_RELEASE_NOTES.md").read_bytes() != current_note:
+            fail(f"R7 release notes missing or different in {target_dir}")
 
     # Historical source evidence remains available for compatibility and audit.
     for relative in (

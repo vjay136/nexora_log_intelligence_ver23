@@ -1,3 +1,7 @@
+# NLI Ver23 R7 — v23.0.0-7
+
+Parser activation, NAPI runtime validation, versioned Backup & Restore, and verified AI guidance. Read [R7 release notes](docs/V23_R7_RELEASE_NOTES.md) for scope and operational limits. Installers retain modes 1–10 and coordinated mixed-role updates.
+
 # Changelog
 
 ## v22.19.1-0

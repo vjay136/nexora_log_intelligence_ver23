@@ -290,6 +290,62 @@ func TestBundleRecoveryStaleAndTamperedBackupsFailClosed(t *testing.T) {
 	}
 }
 
+func TestBundleRecoveryDistinguishesParserFieldNamesFromCredentials(t *testing.T) {
+	f := newAPIFixture(t)
+	s := f.server
+	ctx := context.Background()
+	fixtures := []struct {
+		collection string
+		id         string
+		config     string
+	}{
+		{"templates", "symbolic-template", `{"engine":"re2","pattern":"^(?P<password>[^ ]+) (?P<api_key>[^ ]+)","fields":{"password":"password","api_key":"api_key"}}`},
+		{"known-keys", "symbolic-known-keys", `{"keys":["password","api_key"],"aliases":{"password":"credential_field","api_key":"api_key"}}`},
+		{"kv-config", "symbolic-kv", `{"pair_separators":[" "],"assignment_separators":["="],"key_aliases":{},"value_types":{"password":"string","api_key":"string"}}`},
+	}
+	for _, fixture := range fixtures {
+		var config map[string]any
+		if err := json.Unmarshal([]byte(fixture.config), &config); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateCatalogConfig(fixture.collection, config); err != nil {
+			t.Fatalf("invalid symbolic %s fixture: %v", fixture.collection, err)
+		}
+		if _, err := s.putBundleRecoveryDocument(ctx, fixture.collection, fixture.id, "active", "test", map[string]any{"name": fixture.id, "config": config}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	definition := map[string]any{"pattern_type": "regex", "pattern": `^(?P<password>[^ ]+) (?P<api_key>[^ ]+)$`, "fields": []any{
+		map[string]any{"name": "password", "source": "group:password", "type": "string"},
+		map[string]any{"name": "api_key", "source": "group:api_key", "type": "string"},
+	}}
+	pack, err := assuranceRuntimePack("symbolic-regex-pack", "1.0.0", "test", definition, []assuranceRequest{
+		{Raw: "REDACTED_PASS REDACTED_KEY", Desired: map[string]any{"password": "REDACTED_PASS", "api_key": "REDACTED_KEY"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.putBundleRecoveryDocument(ctx, "parser-packs", pack.ID, "published", "test", map[string]any{"name": pack.ID, "runtime_pack": pack}); err != nil {
+		t.Fatal(err)
+	}
+	backup := createRecoveryTestBackup(t, f)
+	response, data := f.request(http.MethodGet, bundleBackupsRoute+"/"+backup.ID+"/export", nil)
+	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(`"fields":{"api_key":"api_key","password":"password"}`)) ||
+		!bytes.Contains(data, []byte(`"aliases":{"api_key":"api_key","password":"credential_field"}`)) ||
+		!bytes.Contains(data, []byte(`"value_types":{"api_key":"string","password":"string"}`)) ||
+		!bytes.Contains(data, []byte(`"groups":{"api_key":"api_key","password":"password"}`)) {
+		t.Fatalf("backup did not preserve the verified field mappings exactly (HTTP %d)", response.StatusCode)
+	}
+	putRecoveryTestSetting(t, s, "literal-credential", `{"api_key":"synthetic-do-not-export"}`)
+	response, data = f.request(http.MethodPost, bundleBackupsRoute, struct{}{})
+	if response.StatusCode != http.StatusUnprocessableEntity || bytes.Contains(data, []byte("synthetic-do-not-export")) {
+		t.Fatalf("literal credential property was not safely refused (HTTP %d)", response.StatusCode)
+	}
+	if !unsupportedBundleBackupSettings(map[string]any{"fields": map[string]any{"api_key": "outside-known-grammar"}}) {
+		t.Fatal("untyped fields object bypassed the credential filter")
+	}
+}
+
 type bundleRecoveryWriteFailure struct {
 	metastore.Store
 	collection string

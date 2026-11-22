@@ -47,7 +47,7 @@ def main():
             for unit in ['nli-agent.service','nli-client-control.service','nli-client-bootstrap.service']:
                 assert execute(controller,'systemctl is-active --quiet '+unit,ok=False).returncode!=0
                 assert execute(controller,'systemctl is-enabled --quiet '+unit,ok=False).returncode!=0
-            result={'release':'v23.0.0-7','actual_controller_installer_with_legacy_22_20_client':'passed',
+            result={'release':'v23.0.0-7','actual_controller_installer_with_legacy_22_19_client':'passed',
               'disabled_client_counterpart_remains_disabled_and_inactive':True,'client_config_and_state_preserved':True,
               'controller_service':'active','production_nodes_modified':False}
             a.result.write_bytes((json.dumps(result,indent=2)+'\n').encode('utf-8'));print(json.dumps(result,indent=2),flush=True)
@@ -62,7 +62,7 @@ def main():
         execute(controller,'cd '+release+'; bash install-controller-ver23.sh --mode 2',env=env)
         assert execute(controller,'rpm -q nli-client',ok=False).returncode!=0,'fresh controller unexpectedly installed client role'
         execute(controller,'systemctl is-active --quiet nli-controller-agent.service; test -s /bootstrap/nli-client-bootstrap.env')
-        print('Installing the actual legacy 22.20 controller on the client fixture',flush=True)
+        print('Installing the actual legacy 22.19 controller on the client fixture',flush=True)
         execute(client,'dnf -y install /legacy/nli_controller_agent_ver22.rpm >/tmp/legacy-install.log 2>&1')
         execute(client,'systemctl disable --now nli-controller-agent.service nli-controller-bootstrap.service; printf "# preserved inactive legacy profile\\n" >/etc/nli/controller-bootstrap.env; printf "\\n# R6 preserve-controller-config\\n" >>/etc/nli/controller.env; sha256sum /etc/nli/controller.env >/root/controller-before.sha256; printf preserve >/var/lib/nli-controller/r6-state.marker')
         execute(client,'cp /bootstrap/nli-client-bootstrap.env /root/nli-client-bootstrap.env; chmod 0600 /root/nli-client-bootstrap.env')
@@ -82,7 +82,7 @@ def main():
         assert execute(controller,'sha256sum /var/lib/nli-controller/parser-assets/bundle.json').stdout.split()[0]==before_controller
         assert execute(client,'sha256sum /var/lib/nli/parser-assets/bundle.json').stdout.split()[0]==before_client
         result={'release':'v23.0.0-7','fresh_controller_actual_installer':'passed','fresh_controller_does_not_add_client':True,
-          'client_actual_bootstrap_installer_with_legacy_22_20_controller':'passed','both_existing_roles_match_bundle':True,
+          'client_actual_bootstrap_installer_with_legacy_22_19_controller':'passed','both_existing_roles_match_bundle':True,
           'disabled_counterpart_remains_disabled_and_inactive':True,'controller_config_and_state_preserved':True,
           'tls_enrollment_and_initial_heartbeat':'passed','client_parser_and_control_services':'active',
           'original_smtp_parser_sample':'passed','service_restart_and_bundle_preservation':'passed','native_version':version,'production_nodes_modified':False}

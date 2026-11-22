@@ -336,6 +336,72 @@ test('Ask Nexora AI sends selected workspace, issue, and current raw sample to t
   await expect(help.getByRole('status')).toHaveText('Use Key Value with the source key status.');
 });
 
+test('R7 Ask Nexora AI separates verified workspace guidance from untrusted provider text',async({page})=>{
+  await mockController(page);
+  const answer='Provider suggestion <img src="/provider-markup" onerror="window.injected=true">';
+  const catalog={release:'23.0.0-7',version:2,sha256:'b'.repeat(64)};
+  await page.route('**/api/v1/ai/workspace',route=>{
+    expect(route.request().postDataJSON()).toMatchObject({mode:'ask',workspace:'ai',tab:'Provider',question:'Which control tests my connection?'});
+    return route.fulfill({json:{answer,answer_origin:'provider',verified_guidance:{
+      scope:{workspace:'ai',tab:'provider'},workspace_label:'AI Resolution & Providers',
+      selected:{id:'test-ai-provider',label:'Test connection',guidance:'Test the selected provider profile and inspect the connection result.'},
+      catalog,location:'#ai-guidance',
+    }}});
+  });
+  await login(page);
+  await page.getByTestId('nav-reference-ai').click();
+  const form=page.locator('[data-ai-help-desk]');
+  const verified=form.getByRole('region',{name:'Controller-verified guidance'});
+  for(let attempt=0;attempt<2;attempt++){
+    await form.getByLabel('NLI workspace').selectOption('ai');
+    await form.getByLabel('Tab or step (optional)').fill('Provider');
+    await form.getByLabel('What do you need help with?').fill('Which control tests my connection?');
+    await form.getByRole('button',{name:'Get guidance'}).click();
+    await expect(verified).toContainText('AI Resolution & Providers · provider');
+    await expect(verified).toContainText('Test connection');
+    await expect(verified).toContainText('Test the selected provider profile and inspect the connection result.');
+    await expect(verified).toContainText('Catalog release 23.0.0-7 · version 2');
+    await expect(verified).toContainText(catalog.sha256);
+    await expect(verified).not.toContainText('Provider suggestion');
+    await expect(form.getByRole('status')).toContainText('Provider answer');
+    await expect(form.getByRole('status')).toContainText(answer);
+    await expect(form.locator('img[src="/provider-markup"]')).toHaveCount(0);
+    if(attempt===0){
+      await form.getByRole('button',{name:'Reset form'}).click();
+      await expect(verified).toBeHidden();
+      await expect(form.getByRole('status')).toBeEmpty();
+    }
+  }
+  const link=verified.getByRole('link',{name:'Open AI Guidance & Revisions'});
+  await expect(link).toHaveAttribute('href','#ai-guidance');
+  await link.click();
+  await expect(page.locator('#page')).toHaveAttribute('data-page','ai-guidance');
+});
+
+test('R7 embedded configuration references identify the parser pack in the catalog and Fleet Sync',async({page})=>{
+  await mockController(page);
+  const reference={runtime_disposition:'embedded_reference',parser_pack_id:'nli_reviewed_imap'};
+  const name='IMAP header from embedded pack';
+  await page.route('**/api/v1/config/templates',route=>route.fulfill({json:{items:[{
+    ...reference,id:'imap-embedded-ref',revision:1,state:'active',payload:{name,config:{pattern:'^IMAP',engine:'re2'}},
+  }]}}));
+  await page.route('**/api/v1/parser-sync',route=>route.fulfill({json:{assets:[{
+    ...reference,asset_class:'templates',asset_id:'imap-embedded-ref',name,desired:{state:'published',revision:1},controller:{status:'applied',revision:1},
+  }]}}));
+  await login(page);
+  await page.getByTestId('nav-header-templates').click();
+  const row=page.getByRole('row').filter({hasText:name});
+  await expect(row).toContainText('active');
+  await expect(row).toContainText('Embedded parser reference');
+  await expect(row).toContainText('Parser pack nli_reviewed_imap');
+  await expect(row.getByRole('button',{name:/publish/i})).toHaveCount(0);
+  await page.getByTestId('nav-parser-sync').click();
+  await expect(row).toContainText('applied');
+  await expect(row).toContainText('Embedded parser reference');
+  await expect(row).toContainText('Parser pack nli_reviewed_imap');
+  await expect(row).not.toContainText('Automatic rollout is off');
+});
+
 test('refresh shows only a spinner while the existing page reload runs',async({page})=>{
   await mockController(page);
   await login(page);

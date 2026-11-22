@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"nexora.local/nli-v20/internal/canonicaljson"
 	"nexora.local/nli-v20/internal/engine"
 	"nexora.local/nli-v20/internal/familyprofile"
+	"nexora.local/nli-v20/internal/mixedkv"
 	metastore "nexora.local/nli-v20/internal/store"
 	parserpolicy "nexora.local/nli-v20/parser-policy"
 )
@@ -294,7 +296,7 @@ func verifyBundleBackupSnapshot(snapshot bundleBackupSnapshot) ([]byte, error) {
 			}
 			for _, rule := range pack.Rules {
 				for _, stage := range rule.Stages {
-					if unsupportedBundleBackupSettings(stage.Config) {
+					if unsupportedBundleBackupStageSettings(stage) {
 						return nil, fmt.Errorf("%w in %s", errBundleBackupUnsafe, key)
 					}
 				}
@@ -305,16 +307,15 @@ func verifyBundleBackupSnapshot(snapshot bundleBackupSnapshot) ([]byte, error) {
 		if err := json.Unmarshal(canonical, &envelope); err != nil || envelope == nil {
 			return nil, errBundleRecoveryIntegrity
 		}
-		if unsupportedBundleBackupSettings(envelope) {
-			return nil, fmt.Errorf("%w in %s", errBundleBackupUnsafe, key)
-		}
 		// Legacy catalog recipes are intentionally retained in the published
 		// wire bundle even when they are ignored by the current runtime. A
 		// snapshot of an existing publication preserves those exact settings.
-		if raw := envelope["config"]; raw != nil {
-			if _, ok := raw.(map[string]any); !ok {
-				return nil, fmt.Errorf("%w: invalid published settings %s", errBundleRecoveryIntegrity, key)
-			}
+		config, ok := envelope["config"].(map[string]any)
+		if envelope["config"] != nil && !ok {
+			return nil, fmt.Errorf("%w: invalid published settings %s", errBundleRecoveryIntegrity, key)
+		}
+		if unsupportedBundleBackupMap(envelope, "config") || unsupportedBundleBackupMap(config, bundleBackupSymbolicSetting(asset.AssetClass, config)) {
+			return nil, fmt.Errorf("%w in %s", errBundleBackupUnsafe, key)
 		}
 	}
 	digest, _, err := bundleDigest(bundle)
@@ -331,25 +332,74 @@ func verifyBundleBackupSnapshot(snapshot bundleBackupSnapshot) ([]byte, error) {
 	return encoded, nil
 }
 
+// Exclude only a grammar-defined map at the current settings level. Keys
+// such as password or api_key describe extracted fields in these maps.
+func bundleBackupSymbolicSetting(collection string, config map[string]any) string {
+	switch collection {
+	case "templates":
+		if config["fields"] != nil && validateCatalogConfig(collection, config) == nil {
+			return "fields"
+		}
+	case "known-keys":
+		aliases, ok := config["aliases"].(map[string]any)
+		if !ok || validateCatalogConfig(collection, config) != nil {
+			return ""
+		}
+		keys := make(map[string]bool)
+		for _, key := range config["keys"].([]any) {
+			keys[key.(string)] = true
+		}
+		for key, value := range aliases {
+			alias, ok := value.(string)
+			if !ok || !keys[key] || !knownCatalogKeyPattern.MatchString(alias) {
+				return ""
+			}
+		}
+		return "aliases"
+	case "kv-config":
+		if config["value_types"] != nil {
+			encoded, err := json.Marshal(config)
+			var profile mixedkv.Config
+			if err == nil && strictJSON(encoded, &profile) == nil {
+				if _, err := mixedkv.Compile(profile); err == nil {
+					return "value_types"
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func unsupportedBundleBackupStageSettings(stage parserpolicy.Stage) bool {
+	config, ok := stage.Config.(map[string]any)
+	if !ok || stage.Type != parserpolicy.StageTypeRegex {
+		return unsupportedBundleBackupSettings(stage.Config)
+	}
+	groups, ok := config["groups"].(map[string]any)
+	if !ok {
+		return unsupportedBundleBackupSettings(config)
+	}
+	pattern, _ := config["pattern"].(string)
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return unsupportedBundleBackupSettings(config)
+	}
+	for group, value := range groups {
+		alias, ok := value.(string)
+		if !ok || re.SubexpIndex(group) < 1 || (alias != "" && !knownCatalogKeyPattern.MatchString(alias)) {
+			return unsupportedBundleBackupSettings(config)
+		}
+	}
+	return unsupportedBundleBackupMap(config, "groups")
+}
+
 // A key name in a list, alias mapping, schema or projection is a parser
 // field identifier. A literal credential or retained source-data property in
 // the configuration envelope is outside the versioned settings scope.
 func unsupportedBundleBackupSettings(value any) bool {
 	switch item := value.(type) {
 	case map[string]any:
-		for key, child := range item {
-			switch strings.ToLower(key) {
-			case "key_aliases", "field_schema", "field_aliases":
-				continue
-			case "password", "password_hash", "api_key", "authorization", "access_token", "refresh_token", "bearer_token", "auth_token", "session_token", "client_secret", "private_key", "secret", "credential", "credentials", "raw_log", "raw_logs", "raw_sample", "raw_samples":
-				if child != nil && child != "" {
-					return true
-				}
-			}
-			if unsupportedBundleBackupSettings(child) {
-				return true
-			}
-		}
+		return unsupportedBundleBackupMap(item, "")
 	case []any:
 		for _, child := range item {
 			if unsupportedBundleBackupSettings(child) {
@@ -360,6 +410,26 @@ func unsupportedBundleBackupSettings(value any) bool {
 		if strings.Contains(item, "://") {
 			parsed, err := url.Parse(item)
 			return err == nil && parsed.Scheme != "" && parsed.Host != "" && parsed.User != nil
+		}
+	}
+	return false
+}
+
+func unsupportedBundleBackupMap(item map[string]any, symbolicSetting string) bool {
+	for key, child := range item {
+		if symbolicSetting != "" && key == symbolicSetting {
+			continue
+		}
+		switch strings.ToLower(key) {
+		case "key_aliases", "field_schema", "field_aliases":
+			continue
+		case "password", "password_hash", "api_key", "authorization", "access_token", "refresh_token", "bearer_token", "auth_token", "session_token", "client_secret", "private_key", "secret", "credential", "credentials", "raw_log", "raw_logs", "raw_sample", "raw_samples":
+			if child != nil && child != "" {
+				return true
+			}
+		}
+		if unsupportedBundleBackupSettings(child) {
+			return true
 		}
 	}
 	return false
