@@ -382,6 +382,13 @@ func (s *Server) handleParserAction(w http.ResponseWriter, r *http.Request, id, 
 	// executable definition are attached; they can never become an approved
 	// but permanently blocked catalog record.
 	if action == "submit" || action == "approve" {
+		if isNAPIReviewDraft(payload) {
+			cases, _ := payload["cases"].([]any)
+			if len(cases) == 0 {
+				jsonError(w, napiExamplesNeeded, http.StatusConflict)
+				return
+			}
+		}
 		_, encodedPack, compatibilityErr := runtimeParserPackForDocument(doc)
 		if compatibilityErr != nil {
 			jsonError(w, "parser cannot enter the live review lifecycle: "+compatibilityErr.Error(), http.StatusConflict)
@@ -395,6 +402,19 @@ func (s *Server) handleParserAction(w http.ResponseWriter, r *http.Request, id, 
 			"status":       "passed",
 			"validated_by": principal.Username,
 			"validated_at": time.Now().UTC(),
+		}
+		// Assurance and Parser Catalog operate on the same saved artifact.
+		// Pin its exact definition at submission regardless of which UI starts
+		// review, so approval can safely continue through either route.
+		if action == "submit" {
+			if definition, ok := payload["parser"].(map[string]any); ok {
+				checksum := parserArtifactChecksum(definition)
+				if checksum == "" || checksum != payload["artifact_checksum"] {
+					jsonError(w, "parser artifact checksum changed; edit and resubmit the draft", http.StatusConflict)
+					return
+				}
+				payload["submitted_checksum"] = checksum
+			}
 		}
 	}
 	approvalMode, approvalAudit := "", map[string]string(nil)
@@ -410,7 +430,7 @@ func (s *Server) handleParserAction(w http.ResponseWriter, r *http.Request, id, 
 		if definition != nil {
 			approvalDigest = artifactChecksum
 		}
-		if definition != nil && (artifactChecksum == "" || (payload["artifact_checksum"] != nil && fmt.Sprint(payload["artifact_checksum"]) != artifactChecksum)) {
+		if definition != nil && (artifactChecksum == "" || payload["artifact_checksum"] != artifactChecksum || payload["submitted_checksum"] != artifactChecksum) {
 			jsonError(w, "parser artifact checksum changed; approval is invalid", http.StatusConflict)
 			return
 		}
@@ -714,7 +734,19 @@ func validateCatalogConfig(collection string, config map[string]any) error {
 	if len(config) == 0 {
 		return errors.New("config must be a non-empty object")
 	}
-	if err := unsafeDeclarative(config); err != nil {
+	declarative := config
+	if collection == "known-keys" {
+		// The flat identifier list has its own strict 10,000-key validation
+		// below. Keep the generic 1,000-item cap on all other/nested metadata;
+		// otherwise it silently reduces the advertised known-key limit to 1,000.
+		declarative = make(map[string]any, len(config))
+		for key, value := range config {
+			if key != "keys" {
+				declarative[key] = value
+			}
+		}
+	}
+	if err := unsafeDeclarative(declarative); err != nil {
 		return err
 	}
 	switch collection {
@@ -1536,6 +1568,9 @@ func (s *Server) createRolloutProposal(w http.ResponseWriter, r *http.Request, p
 		jsonError(w, "valid rollout name and type are required", http.StatusBadRequest)
 		return
 	}
+	if !s.bindClientDirectoryRolloutTargets(w, r, proposal) {
+		return
+	}
 	if kind == protocol.ManagedInputFileCommand {
 		var action protocol.ManagedInputFileRequest
 		targets := interfaceStrings(proposal["target_nodes"])
@@ -1916,7 +1951,8 @@ func (s *Server) handleFleetSync(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []map[string]any{}
 	_, inputStates := s.rollouts.inputPathSnapshot(false)
-	for _, node := range s.fleet.All() {
+	for _, decorated := range s.enrichClientDirectoryNodes(ctx, s.fleet.All()) {
+		node := decorated.Node
 		state, _ := byID[safeID(node.ID)].(map[string]any)
 		if state == nil {
 			state = map[string]any{"node_id": node.ID, "active_config_hash": node.ConfigHash, "drifted": false, "status": "unmanaged"}
@@ -1925,7 +1961,7 @@ func (s *Server) handleFleetSync(w http.ResponseWriter, r *http.Request) {
 			state[key] = value
 		}
 		checkInputPathAcknowledgement(state, node)
-		out = append(out, map[string]any{"node": node, "sync": state})
+		out = append(out, map[string]any{"node": decorated, "sync": state})
 	}
 	replyMetadataCurrent(w, &s.fleetSyncView, started, map[string]any{"nodes": out, "count": len(out)})
 }
@@ -1988,7 +2024,8 @@ func (s *Server) handleFleetResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	syncDoc, _ := s.metadata.Get(r.Context(), "fleet-sync", safeID(nodeID), 0)
-	jsonOK(w, map[string]any{"node": node, "sync": documentView(syncDoc)})
+	decorated := s.enrichClientDirectoryNodes(r.Context(), []*fleet.Node{node})
+	jsonOK(w, map[string]any{"node": decorated[0], "sync": documentView(syncDoc)})
 }
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {

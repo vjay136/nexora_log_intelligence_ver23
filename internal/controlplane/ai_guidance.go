@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	aiGuidanceCatalogVersion  = 1
+	aiGuidanceCatalogVersion  = 2
 	aiGuidanceRevisionStore   = "ai-guidance-revisions"
 	aiGuidanceEvaluationStore = "ai-guidance-evaluations"
 	aiGuidanceProviderBudget  = 4 * time.Second
@@ -134,6 +134,7 @@ var aiGuidanceActions = map[string][]aiGuidanceAction{
 	"parser-workspace": {
 		{"parser-workspace-generate", "Auto-populate complete parser", "Enter representative samples and inspect match scope, extraction and output mappings."},
 		{"parser-workspace-validate", "Validate locally", "Check the exact JSON artifact against representative and held-out cases before saving a draft."},
+		{"parser-workspace-submit", "Submit for review", "Complete and save passing expected-output cases for this exact draft before submitting it for authorized review."},
 	},
 	"parsers": {
 		{"parser-action", "Publish", "Read the catalog state and runtime compatibility details, and publish the exact validated and approved revision."},
@@ -156,7 +157,16 @@ var aiGuidanceActions = map[string][]aiGuidanceAction{
 		{"output-refresh-delivery", "Refresh delivery status", "Use destination acknowledgements and the fallback status to verify delivery."},
 	},
 	"knownkeys": {
-		{"config-action", "Publish", "Review the proposed identifiers and the active revision before changing the published catalog."},
+		{"known-key-bulk-preview", "Preview import", "Preview a bulk known-key import, correct invalid identifiers and inspect duplicate counts before creating a review-gated draft."},
+		{"config-action", "Publish + request fleet rollout", "Review the proposed identifiers and the active revision before changing the published catalog."},
+	},
+	"clients": {
+		{"client-directory-save-name", "Save display name", "Assign a friendly label to an enrolled client without changing its immutable node ID or operating-system hostname."},
+		{"client-directory-save-group", "Save client group", "Save an explicit membership list under a stable group ID. Group edits do not deploy parsers or retarget existing proposals."},
+		{"client-group-preview", "Preview group targets", "Resolve the selected group to exact node IDs before requesting the existing approved client action."},
+	},
+	"napi-monitor": {
+		{"open-napi-synthesis", "Open NAPI Synthesis", "Open the authoring workflow; this live monitor does not register or publish a second parser."},
 	},
 	"input-paths": {
 		{"input-validate", "Validate paths", "Check each absolute log path, family and selected target before proposing a rollout."},
@@ -184,7 +194,9 @@ var aiGuidanceTabs = map[string][]aiGuidanceTab{
 		{ID: "fixtures", Label: "Fixtures"},
 		{ID: "gprs", Label: "Guided Parser Repair Studio", Actions: aiGuidanceActions["quarantine-wizard"]},
 		{ID: "helper", Label: "Parser Creation Helper"},
-		{ID: "synthesis", Label: "NAPI Synthesis"},
+		{ID: "synthesis", Label: "NAPI Synthesis", Actions: []aiGuidanceAction{
+			{ID: "open-parser-evidence", Label: "Complete validation examples", Guidance: "Load the existing NAPI draft in Parser Creation Workspace and save representative redacted cases with exact expected JSON before review."},
+		}},
 		{ID: "plans", Label: "Test Plans"},
 		{ID: "runs", Label: "Runs"},
 	},
@@ -247,7 +259,18 @@ var aiGuidanceCatalog, aiGuidanceIdentity = func() ([]aiGuidanceWorkspace, aiGui
 		}
 	}
 	identity := aiGuidanceCatalogIdentity{Version: aiGuidanceCatalogVersion, Release: engine.ReleaseID}
-	data, _ := json.Marshal(map[string]any{"catalog": identity, "workspaces": workspaces})
+	workflows := map[string]aiGuidanceInstructions{}
+	for _, workspace := range workspaces {
+		for _, action := range workspace.Actions {
+			scope := aiGuidanceScope{Workspace: workspace.ID, Action: action.ID}
+			workflows[workspace.ID+"/"+action.ID] = guidanceInstructions(scope, action)
+		}
+		for _, tab := range workspace.Tabs {
+			scope := aiGuidanceScope{Workspace: workspace.ID, Tab: tab.ID}
+			workflows[workspace.ID+"/"+tab.ID] = guidanceInstructions(scope, workspace.Actions[0])
+		}
+	}
+	data, _ := json.Marshal(map[string]any{"catalog": identity, "workspaces": workspaces, "workflow_instructions": workflows})
 	hash := sha256.Sum256(data)
 	identity.SHA256 = hex.EncodeToString(hash[:])
 	return workspaces, identity
@@ -257,6 +280,163 @@ type aiGuidanceScope struct {
 	Workspace string `json:"workspace"`
 	Tab       string `json:"tab,omitempty"`
 	Action    string `json:"action,omitempty"`
+}
+
+// Instructions are authored against the installed navigation, never copied from
+// provider prose. They describe gates, not a claim about the user's live state.
+type aiGuidanceInstructions struct {
+	Navigation      string   `json:"navigation"`
+	Steps           []string `json:"steps"`
+	CompletionCheck string   `json:"completion_check"`
+	PermissionNote  string   `json:"permission_note"`
+}
+
+func guidanceQuestionScope(question string) aiGuidanceScope {
+	q := strings.ToLower(question)
+	has := func(terms ...string) bool {
+		for _, term := range terms {
+			if strings.Contains(q, term) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("group", "rename client", "call my client", "client name", "display name", "friendly name", "name my client"):
+		return aiGuidanceScope{Workspace: "clients"}
+	case has("known key", "knownkey", "bulk key", "1000 key", "1000+ key", "key name", "keyname", "many keys", "keys at once", "keys in one"):
+		return aiGuidanceScope{Workspace: "knownkeys"}
+	case has("napi", "validation example", "validation case", "submit parser", "parser review", "409"):
+		return aiGuidanceScope{Workspace: "assurance", Tab: "synthesis"}
+	case has("backup", "restore", "recover bundle"):
+		return aiGuidanceScope{Workspace: "backup-restore"}
+	case has("login", "log in", "sign in", "approval", "approve", "rollout"):
+		return aiGuidanceScope{Workspace: "rollouts"}
+	case has("synchron", " sync", "client applied", "acknowledg", "latest bundle", "client still old", "client not updating"):
+		return aiGuidanceScope{Workspace: "parser-sync"}
+	case has("loki", "endpoint", "send logs", "destination"):
+		return aiGuidanceScope{Workspace: "outputs"}
+	case has("kv pair", "key value", "key/value"):
+		return aiGuidanceScope{Workspace: "kv-templates"}
+	case has("header", "log pattern"):
+		return aiGuidanceScope{Workspace: "header-templates"}
+	}
+	return aiGuidanceScope{Workspace: "ai-guidance"}
+}
+
+func guidanceInstructions(scope aiGuidanceScope, action aiGuidanceAction) aiGuidanceInstructions {
+	var workspace aiGuidanceWorkspace
+	for _, candidate := range aiGuidanceNavigation {
+		if candidate.ID == scope.Workspace {
+			workspace = candidate
+			workspace.Tabs = aiGuidanceTabs[candidate.ID]
+			break
+		}
+	}
+	navigation := workspace.Label
+	for _, tab := range workspace.Tabs {
+		if tab.ID == scope.Tab {
+			navigation += " → " + tab.Label
+		}
+	}
+	guide := aiGuidanceInstructions{
+		Navigation:      navigation,
+		Steps:           []string{"Open " + workspace.Label + " from the left navigation."},
+		CompletionCheck: "Read the controller's current result; unavailable or stale status is not a successful operation.",
+		PermissionNote:  "Controls depend on your assigned role and the saved revision's current state. Ask an authorized reviewer when the controller requires separate approval.",
+	}
+	if scope.Tab != "" {
+		for _, tab := range workspace.Tabs {
+			if tab.ID == scope.Tab {
+				guide.Steps = append(guide.Steps, "Select the "+tab.Label+" subtab.")
+			}
+		}
+	}
+	switch {
+	case scope.Workspace == "clients":
+		guide.PermissionNote = "Viewing the directory requires fleet read access. Saving names or groups requires fleet management access; requesting client actions requires rollout permission and the existing approval workflow."
+		switch action.ID {
+		case "client-directory-save-name":
+			guide.Steps = append(guide.Steps,
+				"In Client display names, select Client to name. Verify its immutable node ID before editing a similarly named machine.",
+				"Enter the friendly label in Display name and press Save display name. To remove an alias, select the same client, leave Display name blank and save.",
+				"Use Reset name editor to clear an unsaved form. Confirm the saved label appears beside the same node ID when selecting the client elsewhere.")
+			guide.CompletionCheck = "The custom label is saved for the same immutable node ID. It does not rename the operating-system host, change registration credentials or alter raw/normalized log JSON."
+		case "client-directory-save-group":
+			guide.Steps = append(guide.Steps,
+				"In Client groups, choose Edit saved group for an existing group, or enter a new Group ID and Group name. A saved Group ID is immutable.",
+				"Choose Group members, or paste the enrolled IDs into Member node IDs (optional bulk paste). Select all visible members and Clear members affect the editor's selection; inspect it before saving.",
+				"Press Save client group. The directory supports up to 10,000 enrolled members per group and 1,000 saved groups. A group label alone does not select every matching hostname.",
+				"For a live action, use the saved group in the client-action Scope and preview its exact targets before requesting approval. Saving membership alone does not deploy a parser bundle.")
+			guide.CompletionCheck = "The saved group contains the intended enrolled node IDs. Existing pending proposals retain their original explicit targets when group membership changes."
+		case "client-group-preview":
+			guide.Steps = append(guide.Steps,
+				"In the client action form, set Scope to Saved client group and choose Target client group. Choose the intended supported action and inspect its settings.",
+				"Press Preview group targets and inspect the resolved node IDs and target count. Similar display names are not a substitute for checking immutable IDs.",
+				"Press Request approval only when the preview is correct. If group membership changes, preview again; the proposal binds an explicit target list rather than a changing group name.",
+				"Open Approvals & Rollouts for the required authorized review. After delivery, inspect each selected client's reported result; for parser delivery use Parser Fleet Sync → Verify and compare exact desired/applied hashes.")
+			guide.CompletionCheck = "The reviewed proposal contains the intended explicit node IDs and those clients report its result. Group targeting does not create independent per-group parser bundles; parser delivery uses the current canonical published bundle."
+		default:
+			guide.Steps = append(guide.Steps,
+				"For a friendly label, use Client display names → Client to name → Display name → Save display name. The immutable node ID and operating-system hostname stay unchanged.",
+				"For membership, use Client groups → Group ID, Group name and Group members, then Save client group. Use Member node IDs (optional bulk paste) for a larger explicit list.",
+				"To act on a group, choose Scope → Saved client group, choose Target client group, then Preview group targets. Inspect the exact IDs before Request approval.",
+				"Complete authorized review in Approvals & Rollouts and verify individual client results. For parser delivery, compare desired/applied hashes in Parser Fleet Sync.")
+			guide.CompletionCheck = "Names and groups are saved directory metadata; only a separately approved action with explicit node IDs changes client operation. Existing proposals are not retargeted by later membership edits."
+		}
+	case scope.Workspace == "knownkeys":
+		guide.Steps = append(guide.Steps,
+			"In Import known keys in bulk, paste one key per line into Known keys to import, or choose Import key file (.txt, .csv or .json). Keep names exactly as they appear in the raw logs.",
+			"Press Preview import. Check the accepted-key and duplicate counts; correct every invalid entry. The bulk limit is 10,000 unique keys per draft.",
+			"Press Create bulk known-key draft. This saves a draft; it does not change the live catalog.",
+			"Find the new revision in Known key catalog. Select Submit for review, have an authorized reviewer Approve, then select Publish + request fleet rollout.",
+			"Open Approvals & Rollouts, inspect the exact parser-bundle proposal and targets, and complete its required approval. Open Parser Fleet Sync and press Verify.",
+			"Run a representative log containing an imported key in Assurance Lab → Analysis. Compare the key and its value with Exact desired JSON; also verify each intended client's applied hash equals the desired hash.")
+		guide.CompletionCheck = "The published catalog contains the intended keys, the test emits the expected flat named fields, and intended clients acknowledge the exact desired bundle. A saved draft alone is not live."
+	case scope.Workspace == "parser-workspace" || scope.Workspace == "napi-monitor" || (scope.Workspace == "assurance" && scope.Tab == "synthesis"):
+		guide.Steps = append(guide.Steps,
+			"For a new NAPI candidate, open Assurance Lab → NAPI Synthesis. Supply separate Discovery samples JSON and Independent held-out samples JSON with raw records and exact desired JSON; add Negative raw samples JSON when available.",
+			"If the samples are redacted and approved for storage, select Save supplied redacted validation examples, then press Synthesize and validate draft. Otherwise synthesis remains sample-free and the draft still needs saved review evidence.",
+			"For an existing draft or a missing-examples 409, press Complete validation examples. In Parser Creation Workspace, edit that same draft's Validation cases JSON with representative redacted raw records and exact expected JSON. Do not create another parser just to resubmit it.",
+			"Press Validate locally and inspect every case's actual versus expected fields. Fix the definition or expected contract if a case fails; do not substitute actual output merely to force a pass.",
+			"Press Save approval-gated draft. Use Submit for review only after the exact saved revision has passing evidence. Editing the definition or cases requires fresh validation.",
+			"Open Assurance Lab → Review queue for authorized review and approval, then publish the approved revision. Review the resulting bundle proposal in Approvals & Rollouts and verify exact client acknowledgements in Parser Fleet Sync.")
+		guide.CompletionCheck = "The same parser ID has a validated saved revision, recorded approval and publication; intended clients acknowledge its exact bundle. NUPIRE / EGPE is linked evaluation evidence, not another live parser."
+	case scope.Workspace == "rollouts":
+		guide.Steps = append(guide.Steps,
+			"Logging in and reading pages do not approve a rollout. Inspect each pending proposal's ID, origin, exact bundle hash, target clients and current state.",
+			"If the proposal is still intended, have an authorized reviewer enter the required reason and press Approve reviewed proposal. Where permitted, an administrator approval is separately labelled and audited; it is not an automatic login action.",
+			"If the change is obsolete or targets are wrong, press Cancel instead. Do not approve unfamiliar proposals merely to clear a notification.",
+			"Open Parser Fleet Sync and press Verify. Investigate pending, offline or failed clients; a proposal approval alone does not confirm client application.")
+		guide.CompletionCheck = "The intended proposal is approved and the intended clients acknowledge its exact desired bundle, or an unwanted pending proposal is explicitly cancelled."
+	case scope.Workspace == "parser-sync":
+		guide.Steps = append(guide.Steps,
+			"Inspect the desired bundle hash, selected client identities, applied hashes and each client's latest report.",
+			"Press Verify. Treat missing, stale, failed or mismatching acknowledgements as unresolved.",
+			"For a failed eligible client, inspect its reported error before selecting Propose retry. Review and approve the exact retry proposal in Approvals & Rollouts.",
+			"Return to Parser Fleet Sync, press Verify again, and test a representative log on the intended client and in Assurance Lab.")
+		guide.CompletionCheck = "Each intended client has a fresh exact acknowledgement whose applied hash equals the current desired hash; do not infer fleet success from the controller alone."
+	case scope.Workspace == "backup-restore":
+		guide.Steps = append(guide.Steps,
+			"Select a verified snapshot and inspect its software release, asset revisions, contents and verification hash. Use a snapshot compatible with the installed embedded parser inventory.",
+			"Create the restore proposal for that exact snapshot and inspect its scope. Have a separate authorized reviewer press Approve restore.",
+			"Press Inspect progress. Wait for controller restoration to finish; retained history and the pre-restore snapshot remain separate from the active publication.",
+			"Review and approve client delivery separately in Approvals & Rollouts, then open Parser Fleet Sync and press Verify.")
+		guide.CompletionCheck = "Controller restore completed and intended clients acknowledged the restored desired bundle. Parser snapshots exclude credentials, users, node/global settings and unrelated raw-log history."
+	case scope.Workspace == "ai-guidance":
+		guide.Steps = append(guide.Steps,
+			"Choose the Workspace that matches the feature you need, then select its Tab and Action if known. A vague question does not establish which operation is intended.",
+			"Enter a short workflow question without raw logs or credentials and press Evaluate guidance. You may explicitly allow the configured provider to select a verified catalog action; controller guidance remains available without a provider.",
+			"Follow the returned navigation and numbered steps, then check the completion condition. If the operation is still unclear, name the tab, intended result and exact displayed message.")
+		guide.CompletionCheck = "The guidance identifies a real workspace and applicable operation; do not make a live change based on an ambiguous question."
+	default:
+		guide.Steps = append(guide.Steps, "Inspect the selected revision, input values and current controller status before making a change.")
+		if action.ID != "navigate" {
+			guide.Steps = append(guide.Steps, "Use "+action.Label+" when it is available for your role and current saved state. "+action.Guidance)
+		}
+		guide.Steps = append(guide.Steps, "Read the displayed result. Complete any explicit validation, review or rollout gate before expecting the change to be live.")
+	}
+	return guide
 }
 
 func (scope aiGuidanceScope) resolve() (aiGuidanceWorkspace, []aiGuidanceAction, error) {
@@ -331,6 +511,9 @@ func (s *Server) handleAIGuidanceEvaluate(w http.ResponseWriter, r *http.Request
 		jsonError(w, "A workspace and a question of at most 2048 bytes are required for guidance", http.StatusBadRequest)
 		return
 	}
+	if input.Workspace == "auto" && input.Tab == "" && input.Action == "" {
+		input.aiGuidanceScope = guidanceQuestionScope(input.Question)
+	}
 	workspace, choices, err := input.aiGuidanceScope.resolve()
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusBadRequest)
@@ -347,6 +530,7 @@ func (s *Server) handleAIGuidanceEvaluate(w http.ResponseWriter, r *http.Request
 	}
 	record := map[string]any{
 		"catalog": aiGuidanceIdentity, "scope": input.aiGuidanceScope, "selected": selected,
+		"instructions":    guidanceInstructions(input.aiGuidanceScope, selected),
 		"provider_status": providerStatus, "provider_id": providerID, "provider_attempts": attempts,
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), metadataViewReadBudget)
@@ -364,9 +548,29 @@ func (s *Server) handleAIGuidanceEvaluate(w http.ResponseWriter, r *http.Request
 
 func nativeGuidanceAction(question string, choices []aiGuidanceAction) aiGuidanceAction {
 	question = strings.ToLower(question)
+	clientAction := ""
+	if strings.Contains(question, "group") {
+		clientAction = "client-directory-save-group"
+		if strings.Contains(question, "rollout") || strings.Contains(question, "deploy") || strings.Contains(question, "target") || strings.Contains(question, "restart") {
+			clientAction = "client-group-preview"
+		}
+	} else if strings.Contains(question, "call my client") || strings.Contains(question, "name my client") || strings.Contains(question, "rename") || strings.Contains(question, "display name") || strings.Contains(question, "client name") || strings.Contains(question, "friendly name") {
+		clientAction = "client-directory-save-name"
+	}
+	for _, action := range choices {
+		if action.ID == clientAction {
+			return action
+		}
+	}
 	words := strings.FieldsFunc(question, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	chosen, best := choices[0], 0
 	for _, action := range choices {
+		if action.ID == "known-key-bulk-preview" && (strings.Contains(question, "bulk") || strings.Contains(question, "import") || strings.Contains(question, "1000") || strings.Contains(question, "multiple")) {
+			return action
+		}
+		if action.ID == "open-parser-evidence" && (strings.Contains(question, "napi") || strings.Contains(question, "409") || strings.Contains(question, "example") || strings.Contains(question, "submit")) {
+			return action
+		}
 		if strings.Contains(question, action.ID) {
 			return action
 		}
@@ -404,6 +608,7 @@ func verifiedWorkspaceGuidance(workspaceID, tabLabel, question string) map[strin
 	return map[string]any{
 		"catalog": aiGuidanceIdentity, "scope": scope, "workspace_label": workspace.Label,
 		"selected": nativeGuidanceAction(question, choices), "choices": choices, "location": "#ai-guidance",
+		"instructions": guidanceInstructions(scope, nativeGuidanceAction(question, choices)),
 	}
 }
 

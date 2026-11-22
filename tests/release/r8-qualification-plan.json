@@ -1,0 +1,66 @@
+{
+  "release": "v23.0.0-8",
+  "baseline": "published v23.0.0-7",
+  "phases": [
+    {
+      "id": 1,
+      "name": "Reproduce NAPI lifecycle and notification failures",
+      "gates": [
+        "Both submit API routes",
+        "Unready draft edit path",
+        "No review bypass or invented expected output"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Bulk known-key import",
+      "gates": [
+        "1000+ names in one draft",
+        "File and paste preview",
+        "Duplicate and invalid input",
+        "Runtime known/dynamic naming",
+        "Existing approval and sync lifecycle"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Step-by-step guidance and login behavior",
+      "gates": [
+        "Real tab and button names",
+        "Simple-language intent",
+        "Escaped numbered instructions",
+        "Read-only login does not create approval proposals",
+        "Client display names and groups persist with revisions",
+        "1000+ group members",
+        "Group targets frozen before approval",
+        "Shared client labels across views"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Integrated qualification",
+      "gates": [
+        "Linux tests and vet",
+        "Selected race and fuzz",
+        "Parser sample stress",
+        "Browser routes and subtabs",
+        "Known-key screenshot",
+        "Real packaged rollout restore restart"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Local build and publication",
+      "gates": [
+        "Two identical builds",
+        "Fresh archive entrypoints",
+        "RPM and web checksums",
+        "Remote asset equality before publish"
+      ]
+    }
+  ],
+  "limits": [
+    "Finite fixture tests cannot guarantee all possible scenarios",
+    "Live AWS and paid external providers are separate from isolated qualification"
+  ]
+}

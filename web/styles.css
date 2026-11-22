@@ -447,3 +447,6 @@ button[data-ai-pending]::before {
 .recovery-evidence h4 { margin: 0 0 6px; color: var(--text); }
 .recovery-evidence p { margin: 4px 0 0; color: var(--muted); overflow-wrap: anywhere; }
 .recovery-evidence button { margin: 6px 0 0 6px; }
+
+/* Keep long diagnostic commands locally scrollable on narrow screens. */
+.panel pre { max-width: 100%; overflow-x: auto; }

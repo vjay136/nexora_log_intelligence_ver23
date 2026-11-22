@@ -112,6 +112,66 @@ func TestNAPISynthesisCreatesEvidenceBackedDraftWithoutRawSamples(t *testing.T) 
 	t.Fatal("published NAPI parser omitted from the fleet bundle")
 }
 
+func TestNAPISynthesisExplicitReviewRetentionSubmitsThroughBothCatalogs(t *testing.T) {
+	for _, catalog := range []string{"assurance/parsers", "parser-packs"} {
+		t.Run(catalog, func(t *testing.T) {
+			f := newAPIFixture(t)
+			discovery := []any{
+				map[string]any{"raw": `{"level":"INFO","count":12}`, "desired": map[string]any{"level": "INFO", "count": 12}},
+				map[string]any{"raw": `{"level":"WARN","count":19}`, "desired": map[string]any{"level": "WARN", "count": 19}},
+			}
+			heldOut := []any{map[string]any{"raw": `{"level":"ERROR","count":42}`, "desired": map[string]any{"level": "ERROR", "count": 42}}}
+			response, data := f.request(http.MethodPost, "/api/v1/assurance/napi/synthesize", map[string]any{
+				"id": "napi-saved-examples", "name": "NAPI explicitly redacted examples", "version": "0.1.0",
+				"discovery": discovery, "held_out": heldOut, "negative": []string{"not a matching record"},
+				"retain_review_examples": true,
+			})
+			if response.StatusCode != http.StatusCreated {
+				t.Fatalf("synthesize %d: %s", response.StatusCode, data)
+			}
+			created := decodeMap(t, data)
+			if created["requires_validation_examples"] != false || created["review_examples_retained"] != float64(3) || created["review_validation"].(map[string]any)["status"] != "passed" {
+				t.Fatalf("explicit saved examples not validated: %s", data)
+			}
+			_, stored := f.request(http.MethodGet, "/api/v1/assurance/parsers/napi-saved-examples", nil)
+			payload := decodeMap(t, stored)["payload"].(map[string]any)
+			if payload["validation_passed"] != true || len(payload["cases"].([]any)) != 3 {
+				t.Fatalf("saved artifact has no exact review evidence: %s", stored)
+			}
+			if bytes.Contains(stored, []byte("not a matching record")) {
+				t.Fatal("negative raw record was retained without review-example authorization")
+			}
+			response, body := f.request(http.MethodPost, "/api/v1/"+catalog+"/napi-saved-examples/submit", map[string]any{})
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("submit through %s %d: %s", catalog, response.StatusCode, body)
+			}
+			response, body = f.request(http.MethodPost, "/api/v1/assurance/parsers/napi-saved-examples/publish", map[string]any{})
+			if response.StatusCode != http.StatusConflict {
+				t.Fatalf("retained examples bypassed independent review: %d %s", response.StatusCode, body)
+			}
+		})
+	}
+}
+
+func TestNAPISynthesisRetainedExamplesCannotTurnWrongExpectedOutputIntoPassingEvidence(t *testing.T) {
+	f := newAPIFixture(t)
+	response, data := f.request(http.MethodPost, "/api/v1/assurance/napi/synthesize", map[string]any{
+		"id": "napi-wrong-output", "name": "NAPI mismatched expectations", "retain_review_examples": true,
+		"discovery": []any{
+			map[string]any{"raw": `{"count":12}`, "desired": map[string]any{"count": 912}},
+			map[string]any{"raw": `{"count":19}`, "desired": map[string]any{"count": 919}},
+		},
+		"held_out": []any{map[string]any{"raw": `{"count":42}`, "desired": map[string]any{"count": 942}}},
+	})
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("wrong expectations accepted %d: %s", response.StatusCode, data)
+	}
+	response, _ = f.request(http.MethodGet, "/api/v1/assurance/parsers/napi-wrong-output", nil)
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatal("failed opted-in synthesis persisted a parser")
+	}
+}
+
 func TestNAPISynthesisBuildsAnchoredRegexAndRejectsOverfit(t *testing.T) {
 	f := newAPIFixture(t)
 	valid := map[string]any{

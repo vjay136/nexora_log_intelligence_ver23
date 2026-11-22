@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { contrast as designContrast } from './design-engine.js';
 
 // These browser regressions verify frontend behavior independently of network
@@ -7,6 +7,125 @@ import { contrast as designContrast } from './design-engine.js';
 const origin = 'http://127.0.0.1:4176';
 const tabs = ['sample-history', 'header-templates', 'kv-templates', 'operations', 'monitoring', 'streams', 'sync-fabric', 'nhle-monitor', 'napi-monitor', 'nal-monitor', 'assurance', 'quarantine-wizard', 'upes', 'parser-workspace', 'nupire', 'api-monitor', 'latency', 'field-integrity', 'fleet', 'parser-sync', 'clients', 'controller', 'controller-gateway', 'ai-privacy', 'parsers', 'reference-ai', 'building-blocks', 'field-mapping', 'migration', 'input-paths', 'kv', 'static', 'projection', 'studio', 'regex', 'knownkeys', 'semantic', 'engine-network', 'engine-url', 'engine-email', 'engine-subject', 'outputs', 'metadata', 'unknowns', 'drift', 'performance', 'rollouts', 'backup-restore', 'artifacts', 'security', 'system', 'communications', 'notifications', 'ai', 'ai-guidance'];
 const assets = Object.fromEntries(await Promise.all(['index.html', 'app.js', 'styles.css', 'design-engine.js', 'design-engine.css', 'nli-mark.svg', 'nexora-logo-v21.png', 'login-banner-v22.jpg', 'nexora-poster-v21.png'].map(async name => [name, await readFile(new URL(name, import.meta.url))])));
+
+test('R8 client names and 1005-member groups retain IDs, freeze exact targets and require normal action approval',async({page})=>{
+  test.setTimeout(90000);await page.setViewportSize({width:1920,height:1080});await mockController(page);
+  const nodes=Array.from({length:1005},(_,i)=>({node:{id:`client-${i}`,hostname:`reported-${i}`,version:'23.0.0',status:'online',last_seen:'2026-11-22T09:00:00Z'},sync:{}}));
+  const labels=new Map(),groups=new Map(),writes=[],actions=[];
+  let staleMembership=false;
+  const directory=()=>({nodes:nodes.map(({node})=>({node_id:node.id,display_name:labels.get(node.id)?.display_name||'',label_revision:labels.get(node.id)?.label_revision||0,groups:[...groups.values()].filter(group=>group.node_ids.includes(node.id)).map(({id,name,revision})=>({id,name,revision}))})),groups:[...groups.values()]});
+  await page.route('**/api/v1/fleet/sync',route=>route.fulfill({json:{nodes}}));
+  await page.route('**/api/v1/client-directory**',route=>{
+    const request=route.request(),path=new URL(request.url()).pathname,body=request.method()==='GET'?{}:request.postDataJSON();
+    if(path.endsWith('/client-directory'))return route.fulfill({json:directory()});
+    if(path.endsWith('/resolve-targets')){
+      const group=groups.get(body.group_ids[0]);
+      return route.fulfill({json:{node_ids:group.node_ids,groups:[{id:group.id,revision:group.revision+(staleMembership?1:0)}],count:group.node_ids.length}});
+    }
+    writes.push({path,method:request.method(),body});
+    const id=decodeURIComponent(path.split('/').at(-1));
+    if(path.includes('/nodes/')){labels.set(id,{display_name:body.display_name,label_revision:(labels.get(id)?.label_revision||0)+1});return route.fulfill({json:labels.get(id)});}
+    if(request.method()==='DELETE'){groups.delete(id);return route.fulfill({json:{status:'deleted'}});}
+    const group={id,name:body.name,node_ids:body.node_ids,revision:(groups.get(id)?.revision||0)+1};groups.set(id,group);return route.fulfill({json:group});
+  });
+  await page.route('**/api/v1/rollouts',route=>{if(route.request().method()==='POST'){actions.push(route.request().postDataJSON());return route.fulfill({json:{id:'approval-needed',state:'pending_approval'}});}return route.fulfill({json:{proposals:[],live:[]}});});
+  await page.route('**/api/v1/parser-sync',route=>route.fulfill({json:{assets:[],clients:[],bundle:{desired_hash:'a'.repeat(64)}}}));
+  await page.route('**/api/v1/parser-sync/rollout',route=>{actions.push(route.request().postDataJSON());return route.fulfill({json:{proposal:{id:'parser-approval-needed',state:'pending_approval'}}});});
+  await login(page);await page.getByTestId('nav-clients').click();
+  await expect(page.locator('[data-client-inventory-count]')).toContainText('1005 enrolled clients');
+  await page.locator('[data-client-inventory-next]').click();await expect(page.locator('[data-client-inventory-count]')).toContainText('11â€“20');
+  const naming=page.locator('#client-display-form');
+  await naming.getByLabel('Client to name').selectOption('client-0');await naming.getByLabel('Display name',{exact:true}).fill('Office mail gateway');
+  await naming.getByRole('button',{name:'Save display name',exact:true}).click();
+  await expect.poll(()=>writes.length).toBe(1);expect(writes[0].body).toEqual({display_name:'Office mail gateway',expected_revision:0});
+  await expect(page.locator('#client-inventory-rows')).toContainText('Office mail gateway');
+  await expect(page.locator('#client-inventory-rows')).toContainText('reported-0');await expect(page.locator('#client-inventory-rows')).toContainText('client-0');
+  const grouping=page.locator('#client-group-form');
+  await grouping.getByLabel('Group ID',{exact:true}).fill('office-mail');await grouping.getByLabel('Group name',{exact:true}).fill('Office mail nodes');
+  await grouping.getByLabel('Member node IDs (optional bulk paste)').fill(nodes.map(({node})=>node.id).join('\n'));
+  await grouping.getByRole('button',{name:'Save client group',exact:true}).click();
+  await expect.poll(()=>groups.size).toBe(1);expect(groups.get('office-mail').node_ids).toHaveLength(1005);expect(actions).toHaveLength(0);
+  const action=page.locator('#client-action-form');await action.getByLabel('Scope',{exact:true}).selectOption('group');await action.getByLabel('Target client group').selectOption('office-mail');
+  await action.getByRole('button',{name:'Preview group targets'}).click();await expect(action.locator('[data-client-group-targets]')).toContainText('1005 exact target IDs');
+  await expect(action.locator('[data-client-group-targets]')).toContainText('Office mail gateway Â· client-0');
+  await page.locator('#client-inventory-search').fill('Office mail gateway');
+  if(process.env.NLI_CLIENT_SCREENSHOT){await page.evaluate(()=>{document.activeElement?.blur();window.scrollTo({top:0,behavior:'instant'});});await page.screenshot({path:process.env.NLI_CLIENT_SCREENSHOT,fullPage:true,animations:'disabled'});}
+  staleMembership=true;await action.getByRole('button',{name:'Request approval',exact:true}).click();await expect(action.locator('[data-client-action-result]')).toContainText('Group membership changed');expect(actions).toHaveLength(0);
+  staleMembership=false;await action.getByRole('button',{name:'Preview group targets'}).click();await action.getByRole('button',{name:'Request approval',exact:true}).click();
+  await expect.poll(()=>actions.length).toBe(1);expect(actions[0].target_nodes).toEqual(nodes.map(({node})=>node.id));expect(actions[0].type).toBe('restart');
+  const reloaded=page.locator('#client-group-form');await reloaded.getByLabel('Edit saved group').selectOption('office-mail');await expect(reloaded.getByLabel('Group ID',{exact:true})).toHaveJSProperty('readOnly',true);
+  await reloaded.getByLabel('Group name',{exact:true}).fill('Canary pair');await reloaded.getByLabel('Member node IDs (optional bulk paste)').fill('client-0\nclient-1004');await reloaded.getByRole('button',{name:'Save client group',exact:true}).click();
+  await expect.poll(()=>groups.get('office-mail').revision).toBe(2);expect(groups.get('office-mail').node_ids).toEqual(['client-0','client-1004']);
+  const parserAction=page.locator('#client-action-form');await parserAction.getByLabel('Action',{exact:true}).selectOption('parser_sync');await parserAction.getByLabel('Scope',{exact:true}).selectOption('group');await parserAction.getByLabel('Target client group').selectOption('office-mail');await parserAction.getByRole('button',{name:'Preview group targets'}).click();await parserAction.getByRole('button',{name:'Request approval',exact:true}).click();
+  await expect.poll(()=>actions.length).toBe(2);expect(actions[1]).toEqual({target_mode:'selected',node_ids:['client-0','client-1004'],bundle_hash:'a'.repeat(64)});
+  await page.getByTestId('nav-fleet').click();await expect(page.locator('#page')).toContainText('Office mail gateway');
+  await page.getByTestId('nav-clients').click();const last=page.locator('#client-group-form');await last.getByLabel('Edit saved group').selectOption('office-mail');page.once('dialog',dialog=>dialog.accept());await last.getByRole('button',{name:'Delete selected group'}).click();await expect.poll(()=>groups.size).toBe(0);expect(nodes).toHaveLength(1005);
+});
+
+test('R8 client directory mutations remain hidden for a fleet reader',async({page})=>{
+  await mockController(page,{role:'viewer',permissions:['fleet:read']});await page.route('**/api/v1/client-directory',route=>route.fulfill({json:{nodes:[],groups:[]}}));
+  await login(page);await page.getByTestId('nav-clients').click();
+  await expect(page.locator('#client-display-form')).toBeHidden();await expect(page.locator('#client-group-form')).toBeHidden();await expect(page.locator('#client-action-form')).toBeHidden();await expect(page.locator('.permission-callout').first()).toContainText('Read-only');
+});
+
+test('R8 directory change events refresh labels without replacing dirty operator edits',async({page})=>{
+  await mockController(page);
+  await page.addInitScript(()=>{window.__directorySockets=[];window.WebSocket=class {constructor(){this.readyState=1;window.__directorySockets.push(this);}close(){this.readyState=3;}emit(data){this.onmessage?.({data:JSON.stringify(data)});}};});
+  let directoryReads=0,display='Initial name';
+  await page.route('**/api/v1/client-directory',route=>{directoryReads++;return route.fulfill({json:{nodes:[{node_id:'node-1',display_name:display,label_revision:2}],groups:[]}});});
+  await login(page);await page.getByTestId('nav-clients').click();
+  const form=page.locator('#client-display-form');await form.getByLabel('Client to name').selectOption('node-1');await form.getByLabel('Display name',{exact:true}).fill('Unsaved operator choice');
+  const prior=directoryReads;display='Remote operator name';
+  await page.evaluate(()=>window.__directorySockets[0].emit({type:'client_directory_changed',kind:'names',revision:3}));
+  await expect.poll(()=>directoryReads).toBeGreaterThan(prior);await expect(form.getByLabel('Display name',{exact:true})).toHaveValue('Unsaved operator choice');await expect(form.locator('[data-directory-result]')).toContainText('Your edits are retained');
+  await page.getByTestId('nav-fleet').click();await expect(page.locator('#page')).toContainText('Remote operator name');
+});
+
+test('R8 known-key bulk import previews 1500 keys, imports file, rejects invalid entries and resets', async ({page}) => {
+  await page.setViewportSize({width:1920,height:1080});
+  await mockController(page);
+  const existing={id:'existing-known-keys',revision:4,state:'active',updated_at:'2026-11-22T08:00:00Z',payload:{name:'Existing published catalog â€” retained',config:{keys:['status','reason']}}};
+  const writes=[];
+  await page.route('**/api/v1/config/known-keys',route=>{
+    if(route.request().method()==='POST') {
+      writes.push(route.request().postDataJSON());
+      return route.fulfill({status:201,json:{id:writes.at(-1).id,revision:1,state:'draft'}});
+    }
+    return route.fulfill({json:{items:[existing]}});
+  });
+  await login(page);
+  await page.getByTestId('nav-knownkeys').click();
+  const form=page.locator('#known-key-bulk-form'),source=form.getByLabel('Known keys to import'),save=form.getByRole('button',{name:'Create bulk known-key draft'});
+  await expect(save).toBeDisabled();
+  const keys=Array.from({length:1500},(_,i)=>`KnownKey_${String(i).padStart(4,'0')}`);
+  await source.fill(keys.join('\n')+'\nknownkey_0000\nKnownKey_0001');
+  await form.getByRole('button',{name:'Preview import'}).click();
+  await expect(form.locator('[data-known-key-import-result]')).toContainText('1502 entries Â· 1500 unique keys Â· 2 duplicate(s) removed Â· 0 invalid');
+  await expect(save).toBeEnabled();
+  if(process.env.NLI_KNOWNKEY_SCREENSHOT)await page.screenshot({path:process.env.NLI_KNOWNKEY_SCREENSHOT,fullPage:true});
+  await source.fill('valid_key\nbad=value');
+  await expect(save).toBeDisabled();
+  await form.getByRole('button',{name:'Preview import'}).click();
+  await expect(form.locator('[data-known-key-import-result]')).toContainText('1 invalid');
+  await expect(save).toBeDisabled();
+  await form.getByLabel('Import key file (.txt, .csv or .json)').setInputFiles({name:'mail-keys.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({config:{keys}}))});
+  await expect(form.locator('[data-known-key-import-result]')).toContainText('1500 unique keys');
+  await expect(save).toBeEnabled();
+  await form.getByLabel('Catalog name (optional)').fill('Mail gateway bulk list');
+  await save.click();
+  await expect.poll(()=>writes.length).toBe(1);
+  expect(writes[0].config.keys).toEqual(keys);
+  expect(writes[0].name).toBe('Mail gateway bulk list');
+  expect(writes[0].id).toMatch(/^bulk-keys-[a-f0-9]{32}$/);
+  await expect(page.getByRole('row').filter({hasText:'Existing published catalog â€” retained'})).toContainText('active');
+  const reloaded=page.locator('#known-key-bulk-form');
+  await reloaded.getByLabel('Known keys to import').fill('discard_me');
+  await reloaded.getByRole('button',{name:'Preview import'}).click();
+  await reloaded.getByRole('button',{name:'Reset import'}).click();
+  await expect(reloaded.getByLabel('Known keys to import')).toHaveValue('');
+  await expect(reloaded.getByRole('button',{name:'Create bulk known-key draft'})).toBeDisabled();
+  await expect(reloaded.locator('[data-known-key-import-result]')).toBeHidden();
+});
 
 test('login inventory comes from the webapp and controller health', async ({page}) => {
   await mockController(page);
@@ -242,7 +361,7 @@ test('saved header preview defaults to the built-in Global AutoSense profile', a
   await page.getByTestId('nav-kv-templates').click();
   await expect(page.getByRole('heading',{name:'Global AutoSense',exact:true})).toBeVisible();
   const revisions=page.getByLabel('Header template',{exact:true});
-  await expect(revisions.locator('option')).toHaveText(['Select a saved revision','Mail header · revision 5 · draft','Mail header · revision 4 · active']);
+  await expect(revisions.locator('option')).toHaveText(['Select a saved revision','Mail header Â· revision 5 Â· draft','Mail header Â· revision 4 Â· active']);
   await revisions.selectOption(JSON.stringify({id:'mail-header',revision:4}));
   const raw='20250811 080053105+0100 aaa-gmailrgi009 smtp 3692 0 140026854221568 123456;Note;efgh;ijkl;mnop;SieveRuleMsg status=failed;reason=not needed';
   await page.getByLabel('Sample log',{exact:true}).fill(raw);
@@ -357,10 +476,10 @@ test('R7 Ask Nexora AI separates verified workspace guidance from untrusted prov
     await form.getByLabel('Tab or step (optional)').fill('Provider');
     await form.getByLabel('What do you need help with?').fill('Which control tests my connection?');
     await form.getByRole('button',{name:'Get guidance'}).click();
-    await expect(verified).toContainText('AI Resolution & Providers · provider');
+    await expect(verified).toContainText('AI Resolution & Providers Â· provider');
     await expect(verified).toContainText('Test connection');
     await expect(verified).toContainText('Test the selected provider profile and inspect the connection result.');
-    await expect(verified).toContainText('Catalog release 23.0.0-7 · version 2');
+    await expect(verified).toContainText('Catalog release 23.0.0-7 Â· version 2');
     await expect(verified).toContainText(catalog.sha256);
     await expect(verified).not.toContainText('Provider suggestion');
     await expect(form.getByRole('status')).toContainText('Provider answer');
@@ -901,6 +1020,12 @@ async function mockController(page, { role = 'admin', permissions = ['assurance:
     if (path === '/api/v1/auth/login' && request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { ...headers, allow: 'POST, OPTIONS' } });
     if (path === '/api/v1/auth/login') { authenticated = true; return fulfill({ status: 'ok' }); }
     if (path === '/api/v1/auth/me') return authenticated ? fulfill({ username: 'test-operator', role, permissions }) : fulfill({ error: 'unauthorized' }, 401);
+    if (path === '/api/v1/client-directory') {
+      if(!authenticated)return fulfill({error:'unauthorized'},401);
+      if(role!=='admin'&&!permissions.includes('fleet:read'))return fulfill({error:'forbidden'},403);
+      if(request.method()!=='GET')return fulfill({error:'GET required'},405);
+      return fulfill({schema_version:1,nodes:parserSyncMockClients().map(client=>({node_id:client.node_id,display_name:'',label_revision:0,groups:[]})),groups:[],limits:{max_nodes_per_group:10000,max_groups:1000,max_total_memberships:50000,max_name_bytes:160,max_label_batch:4096}});
+    }
     if (path === '/api/v1/field-mapping') return fulfill({engine:'native-field-mapping-v1',profile_count:0,profiles:[],methods:['position','key_value','delimiter','character'],operations:['split','merge','replace'],limits:{max_fields:128,max_operations:16,max_input_bytes:1048576}});
     if (path === '/api/v1/parser-packs/deleted') return fulfill({deleted_parsers:[],count:0});
     if (path === '/api/v1/parser-sync/runtime') return fulfill({controller:{status:'unavailable',parsers:[]},clients:[]});
@@ -1212,7 +1337,7 @@ for(const passes of [true,false])test(`R9 combined wizard generation validates s
  const raw='mailnode status=failed:server=cloud';const mock=await mockController(page,{quarantineRaw:raw,assurancePassed:passes});let nativePlan;
  await page.route('**/api/v1/assurance/mapping-preview',async route=>{nativePlan=route.request().postDataJSON().plan;await route.fulfill({contentType:'application/json',body:JSON.stringify({passed:true,actual:{hostname:'mailnode',status:'failed',server:'cloud'},errors:[]})});});
  await login(page);await page.getByTestId('nav-quarantine-wizard').click();await page.getByRole('button',{name:'Inspect',exact:true}).click();await page.getByRole('button',{name:/Review desired schema/}).click();await page.getByText('Import or edit a mapping plan',{exact:true}).click();await page.locator('#nfi-plan-import').fill(JSON.stringify({version:1,fields:[{name:'hostname',method:'position',source:'1',type:'string',policy:'required'},{name:'tail_fields',method:'kv_eol',source:'2',unit:'token',type:'object',policy:'required',output_policy:'flatten',assignment_separators:['='],pair_delimiters:':;| \t\r\n',require_complete:true}]}));await page.getByRole('button',{name:'Import mapping',exact:true}).click();
- const method=page.locator('[data-qrw-key=method]').nth(1);await expect(method.locator('option:checked')).toHaveText('Key value EOL — End of line');await expect(method.locator('option[value=key_value]')).toHaveCount(1);
+ const method=page.locator('[data-qrw-key=method]').nth(1);await expect(method.locator('option:checked')).toHaveText('Key value EOL â€” End of line');await expect(method.locator('option[value=key_value]')).toHaveCount(1);
  await page.getByRole('button',{name:'Generate + validate complete parser pack',exact:true}).click();await expect(page.locator('#gprs-parser-helper-form')).toBeVisible();expect(nativePlan.fields[1]).toMatchObject({method:'kv_all',end_of_line:true,source:'2',output_policy:'flatten'});const parser=JSON.parse(await page.locator('#gprs-parser-helper-form [name=parser]').inputValue());expect(parser.fields.map(field=>field.name)).toEqual(['hostname']);expect(parser.mapping_plan.fields).toHaveLength(2);await expect(page.locator('#gprs-parser-helper-form [data-parser-helper-status]')).toContainText(passes?'Complete parser validation passed':'0/1 passed');expect(mock.observed).toContain('POST /api/v1/assurance/parser-preview');expect(mock.observed.some(item=>item.endsWith('/publish'))).toBe(false);
 });
 
@@ -1242,6 +1367,21 @@ test('R8 Design Studio previews, applies, reverts and persists appearance withou
 test('R8 eight designs cover every route in dark desktop and light mobile layouts',async({page})=>{
  test.setTimeout(240000);await mockController(page);await login(page);const errors=[];page.on('pageerror',error=>errors.push(error.message));
  for(const style of designStyles){await page.evaluate(style=>window.NLIDesign.provider.apply({style,mode:'dark',accent:'blue'}),style);for(const tab of tabs){await page.getByTestId(`nav-${tab}`).click();await expect(page.locator('.error-state')).toHaveCount(0);await expect(page.locator('.loading-state')).toHaveCount(0);await expect(page.locator('#page')).toHaveAttribute('data-page',tab);}await page.setViewportSize({width:390,height:844});await page.evaluate(style=>window.NLIDesign.provider.apply({style,mode:'light',accent:'violet'}),style);for(const tab of tabs){await page.getByLabel('Toggle navigation').click();await page.getByTestId(`nav-${tab}`).click();await expect(page.locator('.error-state')).toHaveCount(0);await expect(page.locator('.loading-state')).toHaveCount(0);await expect(page.locator('#page')).toHaveAttribute('data-page',tab);if(['streams','outputs'].includes(tab)){await expect(page.locator('.record-accounting-help')).toContainText('File size is not a record count');await expect(page.locator('.record-accounting-help')).toContainText('nli-output-audit.py');}const overflow=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,offenders:[...document.querySelectorAll('body *')].map(node=>({tag:node.tagName,cls:node.className,right:node.getBoundingClientRect().right,width:node.getBoundingClientRect().width})).filter(item=>item.right>innerWidth+1&&item.width>0).slice(0,12)}));expect(overflow.scroll<=overflow.width,`${style}/${tab}: mobile overflow ${JSON.stringify(overflow)}`).toBe(true);}await page.setViewportSize({width:1280,height:720});}expect(errors).toEqual([]);
+});
+
+test('R8 diagnostic commands and tables scroll inside mobile panels across all designs',async({page})=>{
+  test.setTimeout(45000);await page.setViewportSize({width:390,height:844});await mockController(page);await login(page);await page.getByLabel('Toggle navigation').click();await page.getByTestId('nav-controller-gateway').click();
+  const commands=page.locator('.panel').filter({has:page.getByRole('heading',{name:'Controller service diagnostics',exact:true})}).locator('pre');
+  const table=page.locator('.panel').filter({has:page.getByRole('heading',{name:'Recent gateway requests',exact:true})}).locator('.table-wrap');
+  await expect(commands).toContainText('sudo journalctl -u nli-controller-agent -n 100 --no-pager');
+  for(const style of designStyles){
+    await page.evaluate(style=>window.NLIDesign.provider.apply({style,mode:'light',accent:'violet'}),style);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${style} mobile page containment`).toBe(true);
+    for(const [label,locator] of [['commands',commands],['table',table]]){
+      const geometry=await locator.evaluate(node=>{node.scrollLeft=node.scrollWidth;return {overflow:getComputedStyle(node).overflowX,width:node.clientWidth,scrollWidth:node.scrollWidth,scrollLeft:node.scrollLeft};});
+      expect(geometry.overflow,`${style}/${label} retains local horizontal scrolling`).toBe('auto');expect(geometry.scrollWidth).toBeGreaterThan(geometry.width);expect(geometry.scrollLeft).toBeGreaterThan(0);
+    }
+  }
 });
 
 test('R8 all designs retain dense tablet forms, tables and Studio controls at768px',async({page})=>{
@@ -1293,7 +1433,14 @@ test('every visible inner tab activates without browser, request, or render erro
   const { observed } = await mockController(page);
   const errors = [];
   const failedResponses = [];
-  const inventory={};
+  const inventory={},controlInventory=[];
+  const collectControls=async(workspace,tab)=>{
+    if(!process.env.NLI_UI_VERIFICATION_MATRIX_OUTPUT)return;
+    controlInventory.push({workspace,tab,...await page.locator('#page').evaluate(root=>{
+      const visible=node=>node.getClientRects().length>0&&getComputedStyle(node).visibility!=='hidden';
+      return {actions:[...root.querySelectorAll('[data-action]')].filter(visible).map(node=>({id:node.dataset.action,label:(node.getAttribute('aria-label')||node.textContent||'').trim().slice(0,180),disabled:node.disabled===true})),forms:[...root.querySelectorAll('form')].filter(visible).map(node=>({id:node.getAttribute('id')||'',protocols:node.getAttributeNames().filter(name=>name.startsWith('data-')),submit_buttons:[...node.querySelectorAll('[type=submit]')].map(button=>button.textContent.trim())})),input_surfaces:[...root.querySelectorAll('textarea,input[type=file]')].filter(visible).map(node=>({id:node.id,name:node.name,kind:node.tagName==='TEXTAREA'?'textarea':'file',aria_label:node.getAttribute('aria-label')||''}))};
+    })});
+  };
   page.on('pageerror', error => errors.push(error.message));
   page.on('response', response => { if (response.status() >= 500) failedResponses.push(`${response.status()} ${new URL(response.url()).pathname}`); });
   await login(page);
@@ -1305,6 +1452,7 @@ test('every visible inner tab activates without browser, request, or render erro
     await expect(page.locator('.loading-state')).toHaveCount(0);
     await expect(page.locator('.error-state')).toHaveCount(0);
     const innerTabNames = await page.locator('#page [role=tab]:visible').allTextContents();
+    await collectControls(workspace,null);
     if (innerTabNames.length) inventory[workspace]=innerTabNames.map(name=>name.trim());
     for (const rawName of innerTabNames) {
       const name = rawName.trim();
@@ -1314,18 +1462,20 @@ test('every visible inner tab activates without browser, request, or render erro
       await expect(tab).toHaveAttribute('aria-selected', 'true');
       await expect(page.locator('.error-state')).toHaveCount(0);
       await expect(page.locator('#page')).not.toContainText(/rows\.join is not a function|Request failed|NaN|undefined/);
+      await collectControls(workspace,name);
     }
   }
   expect(errors).toEqual([]);
   expect(failedResponses).toEqual([]);
   expect(observed.length).toBeGreaterThan(40);
   if(process.env.NLI_UI_INVENTORY) console.log(JSON.stringify({routes:actualRoutes.length,innerTabs:inventory}));
+  if(process.env.NLI_UI_VERIFICATION_MATRIX_OUTPUT)await writeFile(process.env.NLI_UI_VERIFICATION_MATRIX_OUTPUT,JSON.stringify({fixture:'mockController authenticated administrator; representative fixture inventory, not production',routes:actualRoutes,inner_tabs:inventory,views:controlInventory,checks:{route_activation:'passed',inner_tab_activation:'passed',browser_exceptions:errors,unexpected_http_5xx:failedResponses},limitations:['Visible controls are inventoried, not individually clicked by this navigation walk.','Mutation, AI-provider and client-delivery outcomes need separate workflow tests.','No input values, credentials or raw sample bodies are captured.']},null,2)+'\n');
 });
 
 test('one canonical synchronization snapshot feeds Command Center, NHLE, NAPI and NAL', async ({ page }) => {
   await mockController(page);
   await login(page);
-  await expect(page.getByTestId('live-dashboard-kpis').locator('.dashboard-kpi strong').first()).toHaveText('9,007,199,254,740,993');
+  await expect.poll(async()=> (await page.getByTestId('live-dashboard-kpis').locator('.dashboard-kpi strong').first().innerText()).replace(/[,\s]/g,'')).toBe('9007199254740993');
   await expect(page.locator('.chart-legend').first()).toContainText('Input (records / bucket)');
   const firstPoint=page.locator('[data-chart-category="Input"]').first();
   await expect(firstPoint).toBeVisible();
@@ -1426,7 +1576,7 @@ test('empty telemetry uses reported state and never renders NaN', async ({ page 
   }));
   await login(page);
   await expect(page.locator('.diagnostic-panel')).toContainText('No active latency or error diagnostics');
-  await expect(page.locator('.dashboard-kpi-strip').first()).toContainText('—');
+  await expect(page.locator('.dashboard-kpi-strip').first()).toContainText('â€”');
   await expect(page.locator('#page')).not.toContainText('NaN');
   await page.setViewportSize({width:390,height:844});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
@@ -1527,7 +1677,7 @@ test('Quarantine inbox groups only controller-verified signatures and isolates u
   ] });
   await login(page);
   await page.getByTestId('nav-quarantine-wizard').click();
-  await expect(page.getByText('Individual record · shared cause unverified')).toHaveCount(2);
+  await expect(page.getByText('Individual record Â· shared cause unverified')).toHaveCount(2);
   await expect(page.getByText('2 signature-matched records')).toHaveCount(1);
 });
 
@@ -1639,7 +1789,7 @@ test('FieldSense requests guidance before native preview and preserves the edita
   await page.locator('#nfi-raw').fill('status=FAILED');
   await page.getByRole('button',{name:'Add Custom Field',exact:true}).click();
   await page.locator('[data-qrw-key=name]').fill('my_status');
-  await page.getByText('Optional configured AI help · review only',{exact:true}).click();
+  await page.getByText('Optional configured AI help Â· review only',{exact:true}).click();
   await page.getByRole('button',{name:'Ask configured Nexora AI for review-only help',exact:true}).click();
   const dialog=page.getByRole('dialog');
   await dialog.getByRole('textbox',{name:'What do you need help with?'}).fill('How should I map status?');
@@ -1678,22 +1828,22 @@ test('NFI maps compound tokens and colon key/value fields into a transform-capab
   const event=page.locator('[data-qrw-row]').nth(8);await event.locator('.nfi-operations summary').click();await event.getByRole('button',{name:'Add operation',exact:true}).click();
   await event.locator('[data-qrw-op-key=op]').selectOption('uppercase');await page.getByRole('button',{name:'Test all fields',exact:true}).click();
   const desired=JSON.parse(await page.locator('[name=gprs_desired]').inputValue());expect(desired).toMatchObject({loglevel:'Note',event:'DELIVERYEVENT',status:'failed',reason:'notneeded',server:'cloud',thread_id:'140026854221568'});
-  await page.getByRole('button',{name:/5 · Auto-populate complete parser/}).click();
+  await page.getByRole('button',{name:/5 Â· Auto-populate complete parser/}).click();
   const form=page.locator('#gprs-parser-helper-form'),parser=JSON.parse(await form.locator('[name=parser]').inputValue());expect(parser.pattern_type).toBe('mapping');expect(parser.mapping_plan.fields.find(field=>field.name==='event').operations[0].op).toBe('uppercase');
   await form.getByRole('button',{name:'Save review-gated draft',exact:true}).click();await expect.poll(()=>mock.observed.includes('POST /api/v1/assurance/parsers')).toBe(true);expect(mock.observed.some(request=>request.endsWith('/publish'))).toBe(false);
 });
 
 test('NFI standalone workbench verifies ordered splits, Unicode selections and merged names and saves one governed plan',async({page})=>{
   const mock=await mockController(page);let verifiedPlan;
-  await page.route('**/api/v1/assurance/mapping-preview',async route=>{verifiedPlan=route.request().postDataJSON().plan;await route.fulfill({contentType:'application/json',body:JSON.stringify({passed:true,actual:{kind:'event:x',symbol:'α',combined:'event:x/α'},fields:[],errors:[]})});});
+  await page.route('**/api/v1/assurance/mapping-preview',async route=>{verifiedPlan=route.request().postDataJSON().plan;await route.fulfill({contentType:'application/json',body:JSON.stringify({passed:true,actual:{kind:'event:x',symbol:'Î±',combined:'event:x/Î±'},fields:[],errors:[]})});});
   await login(page);await page.getByTestId('nav-field-mapping').click();await expect(page.locator('#page h1')).toHaveText('NLI FieldSense Studio');
-  await page.locator('#nfi-raw').fill('α beta;X|Y');await expect(page.locator('.nfi-token').first()).toContainText('chars 1–1');
+  await page.locator('#nfi-raw').fill('Î± beta;X|Y');await expect(page.locator('.nfi-token').first()).toContainText('chars 1â€“1');
   await page.getByText('Import or edit a mapping plan',{exact:true}).click();
   const fields=[{name:'kind',type:'string',policy:'required',method:'position',source:'2',operations:[{op:'split',delimiter:';',part:2},{op:'split',delimiter:'|',part:1},{op:'lowercase'},{op:'prefix',value:'event:'}]},{name:'symbol',type:'string',policy:'required',method:'character',source:'1',source_end:'1'},{name:'combined',type:'string',policy:'derived',method:'derived',source:'kind,symbol',join_separator:'/'}];
-  await page.locator('#nfi-plan-import').fill(JSON.stringify({version:1,fields,service_scope:'mapping-test',scope_pattern:'^α',reviewed_global_scope:false}));await page.getByRole('button',{name:'Import mapping',exact:true}).click();await page.getByRole('button',{name:'Test all fields',exact:true}).click();
-  await expect(page.locator('[data-qrw-row]').nth(2).locator('[data-qrw-preview]')).toHaveText('event:x/α');
+  await page.locator('#nfi-plan-import').fill(JSON.stringify({version:1,fields,service_scope:'mapping-test',scope_pattern:'^Î±',reviewed_global_scope:false}));await page.getByRole('button',{name:'Import mapping',exact:true}).click();await page.getByRole('button',{name:'Test all fields',exact:true}).click();
+  await expect(page.locator('[data-qrw-row]').nth(2).locator('[data-qrw-preview]')).toHaveText('event:x/Î±');
   await page.getByRole('button',{name:'Preview mapping',exact:true}).click();await expect(page.locator('#qrw-field-status')).toContainText('Verified by controller');expect(verifiedPlan.fields[0].operations).toHaveLength(4);
-  await page.locator('[data-action=nfi-generate]').first().click();const parser=JSON.parse(await page.locator('#nfi-parser-json').inputValue());expect(parser.mapping_plan.fields[2].method).toBe('derived');expect(parser.service_scope).toBe('mapping-test');expect(parser.scope_pattern).toBe('^α');
+  await page.locator('[data-action=nfi-generate]').first().click();const parser=JSON.parse(await page.locator('#nfi-parser-json').inputValue());expect(parser.mapping_plan.fields[2].method).toBe('derived');expect(parser.service_scope).toBe('mapping-test');expect(parser.scope_pattern).toBe('^Î±');
   await page.getByRole('button',{name:'Validate and save review-gated draft',exact:true}).click();await expect.poll(()=>mock.observed.includes('POST /api/v1/assurance/parsers')).toBe(true);await expect(page.locator('#page-title')).toHaveText('NLI FieldSense Studio');await expect(page.locator('#page tr').filter({hasText:'native-field-mapping'})).toContainText('draft');
   await page.getByRole('button',{name:'Use candidate in Parser Creation Workspace',exact:true}).click();expect(JSON.parse(await page.locator('#parser-workspace-form [name=parser]').inputValue()).mapping_plan.fields).toHaveLength(3);
   await page.getByTestId('nav-field-mapping').click();await page.getByRole('button',{name:'Use mapped names in output delivery',exact:true}).click();expect(JSON.parse(await page.locator('#output-profile-form [name=field_columns]').inputValue())).toEqual({kind:'kind',symbol:'symbol',combined:'combined'});
@@ -1740,7 +1890,7 @@ test('QRW preserves the supplied SMTP sample structure, multiword key-value reas
   const desired = JSON.parse(await page.locator('#gprs-preview-form [name=gprs_desired]').inputValue());
   expect(desired).toMatchObject({ status: 'failed', reason: 'not needed', event_type: 'SieveRuleMsg' });
 
-  const autoPopulate = page.getByRole('button', { name: /5 · Auto-populate complete parser/ });
+  const autoPopulate = page.getByRole('button', { name: /5 Â· Auto-populate complete parser/ });
   await expect(autoPopulate).toBeVisible();
   await expect(autoPopulate).toBeEnabled();
   await autoPopulate.click();
@@ -1828,14 +1978,14 @@ test('terminal quarantine metadata stays out of manual attention and repair acti
   await page.evaluate(()=>sessionStorage.setItem('nli.qrw.selected-record','q-excluded'));
   await page.getByTestId('nav-quarantine-wizard').click();
   await expect(page.getByRole('button',{name:'Inspect',exact:true})).toHaveCount(0);
-  await expect(page.locator('[data-wizard-step="1"] .qrw-step-state')).toHaveText('Current · do this now');
+  await expect(page.locator('[data-wizard-step="1"] .qrw-step-state')).toHaveText('Current Â· do this now');
   await page.reload();
   await page.getByTestId('nav-unknowns').click();
   await expect(page.locator('.card.metric').filter({hasText:'Manual attention'}).locator('.metric-value')).toHaveText('0');
   for(const name of ['quarantine-wizard','upes','unknowns'])await expect(page.locator(`[data-nav-count="${name}"]`)).toBeHidden();
 });
 
-test('QRW stages 6–9 give the next action and gate replay on the exact origin bundle before verify and rollback', async ({ page }) => {
+test('QRW stages 6â€“9 give the next action and gate replay on the exact origin bundle before verify and rollback', async ({ page }) => {
   const checksum='d'.repeat(64),wrong='e'.repeat(64);
   const mock=await mockController(page,{quarantineRaw:'alpha beta',replayPending:true,
     qrwParsers:[{id:'qr-candidate',revision:1,state:'in_review',payload:{name:'reviewed-smtp',source_quarantine_record_id:'q-1',artifact_checksum:checksum,validation:{score:100}}},{id:'qr-offboard',revision:2,state:'published',payload:{name:'retired-smtp',source_quarantine_record_id:'q-2',artifact_checksum:checksum,activated:true,validation:{score:100}}}],
@@ -1873,7 +2023,7 @@ test('QRW stages 6–9 give the next action and gate replay on the exact origin 
   await expect(page.locator('.qrw-next-action')).toContainText('Create the origin-client rollout proposal');
   await expect(page.getByRole('button',{name:/Request targeted replay/})).toBeDisabled();
   await expect(page.locator('#gprs-replay-form [name=record_ids] option[value="q-1"]')).toHaveAttribute('disabled','');
-  await expect(page.getByTestId('qrw-deployment-status')).toContainText('Step 8 · Deploy and replay');
+  await expect(page.getByTestId('qrw-deployment-status')).toContainText('Step 8 Â· Deploy and replay');
   await page.getByText('Deployment details and fleet controls',{exact:true}).click();
   await expect(page.getByRole('list',{name:'Deployment and replay checklist'})).toContainText('Published bundle available');
   await page.getByRole('button',{name:'Propose to all eligible clients'}).click();
@@ -1881,7 +2031,7 @@ test('QRW stages 6–9 give the next action and gate replay on the exact origin 
   expect(mock.qrwRolloutRequests[0]).toEqual({target_mode:'all_eligible',origin_node_id:'node-1',node_ids:[],bundle_hash:checksum});
   await page.getByText('Deployment details and fleet controls',{exact:true}).click();
   const rolloutRow=page.locator('#page tr').filter({hasText:'qrw-rollout-1'});
-  await expect(rolloutRow).toContainText('all_eligible · 2 client(s)');
+  await expect(rolloutRow).toContainText('all_eligible Â· 2 client(s)');
   await expect(rolloutRow.getByRole('button',{name:'Administrator approve exact bundle'})).toBeEnabled();
   await expect(page.getByRole('button',{name:'Propose to origin client'})).toBeDisabled();
   await expect(page.getByRole('button',{name:'Propose to all eligible clients'})).toBeDisabled();
@@ -2046,7 +2196,7 @@ test('legacy parser proposals reach controller verification and a hash rejection
   await login(page);
   await page.getByTestId('nav-rollouts').click();
   const row=page.locator('tr').filter({hasText:'Legacy parser rollout'});
-  await expect(row).toContainText('Legacy snapshot · controller verification required');
+  await expect(row).toContainText('Legacy snapshot Â· controller verification required');
   await expect(row.getByRole('button',{name:'Approve reviewed proposal'})).toBeEnabled();
   await row.locator('[data-rollout-reason]').fill('Reviewed legacy snapshot evidence');
   await row.getByRole('button',{name:'Approve reviewed proposal'}).click();
@@ -2102,14 +2252,14 @@ test('browser brand, Assurance selection, and account/audit timestamps stay expl
   const created = usersPanel.locator('tr', { hasText: 'test-operator' }).locator('td').nth(4);
   const expected = await page.evaluate(() => new Intl.DateTimeFormat(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(new Date('2026-10-24T00:34:56Z')));
   await expect(created).toHaveText(expected);
-  await expect(usersPanel.locator('tr', { hasText: 'never-signed-in' }).locator('td').nth(5)).toHaveText('—');
+  await expect(usersPanel.locator('tr', { hasText: 'never-signed-in' }).locator('td').nth(5)).toHaveText('â€”');
   expect(expected).toMatch(/\d{2}:\d{2}:\d{2}/);
   const auditPanel = page.locator('.panel').filter({ has: page.getByRole('heading', { name: 'Immutable audit chain' }) });
   const approvalTime = auditPanel.locator('tr', { hasText: 'user.approved' }).locator('td').nth(1);
   const approvalExpected = await page.evaluate(() => new Intl.DateTimeFormat(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(new Date('2026-10-24T02:03:04Z')));
   await expect(approvalTime).toHaveText(approvalExpected);
   await page.getByTestId('nav-communications').click();
-  await expect(page.getByText('Client → Controller', { exact: true })).toBeVisible();
+  await expect(page.getByText('Client â†’ Controller', { exact: true })).toBeVisible();
   await page.getByTestId('nav-notifications').click();
   await expect(page.getByText('not_configured').first()).toBeVisible();
   await page.getByLabel('Enable SMTP email').check();
@@ -2231,9 +2381,10 @@ test('R7 NAPI recovery preserves the blocked import and links one new draft to i
   await expect(synthesis.getByLabel('Parser ID')).toHaveValue(createdID);
   await synthesis.getByRole('button',{name:'Synthesize and validate draft'}).click();
   await expect(page.getByRole('tabpanel',{name:'NAPI Synthesis'}).getByText(nextAction,{exact:true})).toBeVisible();
-  await page.getByRole('button',{name:`Open ${createdID} revision 2`}).click();
+  await page.getByRole('button',{name:'Complete validation examples',exact:true}).click();
   const saved=page.locator(`[data-parser-candidate=${createdID}]`);
-  await expect(saved).toBeFocused();
+  await expect(editor.locator('[name=cases]')).toBeFocused();
+  await expect(editor.locator('[name=parser]')).toHaveValue(JSON.stringify(parser,null,2));
   await expect(saved).toContainText('Saved validation examples required');
   await expect(saved.getByRole('button',{name:'Submit for review'})).toBeDisabled();
   await expect(blocked.getByRole('button',{name:'Submit for review'})).toBeDisabled();
@@ -2385,7 +2536,7 @@ test('live dashboard renders controller metrics, client filter, pipeline timing 
   const { observed } = await mockController(page);
   await login(page);
   await expect(page.locator('#page').getByRole('heading', { name: 'Command Center' })).toBeVisible();
-  await expect(page.getByTestId('live-dashboard-kpis').locator('.dashboard-kpi strong').first()).toHaveText('9,007,199,254,740,993');
+  await expect.poll(async()=> (await page.getByTestId('live-dashboard-kpis').locator('.dashboard-kpi strong').first().innerText()).replace(/[,\s]/g,'')).toBe('9007199254740993');
   await expect(page.getByText('100.00% success')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Pipeline time travel' })).toBeVisible();
   await expect(page.getByText('/var/log/mail.log').first()).toBeVisible();
@@ -2615,7 +2766,7 @@ test('Parser Creation Workspace builds a complete editable draft without publish
   await expect(page.getByText('1 live runtime parsers are available as reference.')).toBeVisible();
   await expect(page.getByRole('row').filter({hasText:'Legacy draft'}).getByRole('button',{name:'Submit for review'})).toBeDisabled();
   await page.getByRole('button', { name: 'Validate on controller' }).click();
-  await expect(form.locator('[data-parser-status]')).toContainText('Include 1–100 validation cases');
+  await expect(form.locator('[data-parser-status]')).toContainText('Include 1â€“100 validation cases');
   expect(observed.filter(path=>path==='POST /api/v1/assurance/parser-preview')).toHaveLength(0);
   await form.locator('[name=samples]').fill('level=INFO user=alice   \r\nlevel=WARN user=bob\t  \r\n');
   const autoPopulate = page.getByRole('button', { name: 'Auto-populate complete parser' });
@@ -2790,7 +2941,7 @@ test('published endpoint profile requests a revision-bound single-client canary 
   const delivery = page.locator('#endpoint-delivery-status');
   await expect(delivery).toContainText('1 enabled / 1 reporting / 1 online clients');
   await expect(delivery.getByRole('row').filter({hasText:'Grafana Loki'}).filter({hasText:'mail-node-1'})).toContainText('42');
-  await form.locator('[name=profile_id]').selectOption({label:'Remote delivery · r4'});
+  await form.locator('[name=profile_id]').selectOption({label:'Remote delivery Â· r4'});
   await expect(form.locator('[name=scope]')).toHaveValue('canary');
   await form.locator('[name=canary_node]').selectOption('node-1');
   await form.getByRole('button', { name: 'Request independent approval' }).click();
@@ -3123,7 +3274,7 @@ test('Command Center supports long presets, custom timestamps, exact count hover
   await expect(page.locator('[data-chart-category="Input"]').first()).toHaveAttribute('data-chart-value','9007199254740993');
   const point=page.locator('[data-chart-category="Input"]').first();
   await point.focus();
-  await expect(page.locator('.chart-hover-readout').first()).toContainText('9,007,199,254,740,993');
+  await expect.poll(async()=> (await page.locator('.chart-hover-readout').first().innerText()).replace(/[,\s]/g,'')).toContain('9007199254740993');
   await page.getByText('View returned JSON').click();
   await expect(page.locator('.history-json pre')).toContainText('9007199254740993');
   const download=page.waitForEvent('download');
@@ -3205,7 +3356,7 @@ test('draft input profiles expose lifecycle actions and JSON without a dead roll
   await page.getByRole('button',{name:'Approve',exact:true}).click();
   await expect(page.getByRole('button',{name:'Publish',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Publish',exact:true}).click();
-  await expect(rollout.locator('[name=profile_id]')).toContainText('Draft inputs · r1');
+  await expect(rollout.locator('[name=profile_id]')).toContainText('Draft inputs Â· r1');
 });
 
 test('mobile navigation exposes all workspaces without horizontal page overflow', async ({ page }) => {
@@ -3291,7 +3442,7 @@ test('An acknowledged but exhausted quarantine record has an honest Step 9 outco
   await page.locator('[data-wizard-step="8"] button').click();
   await expect(page.getByRole('button', { name: /Request targeted replay/ })).toBeDisabled();
   await expect(page.locator('#gprs-replay-form')).toContainText(/retry limit|attempts exhausted/i);
-  await page.getByRole('button', { name: '9 · Verify replay result', exact: true }).click();
+  await page.getByRole('button', { name: '9 Â· Verify replay result', exact: true }).click();
   await expect(page.locator('#qrw-verification')).toContainText('manual_attention');
   await expect(page.locator('[data-wizard-step="9"]')).toHaveAttribute('data-step-complete', 'false');
 });
@@ -3336,7 +3487,7 @@ test('Guided Parser Repair Studio onboards a pasted sample without quarantine re
   await page.getByTestId('nav-quarantine-wizard').click();
   await page.getByLabel('Manual raw sample').fill(raw);
   await page.getByLabel('Service scope',{exact:true}).first().fill('login');
-  await page.getByRole('button',{name:'1 · Use manual sample'}).click();
+  await page.getByRole('button',{name:'1 Â· Use manual sample'}).click();
   await expect(page.locator('#gprs-preview-form [name=raw_evidence]')).toHaveValue(raw);
   await page.getByTestId('nav-assurance').click();
   await page.getByRole('tab',{name:'Guided Parser Repair Studio'}).click();
@@ -3350,20 +3501,20 @@ test('Guided Parser Repair Studio onboards a pasted sample without quarantine re
   await expect.poll(()=>draft?.cases?.[0]).toMatchObject({raw,desired,source:'manual',service:'login'});
   expect(draft.source_quarantine_record_id).toBe('');
   const studio=page.locator('#assurance-panel-gprs');
-  await studio.getByRole('button',{name:/7 · Review & publish/}).click();
+  await studio.getByRole('button',{name:/7 Â· Review & publish/}).click();
   const lifecycle=studio.locator('[data-qrw-panel="7"]');
   await lifecycle.getByRole('button',{name:'Submit',exact:true}).click();
   page.once('dialog', dialog => dialog.accept('Verified against the reviewed sample'));
   await lifecycle.getByRole('button',{name:'Approve',exact:true}).click();
   await lifecycle.getByRole('button',{name:'Publish',exact:true}).click();
-  await studio.getByRole('button',{name:/8 · Deploy/}).first().click();
+  await studio.getByRole('button',{name:/8 Â· Deploy/}).first().click();
   await studio.getByLabel('Verification client').selectOption('node-1');
-  await studio.getByRole('button',{name:'9 · Verify manual sample'}).click();
-  await studio.getByRole('button',{name:'9.1 · Run production verification'}).click();
+  await studio.getByRole('button',{name:'9 Â· Verify manual sample'}).click();
+  await studio.getByRole('button',{name:'9.1 Â· Run production verification'}).click();
   await expect(studio.getByText(/selected a different parser/)).toBeVisible();
   exactAvailable=true;
   await studio.getByRole('button',{name:/9.1 .*Run production verification/}).click();
-  await expect(studio.getByText(/Complete · Published parser and automatic output matched/)).toBeVisible();
+  await expect(studio.getByText(/Complete Â· Published parser and automatic output matched/)).toBeVisible();
   expect(verification).toMatchObject({raw,desired,service:'login',preserve_source:true,parser_id:'draft-1'});
   expect(mock.qrwReplays).toEqual([]);
   expect(mock.observed.some(item=>item.endsWith('/analyze')&&item.includes('/quarantine/records/'))).toBe(false);
@@ -3381,7 +3532,148 @@ test('Ver22 replay requires the controller acknowledgement even when the hashes 
   await page.getByRole('button', { name: 'Inspect', exact: true }).click();
   await page.locator('[data-wizard-step="8"] button').click();
   await expect(page.getByRole('button', { name: /Request targeted replay/ })).toBeDisabled();
-  await page.getByRole('button', { name: '9 · Verify replay result', exact: true }).click();
+  await page.getByRole('button', { name: '9 Â· Verify replay result', exact: true }).click();
   await expect(page.locator('#qrw-verification')).toContainText('waiting');
   await expect(page.locator('[data-wizard-step="9"]')).toHaveAttribute('data-step-complete', 'false');
+});
+
+
+test('R8 NAPI explicit redacted evidence retention opens the same complete artifact and submits once',async({page})=>{
+  await mockController(page);
+  const id='napi-review-once';
+  const parser={id,version:1,format:'json',pattern_type:'mapping',mapping_plan:{fields:[{name:'status',type:'string',method:'json',source:'status'}]}};
+  let doc=null,retainedRequest=null,submissions=0;
+  await page.route('**/api/v1/assurance/parsers',route=>route.fulfill({json:{parsers:doc?[doc]:[]}}));
+  await page.route('**/api/v1/parser-packs',route=>route.fulfill({json:{parser_packs:doc?[doc]:[]}}));
+  await page.route(`**/api/v1/assurance/parsers/${id}`,route=>route.fulfill({json:doc}));
+  await page.route(`**/api/v1/parser-packs/${id}`,route=>route.fulfill({json:doc}));
+  await page.route(`**/api/v1/assurance/parsers/${id}/submit`,route=>{
+    submissions++;doc.state='in_review';return route.fulfill({json:{id,state:'in_review'}});
+  });
+  await page.route('**/api/v1/assurance/napi/synthesize',route=>{
+    retainedRequest=route.request().postDataJSON();
+    expect(retainedRequest.retain_review_examples).toBe(true);
+    const cases=[...retainedRequest.discovery,...retainedRequest.held_out];
+    doc={id,revision:1,state:'draft',payload:{name:'Saved NAPI expected outputs',version:'0.1.0',generated_by:'napi-bounded-v1',parser,cases,artifact_checksum:'d'.repeat(64),requires_validation_examples:false,validation_passed:true,validation:{status:'passed',total:cases.length,passed:cases.length,failed:0}}};
+    return route.fulfill({status:201,json:{id,revision:1,state:'draft',draft_created:true,requires_validation_examples:false,review_examples_retained:cases.length,review_validation:doc.payload.validation,next_action:'Inspect saved examples, then submit for independent review.'}});
+  });
+  await login(page);await page.getByTestId('nav-assurance').click();
+  await page.getByRole('tab',{name:'NAPI Synthesis',exact:true}).click();
+  const synthesis=page.getByTestId('napi-synthesis-form');
+  await expect(synthesis.getByLabel('Save supplied redacted validation examples')).not.toBeChecked();
+  await synthesis.getByLabel('Parser ID',{exact:true}).fill(id);
+  const discovery=[{raw:'{"status":"one"}',desired:{status:'one'}},{raw:'{"status":"two"}',desired:{status:'two'}}];
+  const held=[{raw:'{"status":"three"}',desired:{status:'three'}}];
+  await synthesis.getByLabel('Discovery samples JSON').fill(JSON.stringify(discovery));
+  await synthesis.getByLabel('Independent held-out samples JSON').fill(JSON.stringify(held));
+  await synthesis.getByLabel('Save supplied redacted validation examples').check();
+  await synthesis.getByRole('button',{name:'Synthesize and validate draft'}).click();
+  await page.getByRole('button',{name:'Review saved validation examples',exact:true}).click();
+  const editor=page.locator('#parser-workspace-form');
+  await expect(editor.locator('[name=cases]')).toBeFocused();
+  expect(JSON.parse(await editor.locator('[name=cases]').inputValue())).toEqual([...discovery,...held]);
+  expect(JSON.parse(await editor.locator('[name=parser]').inputValue())).toEqual(parser);
+  const row=page.locator(`[data-parser-candidate=${id}]`);
+  await expect(row.getByRole('button',{name:'Submit for review'})).toBeEnabled();
+  await row.getByRole('button',{name:'Submit for review'}).click();
+  await expect.poll(()=>submissions).toBe(1);
+  await expect(row).toContainText('in_review');
+  await expect(page.locator('.toast.error')).toHaveCount(0);
+});
+
+test('R8 NAPI Catalog routes missing evidence to the complete artifact editor instead of issuing a failing Submit',async({page})=>{
+  const id='napi-no-evidence';
+  const parser={id,pattern_type:'mapping',mapping_plan:{fields:[{name:'status',method:'key_value',source:'status'}]}};
+  const doc={id,revision:1,state:'draft',payload:{name:'Incomplete NAPI evidence',version:'0.1.0',generated_by:'napi-bounded-v1',parser,validation_passed:false,requires_validation_examples:true,cases:[],validation:{status:'requires_validation_examples'}}};
+  const {observed}=await mockController(page,{managedParsers:[doc],qrwParsers:[doc]});
+  await page.route(`**/api/v1/assurance/parsers/${id}`,route=>route.fulfill({json:doc}));
+  await login(page);await page.getByTestId('nav-parsers').click();
+  await expect(page.locator('[data-action=parser-action][data-value=submit]')).toHaveCount(0);
+  await page.getByRole('button',{name:'Complete validation examples',exact:true}).click();
+  const editor=page.locator('#parser-workspace-form');
+  await expect(editor.locator('[name=edit_id]')).toHaveValue(id);
+  expect(JSON.parse(await editor.locator('[name=parser]').inputValue())).toEqual(parser);
+  await expect(editor.locator('[name=cases]')).toHaveValue('[]');
+  await expect(page.locator(`[data-parser-candidate=${id}]`).getByRole('button',{name:'Submit for review'})).toBeDisabled();
+  expect(observed.some(path=>path.startsWith('POST ')&&path.endsWith('/submit'))).toBe(false);
+  await page.getByTestId('nav-assurance').click();
+  // The embedded Guided Parser Repair lifecycle is another view of the same
+  // draft; hidden panels must not offer premature validation or submission.
+  await expect(page.locator(`[data-action=assurance-parser-action][data-id=${id}][data-value=submit]`)).toHaveCount(0);
+  await expect(page.locator(`[data-action=assurance-parser-action][data-id=${id}][data-value=validate]`)).toHaveCount(0);
+  await page.getByRole('tab',{name:'Review Queue',exact:true}).click();
+  await page.locator(`[data-action=assurance-parser-edit][data-id=${id}]:visible`).click();
+  await expect(editor.locator('[name=edit_id]')).toHaveValue(id);
+  expect(JSON.parse(await editor.locator('[name=parser]').inputValue())).toEqual(parser);
+  await page.getByTestId('nav-field-mapping').click();
+  await expect(page.locator(`[data-action=assurance-parser-action][data-id=${id}][data-value=submit]`)).toHaveCount(0);
+  await expect(page.locator(`[data-action=assurance-parser-action][data-id=${id}][data-value=validate]`)).toHaveCount(0);
+  await page.locator(`[data-action=nfi-edit-candidate][data-id=${id}]`).click();
+  await expect(editor.locator('[name=edit_id]')).toHaveValue(id);
+  expect(JSON.parse(await editor.locator('[name=parser]').inputValue())).toEqual(parser);
+});
+
+test('R8 AI Guidance teaches numbered steps and routes everyday questions without trusting markup',async({page})=>{
+  await mockController(page);
+  const catalog={release:'v23.0.0-8',version:2,sha256:'e'.repeat(64)};
+  const workspaces=[{id:'knownkeys',label:'Known Key Catalog',actions:[{id:'navigate',label:'Known Key Catalog',guidance:'Open the catalog.'},{id:'known-key-bulk-preview',label:'Preview import',guidance:'Preview the key list.'}]}];
+  await page.route('**/api/v1/ai/guidance',route=>route.fulfill({json:{current:catalog,workspaces,revisions:[],evaluations:[]}}));
+  await page.route('**/api/v1/ai/guidance/evaluate',route=>{
+    expect(route.request().postDataJSON()).toEqual({workspace:'auto',tab:'',action:'',question:'How do I import 1000 known keys?',use_provider:false});
+    return route.fulfill({json:{catalog,scope:{workspace:'knownkeys'},workspace_label:'Known Key Catalog',selected:{id:'known-key-bulk-preview',label:'Preview import',guidance:'Preview the key list.'},provider_status:'not_requested',persisted:true,evaluation_id:'workflow-1',instructions:{navigation:'Known Key Catalog',steps:['Open Known Key Catalog.','Paste one key per line and press Preview import.','Review <img src="/untrusted-guidance" onerror="window.injected=true"> as text.','Create bulk known-key draft, then complete review and publication.'],completion_check:'Check exact client acknowledgement and parsed named fields.',permission_note:'An authorized reviewer must complete the required approval.'}}});
+  });
+  await login(page);
+  await page.getByTestId('nav-ai-guidance').click();
+  const form=page.locator('#ai-guidance-evaluation');
+  await expect(form.getByLabel('Workspace',{exact:true})).toHaveValue('auto');
+  await form.getByLabel('Question (optional)').fill('How do I import 1000 known keys?');
+  await form.getByRole('button',{name:'Evaluate guidance'}).click();
+  const result=page.locator('[data-guidance-result]');
+  await expect(result.locator('ol > li')).toHaveCount(4);
+  await expect(result).toContainText('Navigation: Known Key Catalog');
+  await expect(result).toContainText('Check exact client acknowledgement');
+  await expect(result).toContainText('<img src="/untrusted-guidance"');
+  await expect(result.locator('img')).toHaveCount(0);
+  await result.getByRole('button',{name:'Open workspace'}).click();
+  await expect(page.locator('#page')).toHaveAttribute('data-page','knownkeys');
+});
+
+
+test('R8 subsystem selections survive canonical rerenders refreshes and independent workspace navigation',async({page})=>{
+  await mockController(page);
+  await page.addInitScript(()=>{
+    const instances=[];
+    class DirectoryTestEventSource extends EventTarget{
+      constructor(url){super();this.url=url;instances.push(this);window.__subsystemSources=instances;setTimeout(()=>this.onopen?.(),0);}
+      close(){}
+      emit(type,data){this.dispatchEvent(new MessageEvent(type,{data:JSON.stringify(data)}));}
+    }
+    window.EventSource=DirectoryTestEventSource;
+  });
+  await login(page);
+  const selections=[['nhle-monitor','activity'],['napi-monitor','diagnostics'],['nal-monitor','freshness'],['sync-fabric','activity']];
+  let revision=100;
+  for(const [workspace,key] of selections){
+    await page.getByTestId(`nav-${workspace}`).click();
+    await page.locator(`[data-subsystem-tab=${key}]`).click();
+    await expect(page.locator(`[data-subsystem-tab=${key}]`)).toHaveAttribute('aria-selected','true');
+    await page.evaluate(async revision=>{
+      const snapshot=await (await fetch('/api/v1/sync/snapshot')).json();
+      window.__subsystemSources.at(-1).emit('sync_snapshot',{...snapshot,revision,aggregate:{...snapshot.aggregate,nli_queue_depth:revision},generated_at:new Date().toISOString()});
+    },revision++);
+    await expect(page.locator('.subsystem-hero')).toContainText(String(revision-1));
+    await expect(page.locator(`[data-subsystem-tab=${key}]`)).toHaveAttribute('aria-selected','true');
+    await expect(page.locator(`[data-subsystem-panel=${key}]`)).toBeVisible();
+    await page.getByRole('button',{name:'Refresh',exact:true}).click();
+    await expect(page.locator(`[data-subsystem-tab=${key}]`)).toHaveAttribute('aria-selected','true');
+    await page.getByTestId('nav-operations').click();
+  }
+  // Each subsystem remembers its own selection rather than inheriting the
+  // previous subsystem's same-named tab or returning to Overview.
+  for(const [workspace,key] of selections){
+    await page.getByTestId(`nav-${workspace}`).click();
+    await expect(page.locator(`[data-subsystem-tab=${key}]`)).toHaveAttribute('aria-selected','true');
+    await expect(page.locator(`[data-subsystem-panel=${key}]`)).toBeVisible();
+    await expect(page.locator('[data-subsystem-tab][aria-selected=true]')).toHaveCount(1);
+  }
 });

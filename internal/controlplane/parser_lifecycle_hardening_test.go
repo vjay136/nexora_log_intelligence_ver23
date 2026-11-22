@@ -49,7 +49,7 @@ func TestParserCatalogRejectsNonRuntimeDraftsBeforeReview(t *testing.T) {
 				"validation_passed": true, "artifact_checksum": checksum,
 				"generated_by": "napi-bounded-v1",
 			},
-			want: "no retained reviewed regression cases",
+			want: napiExamplesNeeded,
 		},
 		{
 			id: "promoted-provenance-only",

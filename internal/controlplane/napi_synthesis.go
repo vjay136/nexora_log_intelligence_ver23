@@ -31,17 +31,18 @@ const (
 	napiMaxRegexInst   = 4096
 	napiMaxCaptureSets = 64
 	napiGenerator      = "napi-bounded-v1"
-	napiExamplesNeeded = "Open Edit in Parser Review and add representative redacted validation examples with exact expected JSON. Save the draft, then submit it for review."
+	napiExamplesNeeded = "Open Complete validation examples in Parser Creation Workspace and add representative redacted validation examples with exact expected JSON. Save the draft, then submit it for review."
 )
 
 type napiSynthesisInput struct {
-	ID             string             `json:"id"`
-	Name           string             `json:"name"`
-	Version        string             `json:"version"`
-	Discovery      []assuranceRequest `json:"discovery"`
-	HeldOut        []assuranceRequest `json:"held_out"`
-	Negative       []string           `json:"negative,omitempty"`
-	CandidateLimit int                `json:"candidate_limit,omitempty"`
+	ID                   string             `json:"id"`
+	Name                 string             `json:"name"`
+	Version              string             `json:"version"`
+	Discovery            []assuranceRequest `json:"discovery"`
+	HeldOut              []assuranceRequest `json:"held_out"`
+	Negative             []string           `json:"negative,omitempty"`
+	CandidateLimit       int                `json:"candidate_limit,omitempty"`
+	RetainReviewExamples bool               `json:"retain_review_examples,omitempty"`
 }
 
 type napiRegexSafety struct {
@@ -69,7 +70,8 @@ type napiCandidate struct {
 
 // handleNAPISynthesize runs bounded, deterministic discovery outside the
 // ingestion hot path. It persists only the selected declarative draft and
-// hashes/evidence; supplied records are not copied into controller metadata.
+// hashes/evidence. Supplied records are copied into review cases only when the
+// operator explicitly authorizes retention of their redacted examples.
 func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "POST required", http.StatusMethodNotAllowed)
@@ -171,11 +173,27 @@ func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 		"raw_samples_persisted":   false,
 	}
 	validation := selected.Evaluation
+	reviewValidation := map[string]any{"status": "requires_validation_examples", "reason": napiExamplesNeeded}
+	var reviewCases []assuranceRequest
+	if input.RetainReviewExamples {
+		// The operator explicitly authorizes retaining the supplied redacted
+		// expected-output examples. Re-run the exact persisted artifact through
+		// production validation; synthesis scores are not review evidence.
+		reviewCases = append(append([]assuranceRequest(nil), input.Discovery...), input.HeldOut...)
+		reviewValidation = validateNAPIReviewDraft(r.Context(), id, input.Version, principal.Username, selected.Definition, reviewCases)
+	}
+	needsExamples := len(reviewCases) == 0
+	nextAction := napiExamplesNeeded
+	if !needsExamples {
+		nextAction = "Open the saved draft in Parser Creation Workspace, inspect the saved exact validation results, then submit for independent review. Publication and fleet rollout require approval."
+	}
+	provenance["raw_samples_persisted"] = input.RetainReviewExamples
+	provenance["review_examples_retention_authorized"] = input.RetainReviewExamples
 	checksum := parserArtifactChecksum(selected.Definition)
 	payload, _ := json.Marshal(map[string]any{
 		"id": id, "name": input.Name, "version": input.Version,
 		"parser": selected.Definition, "artifact_checksum": checksum,
-		"validation": map[string]any{"status": "requires_validation_examples", "reason": napiExamplesNeeded}, "validation_passed": false,
+		"validation": reviewValidation, "validation_passed": reviewValidation["status"] == "passed", "cases": reviewCases,
 		"synthesis_evidence": map[string]any{
 			"selected_candidate": selected.ID, "strategy": selected.Strategy,
 			"rationale": selected.Rationale, "regex_safety": selected.Safety,
@@ -184,7 +202,7 @@ func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 			"limitations": []string{"validated only for the supplied bounded samples", "production activation still requires independent review and publish", "no claim is made for unseen log formats"},
 		},
 		"review_state": "draft", "activated": false,
-		"requires_human_approval": true, "requires_validation_examples": true, "generated_by": napiGenerator,
+		"requires_human_approval": true, "requires_validation_examples": needsExamples, "generated_by": napiGenerator,
 	})
 	saved, ok := s.saveNAPIDraft(w, r, principal.Username, id, payload)
 	if !ok {
@@ -206,7 +224,8 @@ func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 		"validation": validation, "regex_safety": selected.Safety,
 		"candidates": reports, "provenance": provenance,
 		"nupire":                  nupireRecord,
-		"requires_human_approval": true, "requires_validation_examples": true, "next_action": napiExamplesNeeded,
+		"requires_human_approval": true, "requires_validation_examples": needsExamples, "next_action": nextAction,
+		"review_validation": reviewValidation, "review_examples_retained": len(reviewCases),
 		"artifact_checksum": checksum, "published": false,
 		"elapsed_us": time.Since(started).Microseconds(),
 	})
@@ -348,6 +367,9 @@ func (s *Server) generateNAPICandidates(id string, discovery []assuranceRequest,
 			out = append(out, candidate)
 		}
 	}
+	if definition := synthesizeNAPIMailMapping(id, discovery); definition != nil {
+		add(napiCandidate{ID: "mail-header-kv", Strategy: "header_kv", Rationale: []string{"reuses the production named mail-header template and complete global KV tail mapping", "header components are bounded captures rather than guessed occurrences of expected values", "discovery and independent held-out exact outputs and negative records still gate persistence"}, Definition: definition})
+	}
 	if allNAPIJSON(discovery) {
 		add(napiCandidate{ID: "json-fields", Strategy: "json", Rationale: []string{"every discovery record is a JSON object", "field sources use the same native mapping stage as production"}, Definition: napiMappingDefinition(id, "json", fields)})
 	}
@@ -372,6 +394,51 @@ func (s *Server) generateNAPICandidates(id string, discovery []assuranceRequest,
 		}
 	}
 	return out
+}
+
+// Recognized numeric-prefix mail records use the same bounded header template
+// and KV composition as authored production templates. In particular a small
+// field such as minor_pid=0 must not be located by counting the character '0'
+// throughout timestamps and IDs. Unsupported layouts retain the existing
+// candidate gates; no broad catch-all header or unparsed tail is introduced.
+func synthesizeNAPIMailMapping(id string, samples []assuranceRequest) map[string]any {
+	if len(samples) == 0 {
+		return nil
+	}
+	raw := make([]string, 0, len(samples))
+	for _, sample := range samples {
+		if !fieldmapping.HasMailHeaderExtension(sample.Raw) || !aiMailHeader.MatchString(sample.Raw) {
+			return nil
+		}
+		raw = append(raw, sample.Raw)
+	}
+	pattern, optional := mailTemplatePattern(raw...)
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil
+	}
+	header := fieldmapping.HeaderTemplate{Engine: "re2", Pattern: pattern, Fields: map[string]string{}}
+	for _, name := range compiled.SubexpNames()[1:] {
+		if name == "" {
+			return nil
+		}
+		header.Fields[name] = name
+	}
+	for _, name := range optional {
+		value, ok := name.(string)
+		if !ok {
+			return nil
+		}
+		header.OptionalFields = append(header.OptionalFields, value)
+	}
+	plan, err := fieldmapping.ComposeTemplates(header, nil)
+	if err != nil {
+		return nil
+	}
+	if _, err = fieldmapping.Compile(plan); err != nil {
+		return nil
+	}
+	return map[string]any{"id": id, "version": 1, "description": "NAPI bounded complete mail-header and KV candidate", "format": "smtp_native", "pattern_type": "mapping", "mapping_plan": plan}
 }
 
 func inferNAPIFields(samples []assuranceRequest) []registry.FieldDef {

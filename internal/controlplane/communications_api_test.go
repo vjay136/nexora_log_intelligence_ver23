@@ -321,6 +321,26 @@ func TestAuthenticatedAuthFailureRemainsActionable(t *testing.T) {
 	}
 }
 
+func TestParserSubmitValidationIsInlineButOperationalAndAuthFailuresRemainActionable(t *testing.T) {
+	for _, resource := range []string{"/api/v1/parser-packs/napi-guided-parser/submit", "/api/v1/assurance/parsers/napi-guided-parser-2/submit"} {
+		for _, status := range []string{"400", "409", "422", "401", "403", "404", "500", "503"} {
+			event := auditlog.Event{Action: http.MethodPost, Resource: resource, Actor: "admin", Outcome: "failure",
+				Details: map[string]string{"detail": "status=" + status + " duration_ms=1 request_id=req-validation"}}
+			_, _, actionable := classifyNotificationEvent(event)
+			wantActionable := !oneOf(status, "400", "409", "422")
+			if actionable != wantActionable {
+				t.Fatalf("%s status %s: actionable=%v, want %v", resource, status, actionable, wantActionable)
+			}
+		}
+	}
+	for _, resource := range []string{"/api/v1/parser-packs/x/submit/extra", "/api/v1/parser-packs//submit", "/api/v1/fleet/sync"} {
+		event := auditlog.Event{Action: http.MethodPost, Resource: resource, Outcome: "failure", Details: map[string]string{"detail": "status=409"}}
+		if _, _, actionable := classifyNotificationEvent(event); !actionable {
+			t.Fatalf("unrelated error %s must not be suppressed", resource)
+		}
+	}
+}
+
 func TestNotificationPolicyWriteRequiresAdminPermission(t *testing.T) {
 	f := newAPIFixture(t)
 	if _, err := f.server.auth.CreateUser("admin", "notify-viewer", "notify-viewer@example.test", "viewer", "Viewer-password-12345!"); err != nil {

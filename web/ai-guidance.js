@@ -45,11 +45,11 @@
           <p>${esc(current.release || 'Release unavailable')} · Catalog revision ${esc(current.version ?? 'Unavailable')} · <code class="mono" title="${esc(current.sha256 || '')}">${esc((current.sha256 || '').slice(0, 12))}</code></p>
         </div></div>
         <form id="ai-guidance-evaluation" class="form-grid">
-          <label class="field">Workspace<select name="workspace" aria-label="Workspace" required>${workspaces.map(item => option(item.id, item.label)).join('')}</select></label>
+          <label class="field">Workspace<select name="workspace" aria-label="Workspace" required>${option('auto', 'Suggest workspace from my question')}${workspaces.map(item => option(item.id, item.label)).join('')}</select></label>
           <label class="field">Tab<select name="tab" aria-label="Tab"></select></label>
           <label class="field">Action<select name="action" aria-label="Action"></select></label>
           <label class="field wide">Question (optional)<textarea name="question" aria-label="Question (optional)" aria-describedby="guidance-question-hint" maxlength="2048" rows="3" placeholder="How do I verify that a client applied the current bundle?"></textarea>
-            <span class="hint" id="guidance-question-hint">Use a workflow question and leave out log samples and credentials.</span>
+            <span class="hint" id="guidance-question-hint">Ask in everyday language, for example “How do I import 1000 known keys?” or “NAPI says 409 when I submit”. Guidance lists the navigation, buttons and completion checks. Leave out log samples and credentials.</span>
           </label>
           <label class="field wide"><span><input name="use_provider" type="checkbox"> Allow the configured provider to select an action</span>
             <span class="hint">A masked question and the available action choices are sent only when selected.</span>
@@ -76,8 +76,8 @@
     const workspace = form.elements.workspace;
     const tab = form.elements.tab;
     const action = form.elements.action;
-    const initialWorkspace = previousScope?.workspace || 'parser-sync';
-    if (workspaces.some(item => item.id === initialWorkspace)) workspace.value = initialWorkspace;
+    const initialWorkspace = previousScope?.workspace || 'auto';
+    if (initialWorkspace === 'auto' || workspaces.some(item => item.id === initialWorkspace)) workspace.value = initialWorkspace;
     const selectedWorkspace = () => workspaces.find(item => item.id === workspace.value);
     const showActions = () => {
       const selected = selectedWorkspace();
@@ -107,11 +107,17 @@
       const selected = evaluation.selected || {};
       const evaluatedWorkspace = workspaces.find(item => item.id === evaluation.scope?.workspace);
       const chosenTab = evaluatedWorkspace?.tabs?.find(item => item.id === evaluation.scope?.tab);
+      const instructions = evaluation.instructions || {};
+      const steps = Array.isArray(instructions.steps) ? instructions.steps : [];
       const status = providerMessages[evaluation.provider_status] || 'Provider status unavailable';
       const warning = !['selected', 'not_requested'].includes(evaluation.provider_status);
       result.innerHTML = `<div class="callout ${warning ? 'warn' : ''}">
         <p><strong>${esc(selected.label || 'Guidance unavailable')}</strong>${chosenTab ? ` · ${esc(chosenTab.label)}` : ''}</p>
         <p>${esc(selected.guidance || '')}</p>
+        ${instructions.navigation ? `<p><strong>Navigation:</strong> ${esc(instructions.navigation)}</p>` : ''}
+        ${steps.length ? `<ol>${steps.map(step => `<li>${esc(step)}</li>`).join('')}</ol>` : ''}
+        ${instructions.completion_check ? `<p><strong>Check the result:</strong> ${esc(instructions.completion_check)}</p>` : ''}
+        ${instructions.permission_note ? `<p class="hint">${esc(instructions.permission_note)}</p>` : ''}
         <p>${esc(status)}</p>
         ${evaluation.persisted ? '' : '<p>Evaluation history could not be saved.</p>'}
         <button class="secondary small" type="button" data-action="navigate" data-page="${esc(evaluation.scope?.workspace || '')}">Open workspace</button>

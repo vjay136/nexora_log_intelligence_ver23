@@ -142,6 +142,7 @@ type Server struct {
 	fieldSenseOnce           sync.Once
 	fieldSense               *fieldSenseAdmission
 	parserMutationMu         sync.Mutex
+	clientDirectoryMu        sync.RWMutex
 	bundleRecovery           *bundleRecoveryGate
 	parserMaterializeMu      sync.Mutex
 	automaticRuntimeMu       sync.Mutex
@@ -564,6 +565,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/stream", guard(middleware.PermissionReadTelemetry, s.handleStream))
 	s.mux.HandleFunc("/api/v1/overview", guard(middleware.PermissionSystemHealth, s.handleOverview))
 	s.mux.HandleFunc("/api/v1/fleet", guard(middleware.PermissionReadFleet, s.handleFleet))
+	s.mux.HandleFunc(clientDirectoryRoute, s.handleClientDirectory)
+	s.mux.HandleFunc(clientDirectoryRoute+"/", s.handleClientDirectory)
 	s.mux.HandleFunc("/api/v1/fleet/stats", guard(middleware.PermissionReadFleet, s.handleFleetStats))
 	s.mux.HandleFunc("/api/v1/fleet/sync", guard(middleware.PermissionReadFleet, s.handleFleetSync))
 	s.mux.HandleFunc("/api/v1/fleet/", s.handleFleetResource)
@@ -1160,7 +1163,7 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "GET required", http.StatusMethodNotAllowed)
 		return
 	}
-	jsonOK(w, s.fleet.All())
+	jsonOK(w, s.enrichClientDirectoryNodes(r.Context(), s.fleet.All()))
 }
 func (s *Server) handleFleetStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

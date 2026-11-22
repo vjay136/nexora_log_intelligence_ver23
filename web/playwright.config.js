@@ -8,13 +8,16 @@ export default defineConfig({
   retries: 0,
   reporter: [['line']],
   use: {
+    // Keep numerical assertions deterministic across Windows locales. The
+    // shipped UI still formats numbers using the actual user's locale.
+    locale: 'en-US',
     browserName: process.env.NLI_BROWSER_NAME || 'chromium',
     baseURL: process.env.NLI_BASE_URL || 'http://127.0.0.1:12382',
     // The Rocky two-node gate proves the generated private CA separately with
     // curl --cacert before Chromium runs. New Chromium builds use their own
     // root store, so only that gate may opt out of repeating certificate trust.
     ignoreHTTPSErrors: process.env.NLI_E2E_IGNORE_HTTPS_ERRORS === '1',
-    trace: 'retain-on-failure',
+    trace: process.env.NLI_E2E_TRACE || 'retain-on-failure',
     screenshot: 'only-on-failure',
     ...(process.env.NLI_BROWSER_CHANNEL ? { channel: process.env.NLI_BROWSER_CHANNEL } : {}),
   },

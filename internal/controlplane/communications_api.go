@@ -495,9 +495,22 @@ func classifyNotificationEvent(event auditlog.Event) (string, string, bool) {
 }
 
 func authoringFailureStatus(event auditlog.Event) (string, bool) {
-	if !strings.EqualFold(event.Action, http.MethodPost) || event.Outcome != "failure" ||
-		!oneOf(event.Resource, "/api/v1/assurance/mapping-preview", "/api/v1/assurance/parser-preview",
-			"/api/v1/assurance/parsers", "/api/v1/assurance/ai-proposal", "/api/v1/field-mapping/ai-suggest", "/api/v1/ai/workspace") {
+	if !strings.EqualFold(event.Action, http.MethodPost) || event.Outcome != "failure" {
+		return "", false
+	}
+	inlineAuthoring := oneOf(event.Resource, "/api/v1/assurance/mapping-preview", "/api/v1/assurance/parser-preview",
+		"/api/v1/assurance/parsers", "/api/v1/assurance/ai-proposal", "/api/v1/field-mapping/ai-suggest", "/api/v1/ai/workspace")
+	// A submit rejected for missing validation evidence is a lifecycle guard,
+	// not a controller outage. Keep the request in the audit chain and show
+	// its precise error in the editor; operational and authorization failures
+	// still reach the notification feed.
+	for _, prefix := range []string{"/api/v1/parser-packs/", "/api/v1/assurance/parsers/"} {
+		if resource, ok := strings.CutPrefix(event.Resource, prefix); ok {
+			id, operation, hasOperation := strings.Cut(resource, "/")
+			inlineAuthoring = inlineAuthoring || (id != "" && hasOperation && operation == "submit")
+		}
+	}
+	if !inlineAuthoring {
 		return "", false
 	}
 	detail, _, _ := strings.Cut(event.Details["detail"], " ")

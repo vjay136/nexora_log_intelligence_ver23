@@ -187,3 +187,99 @@ func TestAIWorkspaceIncludesVerifiedGuidanceBesideProviderAnswer(t *testing.T) {
 		t.Fatalf("catalog guidance was not separate from the reply: %s", body)
 	}
 }
+
+func TestAIGuidanceEverydayQuestionsReturnGroundedNumberedWorkflows(t *testing.T) {
+	f := newAPIFixture(t)
+	for _, tt := range []struct{ question, workspace, tab, required string }{
+		{"how can i import 1000 known keys in one load pls", "knownkeys", "", "Create bulk known-key draft"},
+		{"i have many keys at once", "knownkeys", "", "Preview import"},
+		{"napi not submit it says 409", "assurance", "synthesis", "Save supplied redacted validation examples"},
+		{"where add validation examples for parser review", "assurance", "synthesis", "Save approval-gated draft"},
+		{"after login it is asking approval what should i do", "rollouts", "", "Do not approve unfamiliar proposals"},
+		{"my client still old how to sync", "parser-sync", "", "applied hash equals"},
+		{"i want restore last backup", "backup-restore", "", "Approve restore"},
+		{"call my client mail01", "clients", "", "operating-system host"},
+		{"group100IMAP servers", "clients", "", "10,000 enrolled members"},
+		{"rollout to SMTP-IN group", "clients", "", "Preview group targets"},
+		{"can you help me", "ai-guidance", "", "A vague question"},
+	} {
+		t.Run(tt.question, func(t *testing.T) {
+			response, body := f.request(http.MethodPost, "/api/v1/ai/guidance/evaluate", map[string]any{"workspace": "auto", "question": tt.question})
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("%d %s", response.StatusCode, body)
+			}
+			result := decodeMap(t, body)
+			scope := result["scope"].(map[string]any)
+			if scope["workspace"] != tt.workspace || (tt.tab != "" && scope["tab"] != tt.tab) {
+				t.Fatalf("wrong navigation: %s", body)
+			}
+			instructions := result["instructions"].(map[string]any)
+			steps := instructions["steps"].([]any)
+			wire, _ := json.Marshal(instructions)
+			if len(steps) < 4 || !strings.Contains(string(wire), tt.required) || instructions["completion_check"] == "" || instructions["permission_note"] == "" {
+				t.Fatalf("incomplete workflow: %s", body)
+			}
+			if result["provider_status"] != "not_requested" {
+				t.Fatalf("unexpected provider access: %s", body)
+			}
+		})
+	}
+	// Explicit selected scopes remain authoritative even when the question
+	// happens to mention another workflow, and actions cannot cross that scope.
+	response, body := f.request(http.MethodPost, "/api/v1/ai/guidance/evaluate", map[string]any{"workspace": "parser-sync", "action": "parser-sync-verify", "question": "import known keys"})
+	if response.StatusCode != http.StatusOK || decodeMap(t, body)["scope"].(map[string]any)["workspace"] != "parser-sync" {
+		t.Fatalf("explicit scope changed: %d %s", response.StatusCode, body)
+	}
+	response, body = f.request(http.MethodPost, "/api/v1/ai/guidance/evaluate", map[string]any{"workspace": "auto", "action": "rollout-approve", "question": "help"})
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("automatic scope accepted injected action: %d %s", response.StatusCode, body)
+	}
+}
+
+func TestAIGuidanceClientDirectoryActionsStayBoundToRealControls(t *testing.T) {
+	for _, tt := range []struct{ question, action, completion string }{
+		{"call my client mail01", "client-directory-save-name", "same immutable node ID"},
+		{"group100IMAP servers", "client-directory-save-group", "original explicit targets"},
+		{"rollout to SMTP-IN group", "client-group-preview", "canonical published bundle"},
+	} {
+		scope := guidanceQuestionScope(tt.question)
+		if scope.Workspace != "clients" {
+			t.Fatalf("wrong workspace for %q: %+v", tt.question, scope)
+		}
+		_, choices, err := scope.resolve()
+		if err != nil {
+			t.Fatal(err)
+		}
+		action := nativeGuidanceAction(tt.question, choices)
+		if action.ID != tt.action {
+			t.Fatalf("%q selected %+v", tt.question, action)
+		}
+		guide := guidanceInstructions(scope, action)
+		if !strings.Contains(guide.CompletionCheck, tt.completion) {
+			t.Fatalf("missing directory limits/gates: %+v", guide)
+		}
+	}
+	// A group question cannot escape an explicitly chosen fleet-verification
+	// action, and even a provider receives only that scope's available choices.
+	_, choices, err := (aiGuidanceScope{Workspace: "parser-sync", Action: "parser-sync-verify"}).resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nativeGuidanceAction("rollout to SMTP-IN group", choices).ID != "parser-sync-verify" {
+		t.Fatal("group question bypassed explicit action scope")
+	}
+}
+
+func TestAIGuidanceInstructionsNeverClaimApprovalOrLiveState(t *testing.T) {
+	for _, workspace := range aiGuidanceCatalog {
+		for _, action := range workspace.Actions {
+			guide := guidanceInstructions(aiGuidanceScope{Workspace: workspace.ID}, action)
+			if guide.Navigation != workspace.Label || len(guide.Steps) < 3 || guide.CompletionCheck == "" {
+				t.Fatalf("incomplete %s/%s: %+v", workspace.ID, action.ID, guide)
+			}
+		}
+	}
+	if aiGuidanceIdentity.Version != 2 {
+		t.Fatal("workflow instructions require a new catalog revision")
+	}
+}

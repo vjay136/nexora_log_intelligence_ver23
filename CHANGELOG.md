@@ -1,3 +1,7 @@
+# NLI Ver23 R8 — v23.0.0-8
+
+NAPI evidence and review workflow, bulk Known Key Catalog import, and step-by-step verified AI guidance. See [R8 release notes](docs/V23_R8_RELEASE_NOTES.md). Existing install modes 1–10 and R7 parser/sync protections remain.
+
 # NLI Ver23 R7 — v23.0.0-7
 
 Parser activation, NAPI runtime validation, versioned Backup & Restore, and verified AI guidance. Read [R7 release notes](docs/V23_R7_RELEASE_NOTES.md) for scope and operational limits. Installers retain modes 1–10 and coordinated mixed-role updates.

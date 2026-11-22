@@ -30,7 +30,7 @@ const Version = "23.0.0"
 
 // ReleaseID identifies the exact qualified application release independently
 // of a parser definition's own semantic version or metadata revision.
-const ReleaseID = "v23.0.0-7"
+const ReleaseID = "v23.0.0-8"
 
 // MaxLine is the maximum line size processed (1 MiB).
 const MaxLine = 1024 * 1024
