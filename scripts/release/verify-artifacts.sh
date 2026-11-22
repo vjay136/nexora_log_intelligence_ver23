@@ -92,7 +92,7 @@ done
 query() { rpm -qp --qf "$2" "$1"; }
 [[ $(query "$client" '%{NAME}') == "$NLI_CLIENT_PACKAGE" ]] || fail "client package name mismatch"
 [[ $(query "$controller" '%{NAME}') == "$NLI_CONTROLLER_PACKAGE" ]] || fail "controller package name mismatch"
-expected_repo='https://github.com/vjay136/nexora_log_intelligence_ver21.git'
+expected_repo='https://github.com/vjay136/nexora_log_intelligence_ver23.git'
 [[ $(query "$client" '%{URL}') == "$expected_repo" ]] || fail "client package repository URL mismatch"
 [[ $(query "$controller" '%{URL}') == "$expected_repo" ]] || fail "controller package repository URL mismatch"
 rpm -qp --requires "$controller" | grep -Fxq hostname || fail "controller RPM does not declare the hostname setup dependency"
