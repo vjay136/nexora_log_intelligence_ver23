@@ -249,6 +249,7 @@ func (s *Server) handleDeletedParsers(w http.ResponseWriter, r *http.Request) {
 // runtime paths are read-only projections of the authoritative published bundle.
 func (s *Server) controllerParserInventory(bundle parserAssetBundle) map[string]any {
 	dir := filepath.Join(s.cfg.StateDir, "parser-assets")
+	embedded, embeddedErr := familyprofile.BuiltinPackInventory()
 	packs := []map[string]any{}
 	for _, asset := range bundle.Assets {
 		if asset.AssetClass == "parser-packs" {
@@ -262,7 +263,11 @@ func (s *Server) controllerParserInventory(bundle parserAssetBundle) map[string]
 	} else if actual != bundle.BundleHash {
 		status = "drifted"
 	}
-	return map[string]any{"bundle_path": filepath.Join(dir, "bundle.json"), "parser_directory": filepath.Join(dir, "active-parsers"), "inventory_path": filepath.Join(dir, "runtime-inventory.json"), "bundle_hash": bundle.BundleHash, "materialized_hash": actual, "status": status, "parsers": packs, "authority": "published_controller_metadata", "baseline_policy": "embedded baseline parsers remain available"}
+	inventory := map[string]any{"bundle_path": filepath.Join(dir, "bundle.json"), "parser_directory": filepath.Join(dir, "active-parsers"), "inventory_path": filepath.Join(dir, "runtime-inventory.json"), "bundle_hash": bundle.BundleHash, "materialized_hash": actual, "status": status, "parsers": packs, "embedded_parsers": embedded, "authority": "published_controller_metadata", "baseline_policy": "embedded baseline parsers remain available"}
+	if embeddedErr != nil {
+		inventory["embedded_error"] = embeddedErr.Error()
+	}
+	return inventory
 }
 
 // materializeParserInventory replaces only controller-owned projection files.

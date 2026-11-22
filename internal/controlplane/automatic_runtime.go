@@ -52,6 +52,11 @@ func (s *Server) automaticParserRuntime(ctx context.Context) (*automaticRuntimeS
 	if s.metadata == nil {
 		return nil, fmt.Errorf("runtime metadata is not configured")
 	}
+	ctx, finishRead, err := s.beginBundleRecoveryRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finishRead()
 	var docs []metastore.Document
 	templateAssets := []adapter.RuntimeTemplateAsset{}
 	type documentsResult struct {
@@ -121,7 +126,7 @@ func (s *Server) automaticParserRuntime(ctx context.Context) (*automaticRuntimeS
 			continue
 		}
 		if familyprofile.IsBuiltinPackID(pack.ID) {
-			diagnose("Protected embedded identity cannot be replaced: " + pack.ID)
+			// Compatibility accepted only an exact copy of the embedded runtime.
 			continue
 		}
 		digest := sha256.Sum256(encoded)

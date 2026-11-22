@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	parsercatalog "nexora.local/nli-v20/configs/catalog"
 	"nexora.local/nli-v20/internal/canonicaljson"
 	"nexora.local/nli-v20/internal/fieldmapping"
 	"nexora.local/nli-v20/internal/mixedkv"
@@ -181,6 +182,9 @@ func (adapter *ParserPackAdapter) WithRuntimeTemplates(ctx context.Context, asse
 			return nil, nil, err
 		}
 		if !parserTemplateClass(asset.AssetClass) {
+			continue
+		}
+		if parsercatalog.EmbeddedReferencePackID(asset.AssetClass, asset.AssetID, asset.Revision, asset.Payload) != "" {
 			continue
 		}
 		var envelope struct {

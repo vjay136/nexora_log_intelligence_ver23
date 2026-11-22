@@ -1,0 +1,14 @@
+{
+  "release": "v23.0.0-7",
+  "baseline": "v23.0.0-6 / original v22.19.1-0 runtime source",
+  "publication_policy": "Build and verify locally, then upload identical bytes",
+  "phases": [
+    {"id": 1, "name": "Baseline and inventory", "gates": ["Record Git source revision", "Inspect actual Supabase metadata read-only", "Preserve installer modes 1-10 and mixed-role safeguards", "No option 11"]},
+    {"id": 2, "name": "Parser and API corrections", "gates": ["Exact sealed embedded pack compatibility", "Reject changed protected pack definitions", "Consistent catalog and runtime inventory", "Workspace requires nonempty independently reviewed expected output", "Actionable HTTP status and request ID"]},
+    {"id": 3, "name": "Versioned backup restore and sync", "gates": ["Exact snapshot and export hash", "Separate operator approval", "Stale and tampered proposal rejection", "Pre-restore snapshot and revision history retained", "Interrupted restore and restart recovery", "Exact controller materialization and client acknowledgement", "No credential or unrelated raw history inclusion"]},
+    {"id": 4, "name": "AI guidance and revision evidence", "gates": ["Ground route labels in real navigation", "Validate selected operation identifiers", "Versioned guidance context and evaluation metadata", "Provider invalid output and failure fallback", "No model-training claim or stored provider secrets"]},
+    {"id": 5, "name": "Qualification and stress", "gates": ["User SMTP sample and header variants", "Preserve flat final JSON and dynamic named keys", "Malformed input quarantine and no data loss", "Concurrent parser and API runs", "Full Linux Go suite, vet, selected race and KV fuzz", "Browser navigation and lifecycle controls", "Service restart, rollout, rollback and exact acknowledgements", "List tests and limits honestly"]},
+    {"id": 6, "name": "Build and release", "gates": ["Compiled runtime identity matches RPM release", "Deterministic RPM and Web assets", "Fresh archive extraction with LF checksums and executable modes", "Actual controller and client installers", "Mixed legacy role upgrade and preserved service enablement", "GitHub asset digests match local checksums"]}
+  ],
+  "limitations": ["Finite tests do not prove every possible log or environment", "Stored published state is not a client application acknowledgement", "Live AWS and real AI provider checks require reachable configured services", "Do not hide failing or unexecuted checks"]
+}

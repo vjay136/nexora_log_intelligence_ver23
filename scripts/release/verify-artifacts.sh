@@ -7,28 +7,28 @@ ROOT=${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 source "$ROOT/packaging/release.env"
 fail() { echo "artifact verification: $*" >&2; exit 1; }
 
-client="$ARTIFACT_DIR/nli_client_ver22.rpm"
-controller="$ARTIFACT_DIR/nli_controller_agent_ver22.rpm"
-web="$ARTIFACT_DIR/webview_ver22.zip"
-webapp="$ARTIFACT_DIR/webapp_ver22.zip"
+client="$ARTIFACT_DIR/nli_client_ver23.rpm"
+controller="$ARTIFACT_DIR/nli_controller_agent_ver23.rpm"
+web="$ARTIFACT_DIR/webview_ver23.zip"
+webapp="$ARTIFACT_DIR/webapp_ver23.zip"
 operator_files=(
-  "$ARTIFACT_DIR/install-controller-ver22.sh"
-  "$ARTIFACT_DIR/install-client-ver22.sh"
-  "$ARTIFACT_DIR/uninstall-controller-ver22.sh"
-  "$ARTIFACT_DIR/uninstall-client-ver22.sh"
+  "$ARTIFACT_DIR/install-controller-ver23.sh"
+  "$ARTIFACT_DIR/install-client-ver23.sh"
+  "$ARTIFACT_DIR/uninstall-controller-ver23.sh"
+  "$ARTIFACT_DIR/uninstall-client-ver23.sh"
 )
 aws_scripts=(
-  "$ARTIFACT_DIR/install-controller-aws-ver22.sh"
-  "$ARTIFACT_DIR/install-client-aws-ver22.sh"
-  "$ARTIFACT_DIR/install-controller-aws-cloudflare-ver22.sh"
-  "$ARTIFACT_DIR/aws-rhel-preflight-ver22.sh"
-  "$ARTIFACT_DIR/aws-security-group-plan-ver22.sh"
+  "$ARTIFACT_DIR/install-controller-aws-ver23.sh"
+  "$ARTIFACT_DIR/install-client-aws-ver23.sh"
+  "$ARTIFACT_DIR/install-controller-aws-cloudflare-ver23.sh"
+  "$ARTIFACT_DIR/aws-rhel-preflight-ver23.sh"
+  "$ARTIFACT_DIR/aws-security-group-plan-ver23.sh"
 )
 cloudflare_scripts=(
-  "$ARTIFACT_DIR/setup-cloudflare-tunnel-v22.sh"
-  "$ARTIFACT_DIR/verify-cloudflare-tunnel-v22.sh"
-  "$ARTIFACT_DIR/uninstall-cloudflare-tunnel-v22.sh"
-  "$ARTIFACT_DIR/cloudflare-quick-diagnosis-v22.sh"
+  "$ARTIFACT_DIR/setup-cloudflare-tunnel-v23.sh"
+  "$ARTIFACT_DIR/verify-cloudflare-tunnel-v23.sh"
+  "$ARTIFACT_DIR/uninstall-cloudflare-tunnel-v23.sh"
+  "$ARTIFACT_DIR/cloudflare-quick-diagnosis-v23.sh"
 )
 for file in "$webapp" "$client" "$controller" "$web" \
   "${aws_scripts[@]}" "${cloudflare_scripts[@]}" \
@@ -107,8 +107,8 @@ done
 # Exercise the exact operator path that previously rejected valid distro-suffixed
 # releases such as 2.el9. This verifies package identity, Ver22 version, release
 # syntax, architecture, and the bundle checksum without changing the host.
-bash "$bundle_dir/install-controller-ver22.sh" --verify-only --rpm "$bundle_dir/nli_controller_agent_ver22.rpm"
-bash "$bundle_dir/install-client-ver22.sh" --verify-only --rpm "$bundle_dir/nli_client_ver22.rpm"
+bash "$bundle_dir/install-controller-ver23.sh" --verify-only --rpm "$bundle_dir/nli_controller_agent_ver23.rpm"
+bash "$bundle_dir/install-client-ver23.sh" --verify-only --rpm "$bundle_dir/nli_client_ver23.rpm"
 
 client_payload=$(rpm -qpl "$client")
 controller_payload=$(rpm -qpl "$controller")
@@ -130,13 +130,13 @@ expected_assets=$(wc -l <"$ARTIFACT_DIR/WEBVIEW_SHA256SUMS")
 web_entries=$(unzip -Z1 "$web")
 zip_assets=$(grep -vc '/$' <<<"$web_entries")
 rpm_assets=$(rpm -qp --dump "$controller" | awk '$1 ~ "^/usr/share/nli/webview_ver21/" && $5 ~ /^010/ {count++} END {print count+0}')
-[[ $expected_assets -eq 11 && $expected_assets -eq $zip_assets && $expected_assets -eq $rpm_assets ]] || fail "WebView asset counts differ or include unexpected files: manifest=$expected_assets zip=$zip_assets rpm=$rpm_assets"
+[[ $expected_assets -eq 12 && $expected_assets -eq $zip_assets && $expected_assets -eq $rpm_assets ]] || fail "WebView asset counts differ or include unexpected files: manifest=$expected_assets zip=$zip_assets rpm=$rpm_assets"
 for forbidden in e2e.spec.js package.json playwright.config.js; do
   ! grep -Fq "/$forbidden" <<<"$web_entries" || fail "WebView ZIP contains development-only asset $forbidden"
   ! grep -Fq "/usr/share/nli/webview_ver21/$forbidden" <<<"$controller_payload" || fail "controller RPM contains development-only asset $forbidden"
 done
 while read -r expected relative; do
-  zip_hash=$(unzip -p "$web" "webview_ver22/$relative" | sha256sum | awk '{print $1}')
+  zip_hash=$(unzip -p "$web" "webview_ver23/$relative" | sha256sum | awk '{print $1}')
   rpm_hash=$(rpm -qp --dump "$controller" | awk -v path="/usr/share/nli/webview_ver21/$relative" '$1==path {print $4}')
   [[ $expected == "$zip_hash" && $expected == "$rpm_hash" ]] || fail "WebView asset mismatch: $relative"
 done <"$ARTIFACT_DIR/WEBVIEW_SHA256SUMS"

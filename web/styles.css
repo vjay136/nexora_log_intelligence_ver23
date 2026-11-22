@@ -426,3 +426,16 @@ button[data-ai-pending]::before {
   border-radius: 50%; animation: nli-refresh-spin .7s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) { button[data-ai-pending]::before { animation: none; } }
+
+.recovery-hash { display: inline-block; max-width: 43ch; overflow-wrap: anywhere; color: var(--text); }
+.recovery-checksums { margin: 0; }
+.recovery-checksums dd { margin: 0 0 .35rem; }
+.recovery-checksums dd:last-child { margin-bottom: 0; }
+.recovery-actions { margin-top: 12px; }
+.recovery-row-actions button { display: block; margin-bottom: 6px; }
+.recovery-form { max-width: 780px; }
+.recovery-evidence { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 10px; margin-bottom: 12px; }
+.recovery-evidence > div { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.recovery-evidence h4 { margin: 0 0 6px; color: var(--text); }
+.recovery-evidence p { margin: 4px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.recovery-evidence button { margin: 6px 0 0 6px; }

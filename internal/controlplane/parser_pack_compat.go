@@ -15,9 +15,9 @@ import (
 
 // runtimeParserPackForDocument accepts both the current Assurance envelope and
 // Parser Catalog records produced by earlier NLI releases. The returned bytes
-// always pass the strict client-side ParserPack loader. Unsupported legacy
-// shapes are rejected before publication instead of becoming an "active" pack
-// that can never be synchronized.
+// always pass the strict ParserPack loader. An existing active catalog record
+// may describe an embedded pack whose exact seal matches the running binary.
+// Only add-ons are eligible for transfer to a client generation.
 func runtimeParserPackForDocument(doc metastore.Document) (*parserpolicy.ParserPack, json.RawMessage, error) {
 	return runtimeParserPackForDocumentContext(context.Background(), doc)
 }
@@ -189,6 +189,19 @@ func normalizeRuntimeParserPackContext(ctx context.Context, doc metastore.Docume
 	if copyOfPack.ID != doc.ID {
 		return nil, nil, fmt.Errorf("runtime parser id %q does not match catalog id %q", copyOfPack.ID, doc.ID)
 	}
+	if familyprofile.IsBuiltinPackID(copyOfPack.ID) {
+		if doc.State == "active" || doc.State == "published" {
+			matches, err := familyprofile.MatchesEmbeddedPack(pack)
+			if err != nil {
+				return nil, nil, err
+			}
+			if matches {
+				encoded, err := json.Marshal(pack)
+				return pack, encoded, err
+			}
+		}
+		return nil, nil, fmt.Errorf("managed add-on identity conflicts with protected built-in parser %q", copyOfPack.ID)
+	}
 	if copyOfPack.Revision <= 0 {
 		copyOfPack.Revision = doc.Revision
 	}
@@ -277,12 +290,18 @@ func parserDocumentView(doc metastore.Document) map[string]any {
 			view["runtime_sync"] = map[string]any{"status": status, "reason": err.Error(), "catalog_id": doc.ID}
 			return view
 		} else {
-			view["runtime_sync"] = map[string]any{"status": status, "catalog_id": doc.ID, "parser_id": pack.ID, "parser_version": pack.Version}
+			runtimeSync := map[string]any{"status": status, "catalog_id": doc.ID, "parser_id": pack.ID, "parser_version": pack.Version}
+			view["runtime_sync"] = runtimeSync
 			if doc.State == "active" || doc.State == "published" {
 				status = "published"
 				view["state"] = status
 				view["status"] = status
-				view["runtime_sync"].(map[string]any)["status"] = status
+				runtimeSync["status"] = status
+				if familyprofile.IsBuiltinPackID(pack.ID) {
+					view["read_only"] = true
+					runtimeSync["distribution"] = "embedded"
+					runtimeSync["sha256"] = pack.SHA256
+				}
 			}
 			return view
 		}

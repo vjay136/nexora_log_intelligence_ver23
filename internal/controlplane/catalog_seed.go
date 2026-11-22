@@ -3,7 +3,6 @@ package controlplane
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 
 	parsercatalog "nexora.local/nli-v20/configs/catalog"
@@ -15,14 +14,6 @@ var catalogCollections = map[string]string{
 	"kv": "kv-config", "regex": "regex-patterns", "known-keys": "known-keys",
 	"static-patterns": "static-patterns", "templates": "templates", "projections": "projections",
 	"semantic-extraction": "semantic-extraction",
-}
-
-func builtinCatalogPayload(asset parsercatalog.Asset) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"name": asset.Name, "config": asset.Config,
-		"review_state": "active", "approved_by": "nli-v21-release",
-		"published_by": "nli-v21-release",
-	})
 }
 
 // Only the original release assets may be delivered on enrollment without
@@ -43,7 +34,7 @@ func isBuiltinEnrollmentBundle(bundle parserAssetBundle) bool {
 		if published.Revision != 1 {
 			return false
 		}
-		payload, err := builtinCatalogPayload(asset)
+		payload, err := parsercatalog.BuiltinPayload(asset)
 		if err != nil {
 			return false
 		}
@@ -68,7 +59,7 @@ func seedBuiltinCatalog(ctx context.Context, store metastore.Store) error {
 		if _, err := store.Get(ctx, collection, asset.ID, 0); err == nil {
 			continue // Preserve user revisions and edits across restarts.
 		}
-		payload, err := builtinCatalogPayload(asset)
+		payload, err := parsercatalog.BuiltinPayload(asset)
 		if err != nil {
 			return err
 		}

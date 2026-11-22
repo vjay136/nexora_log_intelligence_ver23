@@ -9,12 +9,14 @@
     ['ASSURANCE & RELEASE', 'quarantine-wizard', 'Quarantine Resolution Wizard', '⌁'],
     ['ASSURANCE & RELEASE', 'upes', 'UPES · Parser Recovery', '⟳'],
     ['ASSURANCE & RELEASE', 'rollouts', 'Approvals & Rollouts', '↗'],
+    ['ASSURANCE & RELEASE', 'backup-restore', 'Backup & Restore', '↶'],
     ['ASSURANCE & RELEASE', 'parser-sync', 'Parser Fleet Sync', '⇄'],
     ['ASSURANCE & RELEASE', 'artifacts', 'Signed Artifacts & Upgrades', '⬡'],
     ['ASSURANCE & RELEASE', 'parser-workspace', 'Parser Creation Workspace', '⚒'],
     ['ASSURANCE & RELEASE', 'nupire', 'NUPIRE / EGPE', '✧'],
     ['ASSURANCE & RELEASE', 'field-integrity', 'Field Integrity & Corpus Proof', '✓'],
     ['ASSURANCE & RELEASE', 'ai', 'AI Resolution & Providers', '✧'],
+    ['ASSURANCE & RELEASE', 'ai-guidance', 'AI Guidance & Revisions', '◎'],
     ['ASSURANCE & RELEASE', 'sample-history', 'Test Sample History', '◷'],
     ['PARSER MANAGEMENT', 'header-templates', 'Log Pattern Templates', '⌘'],
     ['PARSER MANAGEMENT', 'kv-templates', 'KV Pair Templates', '⌘'],
@@ -107,7 +109,8 @@
     'notification-config-form': 'users:manage',
     'ai-provider-form': 'system:health',
     'assurance-parser-form': 'assurance:save',
-    'parser-workspace-form': 'assurance:save',
+    'parser-workspace-form': 'parsers:manage',
+    'bundle-restore-form': 'rollout:trigger',
     'parser-helper-form': 'assurance:save',
     'gprs-parser-helper-form': 'assurance:save',
     'assurance-plan-form': 'parsers:manage',
@@ -130,6 +133,15 @@
     'download-upload-fixture': 'assurance:save',
     'parser-sync-verify': 'parsers:read',
     'parser-restore': 'parsers:manage',
+    'bundle-create-backup': 'parsers:manage',
+    'bundle-export': 'parsers:manage',
+    'bundle-approve-restore': 'rollout:approve',
+    'parser-workspace-load': 'parsers:manage',
+    'parser-workspace-delete': 'parsers:manage',
+    'parser-workspace-submit': 'parsers:manage',
+    'parser-workspace-preview': 'parse:preview',
+    'open-napi-synthesis': 'parsers:read',
+    'open-saved-parser': 'parsers:read',
     'parser-sync-retry': 'rollout:trigger',
     'parser-sync-rollout-propose': 'rollout:trigger',
     'recovery-open-helper': 'assurance:save',
@@ -178,7 +190,7 @@
   function applyPermissions() {
     Object.entries(FORM_PERMISSIONS).forEach(([id, permission]) => {
       document.querySelectorAll(`#${id}`).forEach(form => {
-        if (can(permission)) return;
+        if (can(permission) || form.dataset.permissionHidden === 'true') return;
         form.dataset.permissionHidden = 'true';
         form.insertAdjacentHTML('beforebegin', `<div class="callout permission-callout">Read-only for the <b>${esc(state.user?.role || 'current')}</b> role. This action requires <code>${esc(permission)}</code>.</div>`);
       });
@@ -189,6 +201,7 @@
     });
   }
   const page = el('page');
+  const runtimeParserList = data => Array.isArray(data) ? data : (Array.isArray(data?.parsers) ? data.parsers : []);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const pretty = value => JSON.stringify(value ?? {}, null, 2);
   const timeFormatter = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' });
@@ -238,7 +251,8 @@
   }
   const empty = text => `<div class="empty-state"><div><b>No records</b><p>${esc(text)}</p></div></div>`;
   const loading = () => `<div class="loading-state"><div><span></span><b>Loading live controller data</b></div></div>`;
-  const errorState = error => `<div class="error-state"><div><b>Request failed</b><p>${esc(error.message || error)}</p><button class="secondary" data-action="reload">Retry</button></div></div>`;
+  const requestFailure = error => `${error.message || error}${error.status && !String(error.message).includes(`HTTP ${error.status}`) ? ` (HTTP ${error.status})` : ''}${error.requestID ? ` · Request ID ${error.requestID}` : ''}`;
+  const errorState = error => `<div class="error-state"><div><b>Request failed</b><p>${esc(requestFailure(error))}</p><button class="secondary" data-action="reload">Retry</button></div></div>`;
   const card = (label, value, note = '') => `<article class="card metric"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value)}</div><div class="metric-note">${esc(note)}</div></article>`;
   const panel = (title, subtitle, body, actions = '') => `<section class="panel"><div class="section-head"><div><h3>${esc(title)}</h3><p>${esc(subtitle)}</p></div><div class="actions">${actions}</div></div>${body}</section>`;
   function sparkline(labels, values, color) {
@@ -885,7 +899,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     nav.addEventListener('click',event=>{const button=event.target.closest('[data-endpoint-tab]');if(button)activate(button.dataset.endpointTab);});activate('destinations');
   }
 
-  function renderPage(id, html) { if (state.user && state.page === id) { page.innerHTML = html; page.dataset.page = id; page.dataset.dirty = 'false'; addInputGuidance();queueMicrotask(nfiDecorate);if(['assurance','quarantine-wizard'].includes(id))setupAssuranceTabs();if(id==='outputs')setupEndpointTabs();if(id==='ai')setupAITabs();if(id==='monitoring')setupMonitoringTabs();if(['sync-fabric','nhle-monitor','napi-monitor','nal-monitor','upes'].includes(id))setupSubsystemTabs();decorateWorkspaceAI(); } }
+  function renderPage(id, html) { if (state.user && state.page === id) { page.innerHTML = html; page.dataset.page = id; page.dataset.dirty = 'false'; addInputGuidance();queueMicrotask(nfiDecorate);if(['assurance','quarantine-wizard'].includes(id))setupAssuranceTabs();if(id==='outputs')setupEndpointTabs();if(id==='ai')setupAITabs();if(id==='monitoring')setupMonitoringTabs();if(['sync-fabric','nhle-monitor','napi-monitor','nal-monitor','upes'].includes(id))setupSubsystemTabs();decorateWorkspaceAI();applyPermissions(); } }
   function mappingSuggestionButton(tab='Field mapping'){
     return `<button type="button" class="secondary" data-action="workspace-ai-auto" data-artifact="mapping" data-tab="${esc(tab)}" data-suggest-mapping>Suggest Mappings with Nexora AI</button>`;
   }
@@ -1327,8 +1341,9 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   }
   async function refreshNotificationBell() {
     if(!state.user||state.notificationRefreshInFlight)return;
+    const user=state.user;
     state.notificationRefreshInFlight=true;
-    try{const data=await api('/notifications?limit=30');state.controllerNotifications=data.notifications||[];renderNotificationBell();}
+    try{const data=await api('/notifications?limit=30',{timeoutMs:8000});if(state.user===user){state.controllerNotifications=data.notifications||[];renderNotificationBell();}}
     catch{/* Keep the last authoritative controller notification snapshot. */}
     finally{state.notificationRefreshInFlight=false;}
   }
@@ -1341,18 +1356,18 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       return {done:text=>notify(text,'success'),fail:text=>notify(text,'error')};
     }
     const entry={ message: String(message), type, at: new Date().toISOString() };
-    state.notifications.unshift(entry); state.notifications = state.notifications.slice(0, 30);
-    renderNotificationBell();
+    const repeat=type==='error'&&state.notifications.some(note=>note.type==='error'&&note.message===entry.message&&Date.now()-Date.parse(note.at)<60000);
+    if(!repeat){state.notifications.unshift(entry);state.notifications=state.notifications.slice(0,30);renderNotificationBell();}
     const node = document.createElement('div'); node.className = `toast${type === 'error' ? ' bad' : type === 'progress' ? ' progress' : type === 'warning' ? ' warning' : ''}`; node.setAttribute('role', type === 'error' ? 'alert' : 'status'); node.textContent = message;
     el('toast-region').append(node); setTimeout(() => node.remove(), 4500);
-    const finish=(text,result)=>{
+    const clear=()=>{
       if(type==='progress'){
         node.remove();
         state.notifications=state.notifications.filter(note=>note!==entry);
+        renderNotificationBell();
       }
-      return notify(text,result);
     };
-    return { done: text => finish(text, 'success'), fail: text => finish(text, 'error') };
+    return {clear,done:text=>{clear();return notify(text,'success');},fail:text=>{clear();return notify(text,'error');}};
   }
   const toast = (message, bad = false) => notify(message, bad ? 'error' : 'success');
   function replayGateMessage(error,exactBundleAcknowledged=false) {
@@ -1400,7 +1415,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     if ((options.method || 'GET') !== 'GET' || options.signal || options.headers || options.body !== undefined) {
       return requestAPI(path, options);
     }
-    const key = JSON.stringify([state.user?.username, path, options.timeoutMs, options.allowStale===true]);
+    const key = JSON.stringify([state.user?.username, path, options.timeoutMs, options.allowStale===true, options.asBlob===true]);
     const existing = inFlightReads.get(key);
     if (existing) return existing;
     const request = requestAPI(path, options).finally(() => {
@@ -1420,21 +1435,27 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     try { response = await fetchWithTimeout('/api/v1' + path, { method, credentials: 'same-origin', headers, body, signal: options.signal }, options.timeoutMs ?? 55000); }
     catch (error) { recordAPI(path, method, null, performance.now() - started, error.message); throw error; }
     const contentType = response.headers.get('content-type') || '';
+    if (options.asBlob && response.ok && contentType.includes('application/json')) {
+      recordAPI(path, method, response.status, performance.now()-started);
+      return response.blob();
+    }
     const data = contentType.includes('application/json') ? await response.json().catch(() => ({})) : {};
     const latency=performance.now()-started;
     const degraded=data?.snapshot_stale===true||path.split('?')[0]==='/admin/ai-provider'&&['degraded','unavailable','encryption_unavailable'].includes(data?.store_status);
-    const standby=response.ok&&data.provider_routing==='standby'&&typeof data.provider_id==='string'
+    const standby=response.ok&&data?.provider_routing==='standby'&&typeof data.provider_id==='string'
       ?`Nexora AI switched to standby profile ${data.provider_id}. Review the primary profile in AI Resolution & Providers.`:'';
     if(standby&&!state.notifications.some(note=>note.message===standby&&Date.now()-Date.parse(note.at)<60000)){
       notify(standby,'warning');
     }
-    const mappingOutcome=standby||(path==='/assurance/mapping-preview'&&data.passed===false?'Mapping rejected by native validation'
-      :data.proposal_origin==='native_fallback'?'Verified native fallback returned':'');
-    recordAPI(path, method, response.status, latency, data?.snapshot_stale===true?'Serving last confirmed metadata snapshot':degraded?'Provider storage needs attention':mappingOutcome||(response.ok?'':response.statusText),degraded);
+    const mappingOutcome=standby||(path==='/assurance/mapping-preview'&&data?.passed===false?'Mapping rejected by native validation'
+      :data?.proposal_origin==='native_fallback'?'Verified native fallback returned':'');
+    const requestID=data?.request_id||response.headers.get('x-request-id');
+    const outcome=data?.snapshot_stale===true?'Serving last confirmed metadata snapshot':degraded?'Provider storage needs attention':mappingOutcome||(response.ok?'':response.statusText);
+    recordAPI(path, method, response.status, latency, outcome,degraded,!response.ok?requestID:'');
     if ([405, 501].includes(response.status) || (!contentType.includes('application/json') && !response.ok && response.status<500)) throw new Error(CONTROLLER_REQUIRED);
     if (response.status === 401 && path !== '/auth/login') { signOut(false); throw new Error('Session expired'); }
-    if (!response.ok) { const error=new Error(data.error || (response.status===502?'The request gateway could not reach the controller. Check the controller connection and retry.':response.status===504?'The request timed out. Check the controller connection and retry.':`Request failed (HTTP ${response.status}).`));error.status=response.status;error.details=data;throw error; }
-    if (!contentType.includes('application/json')) throw new Error('The controller returned an invalid API response.');
+    if (!response.ok) { const error=new Error(data?.error || (response.status===502?'The request gateway could not reach the controller. Check the controller connection and retry.':response.status===504?'The request timed out. Check the controller connection and retry.':`Request failed (HTTP ${response.status}).`));error.status=response.status;error.requestID=requestID;error.details=data;throw error; }
+    if (!contentType.includes('application/json') || options.asBlob) throw new Error('The controller returned an invalid API response.');
     if (data?.snapshot_stale===true && !options.allowStale) {
       const error=new Error(data.snapshot_error || 'Live controller metadata is temporarily unavailable.');
       error.status=503;
@@ -1442,9 +1463,9 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     }
     return data;
   }
-  function recordAPI(path, method, status, latency, error = '', degraded=false) {
+  function recordAPI(path, method, status, latency, error = '', degraded=false, requestID='') {
     const safePath = String(path).split('?')[0].replace(/\/[0-9a-f]{8}-[0-9a-f-]{27,}/ig, '/{id}').replace(/\/[A-Za-z0-9_-]{24,}(?=\/|$)/g, '/{id}');
-    state.apiHistory.unshift({ path: safePath, method, status, degraded, latency: Math.round(latency), error: String(error || '').slice(0, 180), at: new Date().toISOString() });
+    state.apiHistory.unshift({ path: safePath, method, status, degraded, latency: Math.round(latency), error: String(error || '').slice(0, 180), requestID:String(requestID||'').slice(0,96), at: new Date().toISOString() });
     state.apiHistory.length = Math.min(state.apiHistory.length, 500);
   }
   function parseJSON(value, label) { try { return JSON.parse(value); } catch (error) { throw new Error(`${label}: ${error.message}`); } }
@@ -1627,6 +1648,24 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   }
   const refreshApprovalBadge = refreshNavigationBadges;
   function markActive() { document.querySelectorAll('.nav-item').forEach(node => node.classList.toggle('active', node.dataset.page === state.page)); }
+  function visitWorkspace(id) {
+    if (TITLES[id] && location.hash.slice(1) !== id) history.pushState(null,'',`#${id}`);
+    return navigate(id);
+  }
+  function selectedWorkspaceTab() {
+    const tab=page.querySelector('[role=tab][aria-selected=true]');
+    return tab ? {id:tab.id,label:tab.textContent.trim()} : null;
+  }
+  function restoreWorkspaceTab(workspace, tab) {
+    if (!tab || state.page!==workspace) return;
+    const match=tab.id ? page.querySelector(`#${CSS.escape(tab.id)}`) : [...page.querySelectorAll('[role=tab]')].find(item=>item.textContent.trim()===tab.label);
+    match?.click();
+  }
+  async function refreshWorkspace() {
+    const workspace=state.page,tab=selectedWorkspaceTab();
+    await navigate(workspace);
+    restoreWorkspaceTab(workspace,tab);
+  }
   async function navigate(id) {
     if (!state.user) return;
     state.page = TITLES[id] ? id : 'operations';
@@ -1645,7 +1684,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       await LOADERS[requestedPage]();
       refreshNavigationBadges();
       if (state.page === requestedPage && state.user) { applyPermissions(); state.loadedAt = Date.now(); if(SYNC_PAGES.has(requestedPage))state.sync.renderedSignature=syncRenderSignature(); updateFreshness(); }
-    } catch (error) { if (state.page === requestedPage && state.user) { renderPage(requestedPage,errorState(error));applyPermissions();notify(`${TITLES[requestedPage]} could not refresh: ${error.message}`, 'error'); } }
+    } catch (error) { if (state.navigationRequest === navigation && state.user) renderPage(requestedPage,errorState(error)); }
     finally {
       if (state.navigationRequest === navigation) {
         state.loadingPage = false;
@@ -1816,7 +1855,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     const cards=defs.cards.map(([label,key,note,unit=''])=>subsystemMetric(label,key.endsWith('_at')&&domain[key]?time(domain[key]):domain[key],note,unit,/fail|quarant|queue/.test(key)&&Number(domain[key])?'amber':'blue')).join('');
     const activity=defs.key==='nhle'?renderStreamRows(sources):`<pre class="json-output subsystem-json">${esc(pretty(domain))}</pre>`;
     const freshnessRows=(defs.key==='nhle'?sources:[]).map(item=>`<tr><td>${esc(item.node_id||'—')}</td><td class="mono">${esc(item.source||defs.short)}</td><td>${syncStatusBadge(item.freshness||status)}</td><td>${metricText(item.freshness_age_ms,' ms')}</td><td>${esc(item.freshness_reason||'Within measured target')}</td><td>${time(item.controller_received_at||item.updated_at)}</td></tr>`);
-    renderPage(kind,`<div class="dashboard-intro subsystem-hero"><div><p class="eyebrow">Canonical NURSF subscriber · ${defs.short}</p><h1>${defs.name}</h1><p><b>${defs.short}</b> means <b>${defs.name}</b>. ${defs.description} All measurements come from revision ${number(snapshot.revision)} of the shared controller state.</p></div><div class="subsystem-state">${syncStatusBadge(status)}<small>Updated ${time(updated)}</small></div></div>${subsystemNav()}<section data-subsystem-panel="overview"><div class="dashboard-kpi-strip subsystem-kpis">${cards}</div>${panel('Canonical subsystem state','The same revision is consumed by Command Center, synchronization diagnostics, and every subsystem view.',`<div class="sync-contract"><span>Schema <b>${esc(snapshot.schema_version||'unavailable')}</b></span><span>Revision <b>${number(snapshot.revision)}</b></span><span>Target <b>${metricText(snapshot.target_interval_ms,' ms')}</b></span><span>Browser apply <b>${metricText(state.sync.browserDelayMs,' ms')}</b></span></div>`)}${orchestrationPanel(snapshot)}${subsystemGlossary()}</section><section data-subsystem-panel="activity">${panel(`${defs.short} live activity`,'Current bounded metadata from the canonical synchronization stream.',activity)}</section><section data-subsystem-panel="freshness">${panel('Measured freshness','Missing values remain unavailable; stale last-known values are labelled instead of displayed as healthy zero.',freshnessRows.length?table(['Node','Source / subsystem','State','Age','Reason','Controller received'],freshnessRows):`<div class="grid cols-3">${subsystemMetric('Subsystem state',syncStatus(status),'Controller classification')}${subsystemMetric('Updated',updated?time(updated):null,'Authoritative timestamp')}${subsystemMetric('Browser apply',state.sync.browserDelayMs,'Measured after SSE delivery',' ms')}</div>`)}</section><section data-subsystem-panel="diagnostics">${diagnosticsPanel(defs.short)}</section>`);
+    renderPage(kind,`<div class="dashboard-intro subsystem-hero"><div><p class="eyebrow">Canonical NURSF subscriber · ${defs.short}</p><h1>${defs.name}</h1><p><b>${defs.short}</b> means <b>${defs.name}</b>. ${defs.description} All measurements come from revision ${number(snapshot.revision)} of the shared controller state.</p></div><div class="subsystem-state">${syncStatusBadge(status)}<small>Updated ${time(updated)}</small></div></div>${defs.key==='napi'?'<div class="actions recovery-actions"><button class="secondary" type="button" data-action="open-napi-synthesis">Open NAPI Synthesis</button></div>':''}${subsystemNav()}<section data-subsystem-panel="overview"><div class="dashboard-kpi-strip subsystem-kpis">${cards}</div>${panel('Canonical subsystem state','The same revision is consumed by Command Center, synchronization diagnostics, and every subsystem view.',`<div class="sync-contract"><span>Schema <b>${esc(snapshot.schema_version||'unavailable')}</b></span><span>Revision <b>${number(snapshot.revision)}</b></span><span>Target <b>${metricText(snapshot.target_interval_ms,' ms')}</b></span><span>Browser apply <b>${metricText(state.sync.browserDelayMs,' ms')}</b></span></div>`)}${orchestrationPanel(snapshot)}${subsystemGlossary()}</section><section data-subsystem-panel="activity">${panel(`${defs.short} live activity`,'Current bounded metadata from the canonical synchronization stream.',activity)}</section><section data-subsystem-panel="freshness">${panel('Measured freshness','Missing values remain unavailable; stale last-known values are labelled instead of displayed as healthy zero.',freshnessRows.length?table(['Node','Source / subsystem','State','Age','Reason','Controller received'],freshnessRows):`<div class="grid cols-3">${subsystemMetric('Subsystem state',syncStatus(status),'Controller classification')}${subsystemMetric('Updated',updated?time(updated):null,'Authoritative timestamp')}${subsystemMetric('Browser apply',state.sync.browserDelayMs,'Measured after SSE delivery',' ms')}</div>`)}</section><section data-subsystem-panel="diagnostics">${diagnosticsPanel(defs.short)}</section>`);
   }
   function renderSyncFabric() {
     const snapshot=state.sync.snapshot||{},aggregate=snapshot.aggregate||{},diagnostics=snapshot.diagnostics||{},sources=snapshot.sources||[],states=['live','delayed','stale','disconnected'];
@@ -2102,6 +2141,16 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   function assuranceParserSelect(runtimeParsers, selected='auto', name='parser_id') { const parsers=[...(runtimeParsers||[])].sort((a,b)=>String(a.id).localeCompare(String(b.id)));return `<select name="${esc(name)}" title="Automatic uses the full approved parser pipeline. Exact choices run only that live runtime parser."><option value="auto" ${!selected||selected==='auto'?'selected':''}>Automatic parser detection · evaluate all eligible parsers</option>${parsers.map(item=>`<option value="${esc(item.id)}" ${item.id===selected?'selected':''}>${esc(item.id)} · ${esc(item.description||item.format||'runtime parser')}</option>`).join('')}</select>`; }
   function selectedAssuranceService(data) { const value=String(data.service||'auto').trim();if(value!=='custom')return value;const custom=String(data.custom_service||'').trim();if(!custom)throw new Error('Enter the custom parser family name');if(!/^[A-Za-z0-9._-]{1,64}$/.test(custom))throw new Error('Custom family must use 1..64 letters, digits, dots, underscores, or hyphens');return custom; }
 
+  function renderNAPISynthesisResult(result) {
+    if (!result) return '<div class="empty-state">No synthesis has run in this browser session.</div>';
+    const savedDraft=result.draft_created===true && result.id && result.revision;
+    const nupire=result.nupire;
+    const draftLink=savedDraft?`<button type="button" class="secondary" data-action="open-saved-parser" data-id="${esc(result.id)}" data-revision="${esc(result.revision)}">Open ${esc(result.id)} revision ${esc(result.revision)}</button>`:'';
+    const evidenceLink=nupire?.id?`<button type="button" class="secondary" data-action="open-napi-evidence" data-id="${esc(nupire.id)}">Inspect linked NUPIRE evidence</button>`:'';
+    const nextAction=result.next_action?`<div class="callout" role="status">${esc(result.next_action)}</div>`:'';
+    return panel('Latest synthesis evidence',savedDraft?'The parser is stored as a draft. The linked NUPIRE record tracks evidence for this artifact.':'Review the candidate evaluation and correct the blocking evidence.',`${nextAction}<pre class="json-output" data-testid="napi-synthesis-result">${esc(pretty(result))}</pre>`,draftLink+evidenceLink);
+  }
+
   async function loadAssurance({restoreQRW=false,pageID='assurance'}={}) {
     const read = path => api(path, { timeoutMs: 12000 });
     const [casesResult, parsersResult, historyResult, runtimeResult, packsResult, syncResult, fleetResult, aiProposalsResult, plansResult, runsResult, repairQueueResult, quarantineHistoryResult, rolloutsResult] = await Promise.allSettled([read('/assurance/cases'), read('/assurance/parsers'), read('/assurance/history'), read('/parsers'), read('/parser-packs'), read('/parser-sync'), read('/fleet/sync'), read('/assurance/ai-proposals'), read('/assurance/plans'), read('/assurance/runs'), read('/quarantine/records?limit=100'), read('/quarantine/history?limit=100'), read('/rollouts')]);
@@ -2109,8 +2158,11 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     const cases = casesResult.status === 'fulfilled' ? casesResult.value : null;
     const parsers = parsersResult.status === 'fulfilled' ? parsersResult.value.parsers || [] : [];
     const history = historyResult.status === 'fulfilled' ? historyResult.value.events || [] : [];
-    const runtimeParsers = runtimeResult.status === 'fulfilled' ? runtimeResult.value.parsers || runtimeResult.value || [] : [];
+    const runtimeParsers = runtimeParserList(runtimeResult.value);
     const managedPacks = packsResult.status === 'fulfilled' ? packsResult.value.parser_packs || [] : [];
+    const parserIDs=new Set([...parsers,...managedPacks].map(item=>item.id));
+    let napiDraftID='napi-guided-parser';
+    for(let sequence=2;parserIDs.has(napiDraftID);sequence++)napiDraftID=`napi-guided-parser-${sequence}`;
     const syncAssets = syncResult.status === 'fulfilled' ? syncResult.value.assets || [] : [];
     const syncClients = syncResult.status === 'fulfilled' ? syncResult.value.clients || [] : [];
     const syncTelemetry = syncResult.status === 'fulfilled' ? syncResult.value.telemetry || null : null;
@@ -2140,7 +2192,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     const defaultPlan={objective:'Certify a parser revision and its bounded runtime contracts',environment:'synthetic-lab',dataset:'retained-fixture-id',target_version:'21.0.0',parser_versions:['imap@1'],required_features:['parser-assurance'],scenarios:['parser-regression','failure-recovery','replay','destination-integration','performance','security'],expected_results:['all local checks pass'],pass_criteria:['zero unexpected quarantine','all expected fields equal','bounded evidence contains no raw fixture'],timeouts:{run_seconds:60},resource_limits:{max_records:1000},cleanup:['purge transient sample'],evidence:['result JSON','parser revision hash','scenario checks'],approvals:['parser-engineer']};
     const plansPanel=panel('Versioned Assurance test plans','Build bounded, declarative plans for repeatable parser certification. Each save creates an immutable revision; execution and production promotion remain separately approval gated.',`<form id="assurance-plan-form" class="form-grid"><input type="hidden" name="edit_id"><label class="field">Plan ID<input name="id" required value="parser-certification"></label><label class="field">Name<input name="name" required value="Parser certification"></label><label class="field">Version<input name="version" required value="1.0.0"></label><label class="field wide">Declarative plan JSON<textarea name="plan" required>${esc(pretty(defaultPlan))}</textarea></label><div class="actions wide"><button class="primary" type="submit">Save test-plan revision</button><button class="secondary" type="button" data-action="assurance-plan-reset">New plan</button></div></form>${plansResult.status==='rejected'?`<div class="callout warn">Test plans unavailable: ${esc(plansResult.reason.message)}</div>`:table(['Plan','Version','Revision','State','Actions'],plans.map(doc=>{const p=doc.payload||{};return `<tr><td><b>${esc(p.name||doc.id)}</b><br><small class="mono">${esc(doc.id)}</small></td><td>${esc(p.version||'—')}</td><td>${number(doc.revision)}</td><td>${badge(doc.state||'active')}</td><td><button class="secondary small" data-action="assurance-plan-edit" data-id="${esc(doc.id)}">Edit revision</button> <button class="secondary small" data-action="assurance-plan-download" data-id="${esc(doc.id)}">Download JSON</button> <button class="danger small" data-action="assurance-plan-delete" data-id="${esc(doc.id)}">Delete</button></td></tr>`;}),'No Assurance test plans have been created yet.')}`);
     const napiDiscovery=[{raw:'level=INFO user=alice',service:'auto',desired:{level:'INFO',user:'alice'}},{raw:'level=WARN user=bob',service:'auto',desired:{level:'WARN',user:'bob'}}],napiHeldOut=[{raw:'level=ERROR user=carol',service:'auto',desired:{level:'ERROR',user:'carol'}}];
-    const napiPanel=panel('NAPI parser synthesis','Generate bounded declarative candidates from separate discovery and held-out samples. The controller performs RE2 safety and negative false-positive checks, stores no raw samples, and saves only a review-gated draft.',`<form id="napi-synthesis-form" class="form-grid" data-testid="napi-synthesis-form"><label class="field">Parser ID<input name="id" value="napi-guided-parser" required></label><label class="field">Name<input name="name" value="NAPI guided parser" required></label><label class="field">Version<input name="version" value="0.1.0" required></label><label class="field">Candidate limit<input name="candidate_limit" type="number" min="1" max="8" value="4" required></label><label class="field wide">Discovery samples JSON<textarea name="discovery" required>${esc(pretty(napiDiscovery))}</textarea></label><label class="field wide">Independent held-out samples JSON<textarea name="held_out" required>${esc(pretty(napiHeldOut))}</textarea></label><label class="field wide">Negative raw samples JSON<textarea name="negative">[]</textarea></label><div class="actions wide"><button class="primary" type="submit">Synthesize and validate draft</button></div></form>${state.lastNAPI?panel('Latest synthesis evidence','Review the selected candidate, safety report, validation metrics, provenance and limitations. Production activation still requires independent approval.',`<pre class="json-output" data-testid="napi-synthesis-result">${esc(pretty(state.lastNAPI))}</pre>`):'<div class="empty-state">No synthesis has run in this browser session.</div>'}`);
+    const napiPanel=panel('NAPI parser synthesis','Generate bounded declarative candidates from separate discovery and held-out samples. The controller performs RE2 safety and negative false-positive checks, stores no raw samples, and saves only a review-gated draft.',`<form id="napi-synthesis-form" class="form-grid" data-testid="napi-synthesis-form"><label class="field">Parser ID<input name="id" value="${esc(napiDraftID)}" required></label><label class="field">Name<input name="name" value="NAPI guided parser" required></label><label class="field">Version<input name="version" value="0.1.0" required></label><label class="field">Candidate limit<input name="candidate_limit" type="number" min="1" max="8" value="4" required></label><label class="field wide">Discovery samples JSON<textarea name="discovery" required>${esc(pretty(napiDiscovery))}</textarea></label><label class="field wide">Independent held-out samples JSON<textarea name="held_out" required>${esc(pretty(napiHeldOut))}</textarea></label><label class="field wide">Negative raw samples JSON<textarea name="negative">[]</textarea></label><div class="actions wide"><button class="primary" type="submit">Synthesize and validate draft</button></div><div class="callout warn wide" data-napi-inline-result role="status" hidden></div></form>${renderNAPISynthesisResult(state.lastNAPI)}`);
     const runScenarioOptions=[['parser-regression','Parser regression'],['failure-recovery','Failure recovery'],['replay','Deterministic replay'],['destination-integration','Destination JSON contract'],['performance','Bounded performance'],['security','Fixture privacy and integrity']];
     const recovery = state.quarantineDiagnosis;
     const recoverySource = recovery && state.lastAssurance?.request?.source === `quarantine:${recovery.id}`;
@@ -2152,7 +2204,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     const recoveryStep = (label, done, detail) => `<li class="recovery-step ${done ? 'done' : ''}"><b>${done ? '✓' : '○'} ${esc(label)}</b><small>${esc(detail)}</small></li>`;
     const recoveryPanel = recovery ? panel('Recovery Workspace',`Evidence ${recovery.id} · SHA-256 ${String(recovery.sha256||'').slice(0,16)} · target ${recoveryNode||'unknown node'}. Status below comes from the selected evidence, saved Assurance parser state, and current Fleet Sync snapshot.`, `<ol class="recovery-steps">${recoveryStep('Inspect retained evidence',!!recovery.id,recovery.record?.raw_available?'Retained evidence is available under existing access controls.':'Evidence metadata only; exact input was not retained.')}${recoveryStep('Diagnose and test',!!(recoverySource&&state.lastAssurance?.result),recoverySource?`Last test ${state.lastAssurance?.result?.passed===true?'passed':state.lastAssurance?.result?.passed===false?'completed with findings':'not complete'}.`:'Run the selected evidence through Assurance.')}${recoveryStep('Save and submit parser',!!recoveryParser&&['in_review','approved','published'].includes(recoveryParser.state),recoveryParser?`${recoveryParser.id} · ${recoveryParser.state} · revision ${recoveryParser.revision||'—'}`:'No linked saved parser draft yet.')}${recoveryStep('Independent review',!!recoveryParser&&['approved','published'].includes(recoveryParser.state),recoveryParser?.state==='rejected'?'Rejected; revise the candidate before resubmitting.':recoveryParser?.state==='in_review'?'Awaiting a reviewer other than the author.':'Approval is recorded only after an independent reviewer acts.')}${recoveryStep('Publish and roll out',!!recoveryAsset,recoveryAsset?`Published revision ${recoveryAsset.desired?.revision||'—'} · ${String(recoveryAsset.desired?.sha256||'').slice(0,16)}; rollout approval follows existing policy.`:'No published runtime revision yet.')}${recoveryStep('Verify and replay',recoveryApplied,recoveryApplied?'Origin client acknowledged the exact desired bundle hash; replay can be requested.':`Replay stays blocked until ${recoveryNode||'the origin client'} acknowledges the published bundle.`)}</ol><div class="actions"><button class="secondary" type="button" data-action="recovery-open-helper">Edit or test parser</button>${recoveryParser?`<button class="secondary" type="button" data-action="navigate" data-page="parser-sync">Open Fleet Sync</button>`:''}<button class="secondary" type="button" data-action="navigate" data-page="unknowns">Return to quarantine evidence</button>${recoveryApplied?`<button class="primary" type="button" data-action="recovery-prepare-replay" data-id="${esc(recovery.id)}" data-node="${esc(recoveryNode)}">Prepare replay</button>`:''}</div><p class="hint">Publish, review, rollout, and replay each use their existing audited API and permission gate. This workspace does not mark any step complete optimistically.</p>`) : '';
     const runsPanel=panel('Assurance runs','Execute a bounded local scenario against an exact saved plan revision and retained encrypted fixture. Destination checks never contact production endpoints.',`<form id="assurance-run-form" class="form-grid" data-testid="assurance-run-form"><label class="field">Saved plan revision<select name="plan" required data-testid="assurance-run-plan">${plans.map(doc=>`<option value="${esc(doc.id)}@${number(doc.revision)}">${esc(doc.payload?.name||doc.id)} · ${esc(doc.id)} · revision ${number(doc.revision)} · ${esc(doc.sha256||'hash unavailable')}</option>`).join('')}</select></label><label class="field">Retained fixture<select name="case_id" required data-testid="assurance-run-fixture">${fixtures.map(doc=>`<option value="${esc(doc.id)}">${esc(doc.payload?.name||doc.name||doc.id)} · ${esc(doc.id)}</option>`).join('')}</select></label><label class="field">Scenario<select name="scenario" data-testid="assurance-run-scenario">${runScenarioOptions.map(([value,label])=>`<option value="${value}">${label}</option>`).join('')}</select><span class="hint">The selected scenario must be declared by the exact saved plan revision.</span></label><div class="actions wide"><button class="primary" type="submit" data-testid="assurance-run-start" ${plans.length&&fixtures.length?'':'disabled'}>Start bounded run</button></div>${!plans.length||!fixtures.length?'<p class="hint wide">Save a plan and retain a fixture before starting a run.</p>':''}</form>${runsResult.status==='rejected'?`<div class="callout warn">Runs unavailable: ${esc(runsResult.reason.message)}</div>`:table(['Run','Scenario / state','Plan / revision / hash','Evidence','Timestamps','Actions'],runs.map(doc=>{const r=doc.payload||doc,e=r.evidence||{};return `<tr data-testid="assurance-run-row"><td class="mono">${esc(r.id||doc.id)}</td><td>${esc(r.scenario||'—')}<br>${badge(r.state||doc.state)}</td><td>${esc(r.plan_id)} · r${number(r.plan_revision)}<br><small class="mono">${esc(r.plan_sha256||'')}</small></td><td>${esc(e.raw_sha256||'—')}<br>${e.passed===true?'passed':e.passed===false?'failed':'—'} · score ${esc(e.score??'—')}${e.checks?`<details><summary>Scenario checks</summary><pre class="json-output">${esc(pretty(e.checks))}</pre></details>`:''}</td><td>Queued ${esc(r.queued_at||'—')}<br>Started ${esc(r.started_at||'—')}<br>Finished ${esc(r.finished_at||'—')}</td><td><button class="secondary small" data-action="assurance-run-download" data-id="${esc(r.id||doc.id)}">Download JSON</button>${['queued','running'].includes(r.state||doc.state)?` <button class="danger small" data-action="assurance-run-cancel" data-id="${esc(r.id||doc.id)}">Cancel</button>`:''}</td></tr>`;}),'No persisted Assurance runs yet.')}`);
-    renderPage(pageID, `<div class="callout">Workflow: analyze representative raw lines → validate a mixed-format corpus → create a parser draft → submit for independent approval → publish to build the parser pack and start fleet sync. The Assurance corpus is the cases you provide; Field Integrity &amp; Corpus Proof is the separate, fixed 728-record release corpus bundled with the controller.</div><div class="grid cols-4">${card('Live runtime parsers',number(runtimeParsers.length),'Selectable exact parser definitions')}${card('Managed parser packs',number(managedPacks.length),`${number(packStates.active||0)} active · ${number(packStates.approved||0)} approved`)}${card('Assurance drafts',number(parsers.length),`${number(packStates.in_review||0)} managed packs in review`)}${card('Fleet parser sync',`${number(alignedClients)} / ${number(fleetNodes.length)}`,`${number(syncAssets.length)} managed assets · aligned clients`)}</div><div class="callout">Automatic parser detection evaluates every eligible approved ParserPack and runtime strategy. Exact parser selection runs only the chosen live runtime parser. Custom families and new parser definitions remain test-only until review, approval, publish, and client acknowledgement.</div><div class="assurance-subnav" aria-label="Assurance workflows">${[['Analyse','Production parser assurance'],['Corpus reports','Multi-log corpus validation'],['Parser drafts','Assurance parser workflow'],['Review Queue','Revisioned parser proposals'],['History','Parser assurance history'],['Fixtures','Encrypted retained fixtures'],['Parser Creation Helper','Parser helper'],['NAPI Synthesis','NAPI parser synthesis'],['Test Plans','Versioned Assurance test plans'],['Runs','Assurance runs']].map(([label,title])=>`<button class="tab" type="button" data-title="${esc(title)}">${esc(label)}</button>`).join('')}</div>${panel('Parser Creation helper','Generate and edit a review-gated declarative draft from sample lines.',`<form id="parser-helper-form" class="form-grid"><input type="hidden" name="edit_id"><label class="field wide">Sample lines<textarea name="samples" required data-testid="parser-helper-samples">${esc(state.lastAssurance?.request?.raw || '')}</textarea></label><button type="button" class="secondary" data-action="parser-helper-generate">Generate parser draft</button><label class="field">Draft name<input name="name" required value="guided-parser-draft"></label><label class="field">Version<input name="version" required value="0.1.0"></label><div id="parser-helper-overview" data-parser-overview class="wide">Run Assurance or paste sample lines.</div><div id="parser-helper-details" data-parser-helper-details class="parser-helper-details wide" aria-live="polite"></div><label class="field wide">Complete generated parser JSON<textarea name="parser" required>{}</textarea></label><label class="field wide">Validation cases JSON<textarea name="cases" required>[]</textarea></label><div class="actions wide"><button type="button" class="secondary" data-action="parser-helper-validate">Validate draft</button><button type="submit" class="primary">Save review-gated draft</button></div><div id="parser-helper-status" data-parser-helper-status class="wide" role="status"></div></form>`)}${panel('Upload log samples','Upload log/text files or an archive for controller-side inspection. Archive extraction and size limits are enforced by the controller.',`<form id="assurance-upload-form" class="form-grid"><label class="field">Parser family${assuranceFamilySelect('service','auto')}<span class="hint">ⓘ Automatic evaluates all eligible approved families.</span></label><label class="field">Custom family<input name="custom_service" placeholder="used only when Custom family is selected" maxlength="64"></label><label class="field wide">Parser name${assuranceParserSelect(runtimeParsers,'auto')}<span class="hint">ⓘ Choose Automatic for the full pipeline or one exact live runtime parser.</span></label><label class="field">Sample file<input name="file" type="file" accept=".log,.txt,.out,.json,.jsonl,.csv,.zip,.tar,.gz,.tgz,.tar.gz" required title="Supported sample formats depend on controller archive limits. Never upload secrets or production data unless approved."><span class="hint">ⓘ .log, .txt, .json, .jsonl, .csv, .zip, .tar, .gz. Controller applies archive and size limits.</span></label><div class="actions wide"><button class="primary" type="submit">Analyze uploaded sample</button><small class="hint">The controller returns a report; original log content is transient unless retained as a fixture.</small></div></form>`)}<div class="split assurance-workspace"><section class="panel"><div class="section-head"><div><h3>Production parser assurance</h3><p>Runs the production parser pipeline against raw single or multiline logs. Raw payloads are transient unless explicitly retained.</p></div></div><form id="assurance-form" class="form-grid" data-testid="assurance-form"><label class="field wide"><span><input type="checkbox" name="retain_test_sample" value="true" ${state.sampleHistoryEnabled?'checked':''} ${can('assurance:save')?'':'disabled'}> Save an encrypted copy to Test Sample History</span></label><label class="field wide">Raw or multiline input<textarea name="raw" required data-testid="assurance-raw" title="Paste one or more log records. Multiline records are preserved exactly; use a representative sample without secrets.">${esc(state.lastAssurance?.request?.raw || '')}</textarea><span class="hint">ⓘ Paste representative records, including continuations. Secrets and tokens should be redacted.</span></label><label class="field">Parser family${assuranceFamilySelect('service',selectedFamily)}</label><label class="field">Custom family<input name="custom_service" placeholder="used only when Custom family is selected" maxlength="64"></label><label class="field wide">Parser name${assuranceParserSelect(runtimeParsers,selectedParser)}<span class="hint">ⓘ Automatic runs all eligible approved parsers; an exact choice runs only that live parser.</span></label><label class="field">Source<input name="source" value="${esc(state.lastAssurance?.request?.source || '')}" placeholder="optional source family" title="Optional source name or integration. It provides context and does not execute imported parser code."></label><label class="field wide">Exact desired JSON <span class="hint">Leave {} for parse-only validation.</span><textarea name="desired">${esc(pretty(state.lastAssurance?.request?.desired || {}))}</textarea><span class="hint">ⓘ Desired output is the exact field/value contract used for comparison. Extra or missing fields are reported.</span></label><label class="field wide">Field mapping JSON<textarea name="mapping" title="Optional JSON object mapping source keys to canonical output field names.">${esc(pretty(state.lastAssurance?.request?.field_mapping || {}))}</textarea><span class="hint">ⓘ Example: {"src_ip":"source_ip","ts":"timestamp"}. Leave {} to preserve inferred field names.</span></label><div class="actions wide"><button class="primary" type="submit">Run assurance</button><button class="secondary" type="button" data-action="clear-assurance" ${current ? '' : 'disabled'}>Clear manually</button><button class="secondary" type="button" data-action="download-assurance" ${current ? '' : 'disabled'}>Download result JSON</button></div></form></section><section id="assurance-result">${current ? renderAssurance(current) : empty('Run a case to inspect complete output, field/type/count differences, source spans, and every parser stage.')}</section></div>${panel('Multi-log corpus validation','Paste a JSON array of cases to validate mixed log formats in one run. Each case uses the production parser.',`<form id="assurance-corpus-form" class="form-grid"><label class="field">Default parser family${assuranceFamilySelect('service','auto')}</label><label class="field">Custom family<input name="custom_service" placeholder="used only when Custom family is selected" maxlength="64"></label><label class="field wide">Default parser name${assuranceParserSelect(runtimeParsers,'auto')}<span class="hint">ⓘ Defaults apply to cases that do not declare service or parser_id. Individual JSON cases may override either value.</span></label><label class="field wide">Cases JSON<textarea name="cases" required>[{\"raw\":\"service=example user=operator\",\"service\":\"auto\",\"desired\":{}}]</textarea><span class="hint">ⓘ Each item accepts raw, service, source, desired and field_mapping. Keep samples small and redact credentials.</span></label><button class="primary" type="submit">Run corpus</button></form><section id="assurance-corpus-result" aria-live="polite">${empty('Corpus results will appear here.')}</section>`)}${panel('Assurance parser workflow','Create a reviewable declarative parser proposal from the failing sample and validate it against cases.',`<form id="assurance-parser-form" class="form-grid"><label class="field wide">Start from parser${assuranceParserSelect(runtimeParsers,'auto','base_parser_id')}<span class="hint">ⓘ Select an existing live parser to copy its declarative definition, or leave Automatic to create your own.</span></label><label class="field">Parser name<input name="name" required maxlength="120" title="Choose a stable, descriptive family or use case name."></label><label class="field">Version<input name="version" value="0.1.0" required title="Use semantic versioning for changes; each save creates a reviewable revision."></label><label class="field wide">Declarative parser JSON<textarea name="parser" required title="Only declarative, bounded parser definitions are accepted. Executable code is not run.">{"pattern_type":"regex","pattern":"level=(?P&lt;level&gt;\\\\w+) user=(?P&lt;user&gt;\\\\w+)","fields":[{"name":"level","source":"group:level","type":"string"},{"name":"user","source":"group:user","type":"string"}]}</textarea><span class="hint">ⓘ Start with a parser pack from Parser Catalog, or inspect a built-in parser definition. Drafts require corpus validation and reviewer approval.</span></label><label class="field wide">Validation cases JSON<textarea name="cases" required>[{"raw":"level=INFO user=alice","service":"auto","desired":{"level":"INFO","user":"alice"}}]</textarea></label><button class="primary" type="submit">Create and validate draft</button></form>`)}${panel('Revisioned parser proposals','Review lifecycle: validate, submit, approve by a second operator, then publish.',table(['Parser','Revision','State','Validation','Actions'],parsers.map(doc=>{const p=doc.payload||doc;return `<tr><td><b>${esc(p.name||doc.name||doc.id)}</b><br><small class="mono">${esc(doc.id)}</small></td><td>${doc.revision??p.revision??'—'}</td><td>${badge(doc.state||p.state)}${approvalDetails(doc)}</td><td class="review-validation"><details><summary>${esc((p.validation||doc.validation)?.status||((p.validation||doc.validation)?.passed===undefined?'Details':`${number((p.validation||doc.validation).passed)} passed · ${number((p.validation||doc.validation).failed)} failed`))}</summary><pre>${esc(pretty(p.validation||doc.validation||{}))}</pre></details></td><td class="review-actions">${(['validate',...(['draft','rejected'].includes(doc.state)?['submit']:[]),...(doc.state==='in_review'?['approve','reject']:[]),...(doc.state==='approved'?['publish']:[])].map(action=>`<button class="secondary small" data-action="assurance-parser-action" data-id="${esc(doc.id)}" data-value="${action}">${action}</button>`).join(' ') + (['draft','rejected'].includes(doc.state)?` <button class="secondary small" data-action="assurance-parser-edit" data-id="${esc(doc.id)}">Edit</button> <button class="danger small" data-action="assurance-parser-delete" data-id="${esc(doc.id)}">Delete</button>`:''))}</td></tr>`})))}${panel('Parser assurance history','Recent validation and review events from the controller.',table(['Time','Action','Parser','Actor','Outcome'],history.map(item=>`<tr><td>${time(item.timestamp||item.created_at)}</td><td>${esc(item.action||item.event)}</td><td class="mono">${esc(item.parser_id||item.resource||'—')}</td><td>${esc(item.actor||'—')}</td><td>${badge(item.outcome||item.state||'recorded')}</td></tr>`)))}${panel('Encrypted retained fixtures','Saved cases stay encrypted in Supabase until an authorized operator purges them manually.',retentionError ? `<div class="callout warn">${esc(retentionError)}</div>` : renderCases(cases?.cases || []))}${napiPanel}${runsPanel}`);
+    renderPage(pageID, `<div class="callout">Workflow: analyze representative raw lines → validate a mixed-format corpus → create a parser draft → submit for independent approval → publish to build the parser pack and start fleet sync. The Assurance corpus is the cases you provide; Field Integrity &amp; Corpus Proof is the separate, fixed 728-record release corpus bundled with the controller.</div><div class="grid cols-4">${card('Live runtime parsers',number(runtimeParsers.length),'Selectable exact parser definitions')}${card('Managed parser packs',number(managedPacks.length),`${number(packStates.active||0)} active · ${number(packStates.approved||0)} approved`)}${card('Assurance drafts',number(parsers.length),`${number(packStates.in_review||0)} managed packs in review`)}${card('Fleet parser sync',`${number(alignedClients)} / ${number(fleetNodes.length)}`,`${number(syncAssets.length)} managed assets · aligned clients`)}</div><div class="callout">Automatic parser detection evaluates every eligible approved ParserPack and runtime strategy. Exact parser selection runs only the chosen live runtime parser. Custom families and new parser definitions remain test-only until review, approval, publish, and client acknowledgement.</div><div class="assurance-subnav" aria-label="Assurance workflows">${[['Analyse','Production parser assurance'],['Corpus reports','Multi-log corpus validation'],['Parser drafts','Assurance parser workflow'],['Review Queue','Revisioned parser proposals'],['History','Parser assurance history'],['Fixtures','Encrypted retained fixtures'],['Parser Creation Helper','Parser helper'],['NAPI Synthesis','NAPI parser synthesis'],['Test Plans','Versioned Assurance test plans'],['Runs','Assurance runs']].map(([label,title])=>`<button class="tab" type="button" data-title="${esc(title)}">${esc(label)}</button>`).join('')}</div>${panel('Parser Creation helper','Generate and edit a review-gated declarative draft from sample lines.',`<form id="parser-helper-form" class="form-grid"><input type="hidden" name="edit_id"><label class="field wide">Sample lines<textarea name="samples" required data-testid="parser-helper-samples">${esc(state.lastAssurance?.request?.raw || '')}</textarea></label><button type="button" class="secondary" data-action="parser-helper-generate">Generate parser draft</button><label class="field">Draft name<input name="name" required value="guided-parser-draft"></label><label class="field">Version<input name="version" required value="0.1.0"></label><div id="parser-helper-overview" data-parser-overview class="wide">Run Assurance or paste sample lines.</div><div id="parser-helper-details" data-parser-helper-details class="parser-helper-details wide" aria-live="polite"></div><label class="field wide">Complete generated parser JSON<textarea name="parser" required>{}</textarea></label><label class="field wide">Validation cases JSON<textarea name="cases" required>[]</textarea></label><div class="actions wide"><button type="button" class="secondary" data-action="parser-helper-validate">Validate draft</button><button type="submit" class="primary">Save review-gated draft</button></div><div id="parser-helper-status" data-parser-helper-status class="wide" role="status"></div></form>`)}${panel('Upload log samples','Upload log/text files or an archive for controller-side inspection. Archive extraction and size limits are enforced by the controller.',`<form id="assurance-upload-form" class="form-grid"><label class="field">Parser family${assuranceFamilySelect('service','auto')}<span class="hint">ⓘ Automatic evaluates all eligible approved families.</span></label><label class="field">Custom family<input name="custom_service" placeholder="used only when Custom family is selected" maxlength="64"></label><label class="field wide">Parser name${assuranceParserSelect(runtimeParsers,'auto')}<span class="hint">ⓘ Choose Automatic for the full pipeline or one exact live runtime parser.</span></label><label class="field">Sample file<input name="file" type="file" accept=".log,.txt,.out,.json,.jsonl,.csv,.zip,.tar,.gz,.tgz,.tar.gz" required title="Supported sample formats depend on controller archive limits. Never upload secrets or production data unless approved."><span class="hint">ⓘ .log, .txt, .json, .jsonl, .csv, .zip, .tar, .gz. Controller applies archive and size limits.</span></label><div class="actions wide"><button class="primary" type="submit">Analyze uploaded sample</button><small class="hint">The controller returns a report; original log content is transient unless retained as a fixture.</small></div></form>`)}<div class="split assurance-workspace"><section class="panel"><div class="section-head"><div><h3>Production parser assurance</h3><p>Runs the production parser pipeline against raw single or multiline logs. Raw payloads are transient unless explicitly retained.</p></div></div><form id="assurance-form" class="form-grid" data-testid="assurance-form"><label class="field wide"><span><input type="checkbox" name="retain_test_sample" value="true" ${state.sampleHistoryEnabled?'checked':''} ${can('assurance:save')?'':'disabled'}> Save an encrypted copy to Test Sample History</span></label><label class="field wide">Raw or multiline input<textarea name="raw" required data-testid="assurance-raw" title="Paste one or more log records. Multiline records are preserved exactly; use a representative sample without secrets.">${esc(state.lastAssurance?.request?.raw || '')}</textarea><span class="hint">ⓘ Paste representative records, including continuations. Secrets and tokens should be redacted.</span></label><label class="field">Parser family${assuranceFamilySelect('service',selectedFamily)}</label><label class="field">Custom family<input name="custom_service" placeholder="used only when Custom family is selected" maxlength="64"></label><label class="field wide">Parser name${assuranceParserSelect(runtimeParsers,selectedParser)}<span class="hint">ⓘ Automatic runs all eligible approved parsers; an exact choice runs only that live parser.</span></label><label class="field">Source<input name="source" value="${esc(state.lastAssurance?.request?.source || '')}" placeholder="optional source family" title="Optional source name or integration. It provides context and does not execute imported parser code."></label><label class="field wide">Exact desired JSON <span class="hint">Leave {} for parse-only validation.</span><textarea name="desired">${esc(pretty(state.lastAssurance?.request?.desired || {}))}</textarea><span class="hint">ⓘ Desired output is the exact field/value contract used for comparison. Extra or missing fields are reported.</span></label><label class="field wide">Field mapping JSON<textarea name="mapping" title="Optional JSON object mapping source keys to canonical output field names.">${esc(pretty(state.lastAssurance?.request?.field_mapping || {}))}</textarea><span class="hint">ⓘ Example: {"src_ip":"source_ip","ts":"timestamp"}. Leave {} to preserve inferred field names.</span></label><div class="actions wide"><button class="primary" type="submit">Run assurance</button><button class="secondary" type="button" data-action="clear-assurance" ${current ? '' : 'disabled'}>Clear manually</button><button class="secondary" type="button" data-action="download-assurance" ${current ? '' : 'disabled'}>Download result JSON</button></div></form></section><section id="assurance-result">${current ? renderAssurance(current) : empty('Run a case to inspect complete output, field/type/count differences, source spans, and every parser stage.')}</section></div>${panel('Multi-log corpus validation','Paste a JSON array of cases to validate mixed log formats in one run. Each case uses the production parser.',`<form id="assurance-corpus-form" class="form-grid"><label class="field">Default parser family${assuranceFamilySelect('service','auto')}</label><label class="field">Custom family<input name="custom_service" placeholder="used only when Custom family is selected" maxlength="64"></label><label class="field wide">Default parser name${assuranceParserSelect(runtimeParsers,'auto')}<span class="hint">ⓘ Defaults apply to cases that do not declare service or parser_id. Individual JSON cases may override either value.</span></label><label class="field wide">Cases JSON<textarea name="cases" required>[{\"raw\":\"service=example user=operator\",\"service\":\"auto\",\"desired\":{}}]</textarea><span class="hint">ⓘ Each item accepts raw, service, source, desired and field_mapping. Keep samples small and redact credentials.</span></label><button class="primary" type="submit">Run corpus</button></form><section id="assurance-corpus-result" aria-live="polite">${empty('Corpus results will appear here.')}</section>`)}${panel('Assurance parser workflow','Create a reviewable declarative parser proposal from the failing sample and validate it against cases.',`<form id="assurance-parser-form" class="form-grid"><label class="field wide">Start from parser${assuranceParserSelect(runtimeParsers,'auto','base_parser_id')}<span class="hint">ⓘ Select an existing live parser to copy its declarative definition, or leave Automatic to create your own.</span></label><label class="field">Parser name<input name="name" required maxlength="120" title="Choose a stable, descriptive family or use case name."></label><label class="field">Version<input name="version" value="0.1.0" required title="Use semantic versioning for changes; each save creates a reviewable revision."></label><label class="field wide">Declarative parser JSON<textarea name="parser" required title="Only declarative, bounded parser definitions are accepted. Executable code is not run.">{"pattern_type":"regex","pattern":"level=(?P&lt;level&gt;\\\\w+) user=(?P&lt;user&gt;\\\\w+)","fields":[{"name":"level","source":"group:level","type":"string"},{"name":"user","source":"group:user","type":"string"}]}</textarea><span class="hint">ⓘ Start with a parser pack from Parser Catalog, or inspect a built-in parser definition. Drafts require corpus validation and reviewer approval.</span></label><label class="field wide">Validation cases JSON<textarea name="cases" required>[{"raw":"level=INFO user=alice","service":"auto","desired":{"level":"INFO","user":"alice"}}]</textarea></label><button class="primary" type="submit">Create and validate draft</button></form>`)}${panel('Revisioned parser proposals','Review lifecycle: validate, submit, approve by a second operator, then publish.',table(['Parser','Revision','State','Validation','Actions'],parsers.map(doc=>{const p=doc.payload||doc;return `<tr><td><b>${esc(p.name||doc.name||doc.id)}</b><br><small class="mono">${esc(doc.id)}</small></td><td>${doc.revision??p.revision??'—'}</td><td>${badge(doc.state||p.state)}${approvalDetails(doc)}</td><td class="review-validation"><details><summary>${esc((p.validation||doc.validation)?.status||((p.validation||doc.validation)?.passed===undefined?'Details':`${number((p.validation||doc.validation).passed)} passed · ${number((p.validation||doc.validation).failed)} failed`))}</summary><pre>${esc(pretty(p.validation||doc.validation||{}))}</pre></details>${renderParserRecovery(p)}${p.requires_validation_examples===true?`<p>${esc(p.validation?.reason||'Add exact validation examples before review.')}</p>`:''}</td><td class="review-actions">${([...(!p.recovery?.blockers?.length&&p.requires_validation_examples!==true?['validate']:[]),...(['draft','rejected'].includes(doc.state)&&!p.recovery?.blockers?.length&&p.requires_validation_examples!==true?['submit']:[]),...(doc.state==='in_review'?['approve','reject']:[]),...(doc.state==='approved'?['publish']:[])].map(action=>`<button class="secondary small" data-action="assurance-parser-action" data-id="${esc(doc.id)}" data-value="${action}">${action}</button>`).join(' ') + (['draft','rejected'].includes(doc.state)?` <button class="secondary small" data-action="assurance-parser-edit" data-id="${esc(doc.id)}">Edit</button> <button class="danger small" data-action="assurance-parser-delete" data-id="${esc(doc.id)}">Delete</button>`:''))}</td></tr>`})))}${panel('Parser assurance history','Recent validation and review events from the controller.',table(['Time','Action','Parser','Actor','Outcome'],history.map(item=>`<tr><td>${time(item.timestamp||item.created_at)}</td><td>${esc(item.action||item.event)}</td><td class="mono">${esc(item.parser_id||item.resource||'—')}</td><td>${esc(item.actor||'—')}</td><td>${badge(item.outcome||item.state||'recorded')}</td></tr>`)))}${panel('Encrypted retained fixtures','Saved cases stay encrypted in Supabase until an authorized operator purges them manually.',retentionError ? `<div class="callout warn">${esc(retentionError)}</div>` : renderCases(cases?.cases || []))}${napiPanel}${runsPanel}`);
     if (recoveryPanel) page.insertAdjacentHTML('afterbegin', recoveryPanel);
     const plansSlot=page.querySelector('#assurance-panel-plans');
     if(plansSlot)plansSlot.innerHTML=`<h2 class="assurance-panel-title">Test Plans</h2>${plansPanel}`;
@@ -2313,8 +2365,9 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       const rolloutErrors = Array.isArray(rollout.errors) ? rollout.errors : rollout.errors ? [rollout.errors] : [];
       return `<tr><td><b>${esc(asset.name || asset.asset_id || 'Unnamed asset')}</b><br><small>${esc(asset.asset_class || 'Unclassified')}</small><br><small class="mono">${esc(asset.asset_id || '—')}</small></td><td>${badge(desired.state || 'unknown')}<br><b>Revision ${esc(desired.revision || '—')}</b><br><code title="${esc(desired.sha256 || '')}">${esc((desired.sha256 || '—').slice(0, 20))}</code></td><td>${badge(controller.status || 'unknown')}<br><b>Revision ${esc(controller.revision || '—')}</b><br><code title="${esc(controller.sha256 || '')}">${esc((controller.sha256 || '—').slice(0, 20))}</code></td><td>${badge(rollout.status || 'not scheduled')}<br><small>${done} / ${total} complete · ${failed} failed</small>${total ? `<progress class="sync-progress" max="100" value="${progress}" aria-label="Rollout ${progress}% complete"></progress>` : ''}${rolloutErrors.length ? `<ul class="sync-errors">${rolloutErrors.map(item => `<li>${esc(typeof item === 'string' ? item : item.message || pretty(item))}</li>`).join('')}</ul>` : ''}</td><td>${badge(policy.enabled ? policy.status || 'enabled' : 'disabled')}<br><small>${policy.enabled ? 'Published revisions roll out automatically' : 'Automatic rollout is off'}</small><br><small>${esc(policy.description || '')}</small></td><td class="sync-actions"><button class="secondary small" data-action="parser-sync-verify" ${stale?'disabled':''} data-class="${esc(asset.asset_class)}" data-id="${esc(asset.asset_id)}">Verify</button><button class="secondary small" data-action="parser-sync-retry" ${stale?'disabled':''} data-class="${esc(asset.asset_class)}" data-id="${esc(asset.asset_id)}">Propose retry</button></td></tr>`;
     });
-    const clientRows = clients.map(client => `<tr><td><b>${esc(client.hostname || client.node_id || 'Unknown client')}</b><br><small class="mono">${esc(client.node_id || '—')}</small></td><td>${badge(client.status || 'unknown')}<br><small>Heartbeat ${time(client.last_seen)}</small></td><td>${esc(client.applied_revision || '—')}<br><code title="${esc(client.applied_hash || '')}">${esc((client.applied_hash || '—').slice(0, 16))}</code></td><td>${badge(client.drifted ? 'drifted' : client.status === 'offline' ? 'offline' : 'aligned')}<br><small>Target ${esc(client.desired_revision || '—')} · ${esc((client.desired_hash || '—').slice(0, 12))}</small>${client.error ? `<br><small class="sync-error">${esc(client.error)}</small>` : ''}</td></tr>`);
-    const fleetTelemetry = `<div class="grid cols-4 fleet-summary">${card('Fleet nodes',number(telemetry.total_clients ?? telemetry.total_nodes ?? clients.length),'Bounded parser-sync inventory')}${card('Online / offline',`${number(telemetry.online_clients ?? telemetry.online_nodes ?? clients.filter(item=>item.status!=='offline').length)} / ${number(telemetry.offline_clients ?? telemetry.offline_nodes ?? clients.filter(item=>item.status==='offline').length)}`,'Latest authenticated check-ins')}${card('Exact bundle',number(telemetry.exact_acknowledged_clients ?? telemetry.exact_nodes ?? clients.filter(item=>!item.drifted).length),`${Number(telemetry.acknowledgement_pct ?? telemetry.acknowledgement_percent ?? 0).toFixed(2)}% acknowledged`)}${card('Pending / drifted / failed',`${number(telemetry.pending_clients ?? telemetry.pending_nodes ?? 0)} / ${number(telemetry.drifted_clients ?? telemetry.drifted_nodes ?? 0)} / ${number(telemetry.failed_clients ?? telemetry.failed_nodes ?? 0)}`,'Actionable fleet state')}</div>`;
+    const exactClient=client=>exactRecoveryHash(data.bundle?.desired_hash) && client.desired_hash===data.bundle.desired_hash && client.applied_hash===data.bundle.desired_hash && client.exact_acknowledgement===true && client.drifted!==true;
+    const clientRows = clients.map(client => `<tr><td><b>${esc(client.hostname || client.node_id || 'Unknown client')}</b><br><small class="mono">${esc(client.node_id || '—')}</small></td><td>${badge(client.status || 'unknown')}<br><small>Heartbeat ${time(client.last_seen)}</small></td><td>${esc(client.applied_revision || '—')}<br><code title="${esc(client.applied_hash || '')}">${esc((client.applied_hash || '—').slice(0, 16))}</code></td><td>${badge(client.drifted ? 'drifted' : exactClient(client) ? 'Exact acknowledgement' : client.status === 'offline' ? 'offline' : 'pending acknowledgement')}<br><small>Target ${esc(client.desired_revision || '—')} · ${esc((client.desired_hash || '—').slice(0, 12))}</small>${client.error ? `<br><small class="sync-error">${esc(client.error)}</small>` : ''}</td></tr>`);
+    const fleetTelemetry = `<div class="grid cols-4 fleet-summary">${card('Fleet nodes',number(telemetry.total_clients ?? telemetry.total_nodes ?? clients.length),'Bounded parser-sync inventory')}${card('Online / offline',`${number(telemetry.online_clients ?? telemetry.online_nodes ?? clients.filter(item=>item.status!=='offline').length)} / ${number(telemetry.offline_clients ?? telemetry.offline_nodes ?? clients.filter(item=>item.status==='offline').length)}`,'Latest authenticated check-ins')}${card('Exact bundle',number(telemetry.exact_acknowledged_clients ?? telemetry.exact_nodes ?? clients.filter(exactClient).length),`${Number(telemetry.acknowledgement_pct ?? telemetry.acknowledgement_percent ?? 0).toFixed(2)}% acknowledged`)}${card('Pending / drifted / failed',`${number(telemetry.pending_clients ?? telemetry.pending_nodes ?? 0)} / ${number(telemetry.drifted_clients ?? telemetry.drifted_nodes ?? 0)} / ${number(telemetry.failed_clients ?? telemetry.failed_nodes ?? 0)}`,'Actionable fleet state')}</div>`;
     const automatic = data.policy ? `<div class="callout">${esc(data.policy.description || `Automatic rollout policy: ${data.policy.enabled ? 'enabled' : 'disabled'}.`)}</div>` : '';
     renderPage('parser-sync', `${panel('Parser Fleet Sync','One authoritative desired bundle, one fleet acknowledgement snapshot, and per-asset rollout evidence across every enrolled client.',`<div class="callout">Assets created in the WebView remain drafts until validated and reviewed. Approved and published revisions become part of the signed desired bundle. The client table is rendered once from the canonical fleet snapshot, so every tab evaluates the same acknowledgement state.</div>${staleWarning}${automatic}${fleetTelemetry}<div class="sync-toolbar"><span>${number(data.count ?? assets.length)} managed assets · desired bundle <code>${esc(String(telemetry.desired_hash||data.bundle?.sha256||'—').slice(0,20))}</code></span><button class="secondary" type="button" data-action="reload">Refresh sync state</button></div>${assets.length ? table(['Asset','Approved desired revision / hash','Controller applied revision / hash','Rollout progress / errors','Automatic rollout policy','Actions'],rows,'No parser assets are available.') : empty('No managed parser assets are published yet. Draft assets appear here after they are approved and published.')}`)}${panel('Fleet acknowledgement telemetry','Clients collect and parse locally, acknowledge one exact published bundle hash, and report incremental state to the controller.',table(['Client','State / heartbeat','Applied revision / hash','Alignment / target'],clientRows,'No enrolled client has reported parser bundle state yet.'))}${panel('Asset classes covered','The sync inventory includes regex definitions, patterns, static layouts, parser logic, templates, field mappings, and known-key mappings.',`<div class="sync-class-list">${['regex','patterns','static layouts / patterns','parser logic','templates','field mappings','known-key mappings'].map(name=>`<span>${esc(name)}</span>`).join('')}</div>`)}${panel('Retry and approval boundary','Verification refreshes controller-reported state. Retry only proposes a rollout for online clients or the selected client; an authorized reviewer must approve it before execution.',`<div class="callout warn">This view cannot publish drafts, approve proposals, or force an asset onto clients.</div>`)}`);
   }
@@ -2322,7 +2375,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   async function loadParsers() {
     const [managedResult, builtinResult, deletedResult, runtimeResult] = await Promise.allSettled([api('/parser-packs',{allowStale:true}), api('/parsers'), api('/parser-packs/deleted'), api('/parser-sync/runtime')]);
     const packs = managedResult.status === 'fulfilled' ? managedResult.value.parser_packs || [] : [];
-    const builtin = builtinResult.status === 'fulfilled' ? builtinResult.value || [] : [];
+    const builtin = runtimeParserList(builtinResult.value);
     state.parserPacks=packs;
     state.builtinParsers=builtin;
     if (managedResult.status === 'rejected' && builtinResult.status === 'rejected') {
@@ -2331,7 +2384,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     }
     const managedStale=managedResult.value?.snapshot_stale===true;
     const warnings = staleSnapshotWarning(managedResult.value)+[managedResult, builtinResult].filter(result => result.status === 'rejected').map(result => `<div class="callout warn">${esc(result.reason.message)}</div>`).join('');
-    renderPage('parsers', `${warnings}${panel('Managed parser packs','Revisioned priority, runtime compatibility, and independent review/approval state. Blocked historical records stay isolated and can be moved into an editable repair draft.',table(['Pack','Version','Priority','Revision','State','Runtime sync','Author','Definition and actions'],packs.map(doc=>{const p=doc.payload||{},sync=doc.runtime_sync||{status:'not_published'},syncStatus=String(sync.status||'').toLowerCase(),runtimeSynced=!sync.drifted&&(['active','published','synced','synchronized','in_sync','current','applied'].includes(syncStatus)||(sync.applied_revision!=null&&Number(sync.applied_revision)===Number(doc.revision)&&sync.applied_hash&&sync.applied_hash===sync.desired_hash)),displayState=doc.state==='published'&&runtimeSynced?'Published / Active':doc.state;return `<tr><td><b>${esc(p.name||doc.id)}</b><br><small class="mono">${esc(doc.id)}</small></td><td>${esc(p.version||'—')}</td><td>${esc(p.priority||'—')}</td><td>${doc.revision}</td><td>${badge(displayState)}${approvalDetails(doc)}</td><td>${badge(sync.status||'not_published')}${sync.reason?`<br><small class="sync-error">${esc(sync.reason)}</small>`:''}</td><td>${esc(doc.created_by)}</td><td><details><summary>View full parser JSON</summary><pre class="json-output">${esc(pretty(p))}</pre></details><button class="secondary small" data-action="parser-asset" data-id="${esc(doc.id)}" data-value="edit">Edit draft</button> <button class="secondary small" data-action="parser-asset" data-id="${esc(doc.id)}" data-value="download">Download</button> <button class="danger small" data-action="parser-asset" data-id="${esc(doc.id)}" data-value="delete" ${managedStale?'disabled':''}>Delete</button> ${p.parser&&['published','approved','in_review'].includes(doc.state)?`<button type="button" class="secondary small" data-action="nfi-repair-candidate" data-id="${esc(doc.id)}">Repair as new draft</button>`:''} ${managedStale?'Refresh required for lifecycle actions':parserActions(doc)}</td></tr>`})))}${panel('Create parser draft','Declarative only; executable fields and non-RE2 regex are rejected.',`<form id="parser-form" class="form-grid"><label class="field wide">Start from live parser${assuranceParserSelect(builtin,'auto','base_parser_id')}<span class="hint">ⓘ Select a live parser to copy its declarative definition, or leave Automatic and create your own.</span></label><label class="field">Pack ID<input name="id" required title="Stable identifier; use Edit draft for existing draft packs."></label><label class="field">Name<input name="name" required></label><label class="field">Semantic version<input name="version" value="0.1.0" required></label><label class="field">Priority<input name="priority" type="number" min="1" max="1000000000" value="100" required title="Lower numbers are tried first."></label><label class="field wide">Rules JSON<textarea name="rules">[]</textarea><span class="hint">ⓘ Declarative parser rules only. Add regex, known-key, static-token and field projection stages.</span></label><label class="field wide">Reviewed regression cases JSON<textarea name="regression_cases">[]</textarea><span class="hint">ⓘ Required before submission. Each case must include name, input, expected_parser, expected_route, and expected_payload so the exact candidate can be validated before approval.</span></label><button class="primary" type="submit">Create draft</button></form>`)}${panel('Built-in runtime parsers','Read directly from the active controller registry. Inspect and download the exact registry metadata.',table(['ID','Version','Format','Description','Fields','Source'],builtin.map(item=>`<tr><td class="mono">${esc(item.id)}</td><td>${esc(item.version)}</td><td>${esc(item.format)}</td><td>${esc(item.description)}</td><td>${(item.fields||[]).length}</td><td><details><summary>Inspect JSON</summary><pre class="json-output">${esc(pretty(item))}</pre></details><button class="secondary small" data-action="download-builtin" data-id="${esc(item.id)}">Download JSON</button></td></tr>`)))}`);
+    renderPage('parsers', `${warnings}${panel('Managed parser packs','Revisioned priority, runtime compatibility, and independent review/approval state. Blocked historical records stay isolated and can be moved into an editable repair draft.',table(['Pack','Version','Priority','Revision','State','Runtime sync','Author','Definition and actions'],packs.map(doc=>{const p=doc.payload||{},sync=doc.runtime_sync||{status:'not_published'},syncStatus=String(sync.status||'').toLowerCase(),runtimeSynced=!sync.drifted&&(['active','published','synced','synchronized','in_sync','current','applied'].includes(syncStatus)||(sync.applied_revision!=null&&Number(sync.applied_revision)===Number(doc.revision)&&sync.applied_hash&&sync.applied_hash===sync.desired_hash)),displayState=doc.state==='published'&&runtimeSynced?'Published / Active':doc.state;return `<tr><td><b>${esc(p.name||doc.id)}</b><br><small class="mono">${esc(doc.id)}</small></td><td>${esc(p.version||'—')}</td><td>${esc(p.priority||'—')}</td><td>${doc.revision}</td><td>${badge(displayState)}${approvalDetails(doc)}</td><td>${badge(sync.status||'not_published')}${sync.reason?`<br><small class="sync-error">${esc(sync.reason)}</small>`:''}${renderParserRecovery(p)}</td><td>${esc(doc.created_by)}</td><td><details><summary>View full parser JSON</summary><pre class="json-output">${esc(pretty(p))}</pre></details><button class="secondary small" data-action="parser-asset" data-id="${esc(doc.id)}" data-value="edit">Edit draft</button> <button class="secondary small" data-action="parser-asset" data-id="${esc(doc.id)}" data-value="download">Download</button> <button class="danger small" data-action="parser-asset" data-id="${esc(doc.id)}" data-value="delete" ${managedStale?'disabled':''}>Delete</button> ${p.parser&&['published','approved','in_review'].includes(doc.state)?`<button type="button" class="secondary small" data-action="nfi-repair-candidate" data-id="${esc(doc.id)}">Repair as new draft</button>`:''} ${managedStale?'Refresh required for lifecycle actions':parserActions(doc)}</td></tr>`})))}${panel('Create parser draft','Declarative only; executable fields and non-RE2 regex are rejected.',`<form id="parser-form" class="form-grid"><label class="field wide">Start from live parser${assuranceParserSelect(builtin,'auto','base_parser_id')}<span class="hint">ⓘ Select a live parser to copy its declarative definition, or leave Automatic and create your own.</span></label><label class="field">Pack ID<input name="id" required title="Stable identifier; use Edit draft for existing draft packs."></label><label class="field">Name<input name="name" required></label><label class="field">Semantic version<input name="version" value="0.1.0" required></label><label class="field">Priority<input name="priority" type="number" min="1" max="1000000000" value="100" required title="Lower numbers are tried first."></label><label class="field wide">Rules JSON<textarea name="rules">[]</textarea><span class="hint">ⓘ Declarative parser rules only. Add regex, known-key, static-token and field projection stages.</span></label><label class="field wide">Reviewed regression cases JSON<textarea name="regression_cases">[]</textarea><span class="hint">ⓘ Required before submission. Each case must include name, input, expected_parser, expected_route, and expected_payload so the exact candidate can be validated before approval.</span></label><button class="primary" type="submit">Create draft</button></form>`)}${panel('Built-in runtime parsers','Read directly from the active controller registry. Inspect and download the exact registry metadata.',table(['ID','Version','Format','Description','Fields','Source'],builtin.map(item=>`<tr><td class="mono">${esc(item.id)}</td><td>${esc(item.version)}</td><td>${esc(item.format)}</td><td>${esc(item.description)}</td><td>${(item.fields||[]).length}</td><td><details><summary>Inspect JSON</summary><pre class="json-output">${esc(pretty(item))}</pre></details><button class="secondary small" data-action="download-builtin" data-id="${esc(item.id)}">Download JSON</button></td></tr>`)))}`);
     state.deletedParsers=deletedResult.status==='fulfilled'?deletedResult.value.deleted_parsers||[]:[];
     const inventory=runtimeResult.status==='fulfilled'?runtimeResult.value:null;
     const controller=inventory?.controller||{};
@@ -2353,7 +2406,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     const entity=spec.family==='network'?['ipv4','ipv6','domain']:spec.family==='url'?['url']:spec.family==='email'?['email']:[];
     const asset=assets.find(doc=>(doc.payload?.config?.entities||[]).some(value=>entity.includes(value))||doc.payload?.config?.decode_mime_headers&&id==='engine-subject');
     const capability=asset?{...(asset.payload?.config||{}),id:asset.id,revision:asset.revision,state:asset.state,enabled:asset.state==='active'||asset.payload?.config?.enabled===true,priority:asset.payload?.priority}:null;
-    const all=parserResult.status==='fulfilled'?(parserResult.value.parsers||parserResult.value||[]):[];
+    const all=runtimeParserList(parserResult.value);
     const engines=all.filter(item=>`${item.id||''} ${item.name||''} ${item.format||''} ${item.family||''}`.toLowerCase().includes(spec.family));
     const status=capability?`<div class="grid cols-3">${card('Enabled state',capability.enabled?'Enabled':capability.state==='draft'?'Draft · not confirmed active':'Disabled / inactive',capability.state||'Controller catalog')}${card('Priority',capability.priority??'Controller default','Controller policy order')}${card('Revision',capability.revision||'—',asset?.id||spec.slug)}</div>`:'<div class="callout">No semantic extraction policy is configured on this controller yet. The sample and Assurance tester remain available; create the policy from the Semantic Extraction Policy tab.</div>';
     renderPage(id,`${panel(spec.title,spec.description,`${status}<div class="engine-grid"><div><h4>Sample input</h4><pre class="json-output">${esc(spec.sample)}</pre></div><div><h4>Illustrative structured fields</h4><pre class="json-output">${esc(pretty(spec.expected))}</pre><small class="hint">Example only. Actual results come from the active production parser.</small></div></div><div class="actions"><button class="primary" data-action="engine-test" data-page="${id}">Test sample in Assurance</button><a class="secondary download-link" href="#semantic">Semantic policy controls</a><a class="secondary download-link" href="#studio">Regex, Templates &amp; Studio</a><a class="secondary download-link" href="#projection">Field Projections</a></div>`)}${panel('Runtime catalog','The controller reports which built-in parsers are enabled.',engines.length?table(['Engine','Version','Format','Description','Fields'],engines.map(item=>`<tr><td>${esc(item.id)}</td><td>${esc(item.version)}</td><td>${esc(item.format)}</td><td>${esc(item.description)}</td><td>${(item.fields||[]).length}</td></tr>`)):empty('No built-in parser advertises this engine family. Create or enable a declarative parser in the catalog, then validate it in Assurance.'))}${capResult.status==='rejected'?`<div class="callout">Capability API unavailable: ${esc(capResult.reason.message)}. This fallback does not claim the engine is active.</div>`:''}`);
@@ -2425,8 +2478,12 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   }
 
   async function loadConfig(kind) {
-    const [path,title,example]=CONFIG[kind]; let data={items:[]}, warning='';
-    try { data=await api(path); } catch(error) { warning=`<div class="callout warn">Live ${esc(title.toLowerCase())} could not be loaded: ${esc(error.message)}. Defaults are shown for reference; retry after controller storage recovers.</div>`; }
+    const [path,title,example]=CONFIG[kind];
+    const otherKind = {'header-templates':'kv-templates','kv-templates':'header-templates'}[kind];
+    const [primary, companion] = await Promise.allSettled([api(path,{timeoutMs:10000}),otherKind ? api(CONFIG[otherKind][0],{timeoutMs:10000}) : Promise.resolve(null)]);
+    const data = primary.value || {items:[]};
+    let warning = primary.status === 'rejected' ? recoveryUnavailable(`Live ${title.toLowerCase()}`,primary.reason) : '';
+    if (companion.status === 'rejected') warning += recoveryUnavailable(`Saved ${CONFIG[otherKind][1].toLowerCase()}`,companion.reason);
     const items=data.items||[], known=kind==='knownkeys';
     const lifecycle = doc => {
       const actions=[];
@@ -2438,9 +2495,8 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       return actions.map(([value,label])=>` <button class="secondary small" data-action="config-action" data-kind="${kind}" data-id="${esc(doc.id)}" data-revision="${doc.revision}" data-value="${value}">${label}</button>`).join('');
     };
     let templateWorkbench = '';
-    if (['header-templates','kv-templates'].includes(kind)) {
-      const otherPath = CONFIG[kind === 'header-templates' ? 'kv-templates' : 'header-templates'][0];
-      const other = await api(otherPath).catch(() => ({items:[]}));
+    if (otherKind) {
+      const other = companion.value || {items:[]};
       const select = (id,label,docs,defaultOption='<option value="">Select a saved revision</option>') => '<label class="field">' + label + '<select id="' + id + '">' +
         defaultOption + docs.filter(doc => doc.id && Number(doc.revision)>0).flatMap(doc => {
           const option=(revision,status)=>'<option value="'+esc(JSON.stringify({id:doc.id,revision}))+'">'+
@@ -2772,7 +2828,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     const latest=new Map();state.apiHistory.forEach(item=>{if(!latest.has(`${item.method} ${item.path}`))latest.set(`${item.method} ${item.path}`,item);});
     const reachable=status=>status!=null&&(status<400||[401,403,405,422].includes(status));
     const latencies=[...latest.values()].map(item=>item.latency).sort((a,b)=>a-b),percentile=p=>latencies.length?latencies[Math.min(latencies.length-1,Math.ceil(p*latencies.length)-1)]:0,p50=percentile(.5),p95=percentile(.95);
-    const rows=[...latest.values()].map(item=>`<tr><td>${badge(item.degraded?'degraded':reachable(item.status)?'online':'offline')}</td><td><code>${esc(item.method)}</code></td><td class="mono">${esc(item.path)}</td><td>${esc(purposes[item.path]||'Authenticated controller API')}</td><td>${item.latency} ms</td><td>${item.status??'network error'}${item.error?`<br><small>${esc(item.error)}</small>`:''}</td><td>${time(item.at)}</td></tr>`);
+    const rows=[...latest.values()].map(item=>`<tr><td>${badge(item.degraded?'degraded':reachable(item.status)?'online':'offline')}</td><td><code>${esc(item.method)}</code></td><td class="mono">${esc(item.path)}</td><td>${esc(purposes[item.path]||'Authenticated controller API')}</td><td>${item.latency} ms</td><td>${item.status??'network error'}${item.error?`<br><small>${esc(item.error)}</small>`:''}${item.requestID?`<br><small>Request ID <code>${esc(item.requestID)}</code></small>`:''}</td><td>${time(item.at)}</td></tr>`);
     const ok=[...latest.values()].filter(item=>reachable(item.status)).length, failed=[...latest.values()].length-ok;
     renderPage('api-monitor',`<div class="dashboard-intro"><div><p class="eyebrow">Controller connectivity · authenticated probes</p><h1>API monitor</h1><p>Each status comes from an actual browser request. A 401/403 means the API is reachable and access was denied; network and server errors show as offline.</p></div><div class="actions"><button class="secondary" data-action="reload">Refresh probes</button></div></div><div class="grid cols-4">${card('Reachable APIs',number(ok),'Successful or permission-gated HTTP responses')}${card('Failed APIs',number(failed),'Network or server errors in latest calls')}${card('Latency p50',`${p50} ms`,'Latest response per route')}${card('Latency p95',`${p95} ms`,'Latest response per route')}</div>${panel('Current controller API status','Method, route, purpose, response latency and result for live API calls observed in this session.',table(['Status','Method','Path','Purpose','Latency','HTTP result','Last checked'],rows,'No API calls observed yet. Refresh probes to check controller connectivity.'))}${panel('Probe coverage','The monitor checks controller health, storage, telemetry, client sync, parser sync, metadata, Assurance history, parser catalog, rollouts and system status.','<p class="muted">The request history is held in this browser session and contains routes and status metadata only. Request bodies, credentials and log payloads are not recorded.</p>')}`);
   }
@@ -2804,6 +2860,111 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     return '<div class="callout warn" role="status">Showing the last confirmed snapshot' + esc(when) +
       '. Live metadata is temporarily unavailable. Refresh to resume actions.</div>';
   }
+
+  const RECOVERY_PAGE_SIZE = 25;
+  const recoveryHash = value => `<code class="recovery-hash">${esc(value || 'Unavailable')}</code>`;
+  const exactRecoveryHash = value => /^[a-f0-9]{64}$/i.test(value || '');
+  const recoveryUnavailable = (source, error) => `<div class="callout warn" role="status">${esc(source)} unavailable. ${esc(requestFailure(error))}</div>`;
+
+  function recoveryPagination(section, offset, hasMore) {
+    if (!offset && !hasMore) return '';
+    return `<div class="actions recovery-actions" aria-label="${esc(section)} pages">
+      <button type="button" class="secondary small" data-action="bundle-page" data-id="${esc(section)}" data-value="${Math.max(0, offset - RECOVERY_PAGE_SIZE)}" ${offset ? '' : 'disabled'}>Previous ${esc(section)}</button>
+      <button type="button" class="secondary small" data-action="bundle-page" data-id="${esc(section)}" data-value="${offset + RECOVERY_PAGE_SIZE}" ${hasMore ? '' : 'disabled'}>Next ${esc(section)}</button>
+    </div>`;
+  }
+
+  function renderAutomaticBackup(capture) {
+    if (!capture) return '';
+    if (capture.state==='failed') return `<div class="callout warn" role="status">Automatic capture failed. ${esc(capture.error || 'The controller could not save the current snapshot.')} Existing backups remain available. Refresh or create a manual backup when storage recovers.</div>`;
+    if (capture.state==='captured') return `<p>Automatic capture saved <code class="recovery-hash">${esc(capture.snapshot_hash)}</code>${capture.checked_at ? ` · ${time(capture.checked_at)}` : ''}</p>`;
+    return '<p>Automatic capture is pending.</p>';
+  }
+
+  function renderRestoreProgress(restore, runtimeResult, rolloutResult) {
+    if (!restore) return empty('Choose a restore to inspect its controller and client progress.');
+    const expected = restore.desired_bundle_hash;
+    const controller = runtimeResult.value?.controller;
+    const controllerDesired = controller?.bundle_hash;
+    const controllerAppliedHash = controller?.materialized_hash;
+    const controllerApplied = exactRecoveryHash(expected) && controllerDesired === expected && controllerAppliedHash === expected && controller?.status === 'applied';
+    const targets = Array.isArray(restore.target_nodes) ? [...new Set(restore.target_nodes)] : null;
+    const clients = new Map((runtimeResult.value?.clients || []).map(client => [client.node_id, client]));
+    const rollout = (rolloutResult.value?.proposals || []).find(item => item.id === restore.rollout_proposal_id);
+    const activeRolloutID = rollout?.payload?.live_rollout_id || restore.rollout_id;
+    const activeRollout = (rolloutResult.value?.live || []).find(item => item.id === activeRolloutID);
+    const liveRows = (targets || []).map(id => {
+      const client = clients.get(id);
+      const desired = client?.desired_hash || client?.expected_hash;
+      const applied = client?.applied_hash;
+      const acknowledged = exactRecoveryHash(expected) && desired === expected && applied === expected && client?.exact_acknowledgement === true && client.drifted !== true;
+      const status = acknowledged ? 'Exact acknowledgement' : !client ? 'Evidence unavailable' : desired && desired !== expected ? 'Different desired bundle' : 'Awaiting exact acknowledgement';
+      return {acknowledged, html:`<tr><td>${esc(id)}</td><td>${badge(status)}${client?.status ? `<br>${esc(client.status)}` : ''}</td><td>${recoveryHash(desired)}</td><td>${recoveryHash(applied)}</td></tr>`};
+    });
+    return `<div class="recovery-evidence">
+      <div><h4>Expected restored bundle</h4>${recoveryHash(expected)}<p>Revision ${number(restore.desired_revision)}</p></div>
+      <div><h4>Controller bundle</h4><dl class="recovery-checksums"><dt>Desired SHA-256</dt><dd>${recoveryHash(controllerDesired)}</dd><dt>Materialized SHA-256</dt><dd>${recoveryHash(controllerAppliedHash)}</dd></dl><p>${controllerApplied ? 'Controller reports the exact restored bundle.' : !expected ? 'Controller publication is pending.' : controllerAppliedHash ? 'Controller reports a different or unverified bundle.' : 'Controller materialization evidence is unavailable.'}</p></div>
+      <div><h4>Fleet rollout</h4><p>${restore.rollout_proposal_id ? `<code>${esc(restore.rollout_proposal_id)}</code>` : 'No linked rollout proposal reported.'}</p>${rollout ? badge(activeRollout?.status || rollout.state) : ''}${restore.rollout_proposal_id ? '<button class="secondary small" type="button" data-action="navigate" data-page="rollouts">Open Approvals &amp; Rollouts</button>' : ''}</div>
+    </div>
+    ${restore.pre_restore_backup_id ? `<p>Pre-restore backup <code>${esc(restore.pre_restore_backup_id)}</code></p>` : ''}
+    ${runtimeResult.status === 'rejected' ? recoveryUnavailable('Runtime inventory', runtimeResult.reason) : ''}
+    ${rolloutResult.status === 'rejected' ? recoveryUnavailable('Fleet rollout status', rolloutResult.reason) : ''}
+    ${runtimeResult.status === 'fulfilled' && targets?.length ? `<p role="status">${liveRows.filter(row => row.acknowledged).length} of ${targets.length} target clients report an exact applied acknowledgement.</p>${table(['Target client', 'Acknowledgement', 'Client desired SHA-256', 'Client applied SHA-256'],liveRows.map(row => row.html))}` : `<p class="muted">${runtimeResult.status === 'rejected' ? 'Client acknowledgements are unknown.' : targets ? 'The proposal has no target clients.' : 'Target clients are awaiting a rollout proposal.'}</p>`}`;
+  }
+
+  async function loadBackupRestore() {
+    if (!can('parsers:read')) {
+      renderPage('backup-restore', '<div class="callout warn">Backup and restore history requires <code>parsers:read</code>.</div>');
+      return;
+    }
+    const recovery = state.recovery ||= {backupOffset:0, restoreOffset:0, restoreID:''};
+    const navigation = state.navigationRequest;
+    const query = offset => `?limit=${RECOVERY_PAGE_SIZE}&offset=${offset}`;
+    const read = path => api(path, {timeoutMs: 10000});
+    const [backupResult, restoreResult, runtimeResult, rolloutResult] = await Promise.allSettled([
+      read('/bundle-backups' + query(recovery.backupOffset)), read('/bundle-restores' + query(recovery.restoreOffset)),
+      read('/parser-sync/runtime'), read('/rollouts'),
+    ]);
+    if (state.page !== 'backup-restore' || state.recovery !== recovery || state.navigationRequest !== navigation) return;
+    const backups = backupResult.value?.backups || [];
+    const restores = restoreResult.value?.restores || [];
+    const selected = restores.find(restore => restore.id === recovery.restoreID) || restores[0];
+    recovery.backups = backups;
+    recovery.restores = restores;
+    recovery.restoreID = selected?.id || '';
+    const canManage = can('parsers:manage');
+    const canPropose = can('rollout:trigger');
+    const canApprove = can('rollout:approve');
+    const backupRows = backups.map(backup => `<tr>
+      <td><b>${esc(backup.id)}</b><br>${time(backup.created_at)}<br>${esc(backup.kind || '')}</td>
+      <td>${esc(backup.release || 'Unavailable')}<br>Snapshot schema ${esc(backup.schema_version ?? '—')}<br><small>The snapshot hash identifies this exact publication.</small></td>
+      <td><dl class="recovery-checksums"><dt>Snapshot SHA-256</dt><dd>${recoveryHash(backup.snapshot_hash)}</dd><dt>Captured bundle SHA-256</dt><dd>${recoveryHash(backup.bundle_hash)}</dd></dl></td>
+      <td>${number(backup.asset_count)} managed assets${backup.embedded_parser_count!=null?`<br>${number(backup.embedded_parser_count)} embedded parser references`:''}${Object.entries(backup.asset_counts || {}).map(([name,count])=>`<br>${esc(name)} · ${number(count)}`).join('')}</td>
+      <td>${(backup.settings_scope || []).map(esc).join(', ') || 'No parser settings captured'}${backup.scope?.includes_embedded_validation_examples === true ? '<br>Approved embedded validation examples included' : ''}</td>
+      <td>${canManage ? `<button class="secondary small" type="button" data-action="bundle-export" data-id="${esc(backup.id)}">Export JSON</button>` : 'Read only'}</td>
+    </tr>`);
+    const restoreRows = restores.map(restore => {
+      const own = restore.proposed_by === state.user?.username;
+      const reviewable = exactRecoveryHash(restore.snapshot_hash) && !!restore.base_revision;
+      const approvals = restore.state === 'pending_approval' ? own ? 'Awaiting an independent reviewer' : canApprove && reviewable ? `<button type="button" class="primary small" data-action="bundle-approve-restore" data-id="${esc(restore.id)}">Approve restore</button>` : 'Awaiting an authorized reviewer' : '';
+      const resumable = (canPropose || canApprove) && ['applying','controller_published'].includes(restore.state);
+      const status = {pending_approval:'Pending independent approval', applying:'Applying approved restore', controller_published:'Controller published', rollout_pending_approval:'Fleet proposal created', rollout_proposed:'Fleet proposal created'}[restore.state] || restore.state;
+      return `<tr><td><b>${esc(restore.id)}</b><br>${time(restore.created_at)}<br>${esc(restore.reason || '')}</td><td>${badge(status)}<br>Proposed by ${esc(restore.proposed_by || 'Unavailable')}${restore.approved_by ? `<br>Approved by ${esc(restore.approved_by)}` : ''}</td><td>${esc(restore.backup_id)}<br>${recoveryHash(restore.snapshot_hash)}</td><td>${esc(restore.base_revision || 'Unavailable')}<br>${recoveryHash(restore.base_bundle_hash)}</td><td class="recovery-row-actions"><button class="secondary small" type="button" data-action="bundle-inspect-restore" data-id="${esc(restore.id)}" aria-pressed="${restore.id===selected?.id}">Inspect progress</button>${approvals}${resumable ? `<button class="secondary small" type="button" data-action="bundle-resume-restore" data-id="${esc(restore.id)}">Resume restore</button>` : ''}</td></tr>`;
+    });
+    const restorable = backups.filter(backup => exactRecoveryHash(backup.snapshot_hash) && backup.id === backup.snapshot_hash);
+    const proposeForm = canPropose && restorable.length ? `<form id="bundle-restore-form" class="form-grid recovery-form">
+      <label class="field wide">Snapshot<select name="backup_id" required><option value="">Choose a backup on this page</option>${restorable.map(backup=>`<option value="${esc(backup.id)}">${esc(backup.id)} · ${esc(backup.snapshot_hash)}</option>`).join('')}</select></label>
+      <label class="field wide">Restore reason<input name="reason" maxlength="1000" required></label>
+      <div class="actions wide"><button class="primary" type="submit">Propose restore</button><button class="secondary" type="reset">Reset proposal</button></div>
+    </form>` : `<p class="muted">${canPropose ? 'A verified backup on this page is required to propose a restore.' : 'Proposing a restore requires rollout:trigger.'}</p>`;
+    renderPage('backup-restore', `<div class="dashboard-intro"><div><h1>Backup &amp; Restore</h1><p>Capture the published parser catalog and supported parser settings. Restores require an independent reviewer. Client progress comes from exact applied acknowledgements.</p></div>
+      <button type="button" class="secondary" data-action="reload">Refresh backup and rollout status</button></div>
+      ${panel('Durable backups','Review each snapshot’s scope, release, and checksums before exporting it or requesting a restore.',backupResult.status === 'rejected' ? recoveryUnavailable('Backup catalog', backupResult.reason) : renderAutomaticBackup(backupResult.value.automatic_capture)+table(['Backup','Release and format','Checksums','Asset counts','Settings scope','Actions'],backupRows,'Create a backup to capture the current parser bundle.')+recoveryPagination('backups',recovery.backupOffset,backupResult.value.has_more),canManage ? '<button class="primary" type="button" data-action="bundle-create-backup">Create backup</button>' : '')}
+      ${panel('Propose a restore','Review the snapshot hash before submitting. Approval binds the restore to that hash and the current controller revision.',proposeForm)}
+      ${panel('Restore history','Review the exact snapshot and controller revision. A separate rollout approval governs client delivery.',restoreResult.status === 'rejected' ? recoveryUnavailable('Restore history',restoreResult.reason) : table(['Restore','Approval state','Snapshot','Controller baseline','Actions'],restoreRows,'No restore proposals have been recorded.')+recoveryPagination('restores',recovery.restoreOffset,restoreResult.value.has_more))}
+      ${panel('Restore progress',selected ? `Restore ${selected.id}` : 'Controller publication and client application are independently verified.',renderRestoreProgress(selected,runtimeResult,rolloutResult))}`);
+  }
+
   async function loadRollouts() {
     const [rolloutResult,syncResult]=await Promise.allSettled([api('/rollouts',{allowStale:true}),api('/parser-sync')]);
     if(rolloutResult.status==='rejected')throw rolloutResult.reason;
@@ -2847,10 +3008,67 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   }
 
   async function loadParserWorkspace() {
-    const [draftsResult,runtimeResult]=await Promise.allSettled([api('/assurance/parsers'),api('/parsers')]);
-    const drafts=draftsResult.status==='fulfilled'?(draftsResult.value.parsers||[]):[],runtime=runtimeResult.status==='fulfilled'?(runtimeResult.value.parsers||[]):[];
-    const rows=drafts.map(doc=>{const p=doc.payload||doc,editable=['draft','rejected'].includes(doc.state);return `<tr><td><b>${esc(p.name||doc.id)}</b><br><small class="mono">${esc(doc.id)}</small></td><td>${doc.revision??'—'}</td><td>${badge(doc.state)}</td><td>${esc(p.validation?.score??'—')}%</td><td><button class="secondary small" data-action="parser-workspace-load" data-id="${esc(doc.id)}" ${editable?'':'disabled'}>Edit</button> ${editable?`<button class="danger small" data-action="parser-workspace-delete" data-id="${esc(doc.id)}">Delete</button>`:''} ${editable?`<button class="secondary small" data-action="assurance-parser-action" data-id="${esc(doc.id)}" data-value="submit">Submit</button>`:''}</td></tr>`;});
-    renderPage('parser-workspace',`<div class="callout">Build one complete, bounded parser artifact from single or multiline samples. Trailing whitespace is trimmed and the artifact exposes match scope, extraction, known fields, projection and output template. Saving never changes a live parser: independent review, approval, publication and fleet acknowledgement remain mandatory.</div>${panel('Complete parser artifact editor','Generate, edit and validate a declarative parser before saving a draft.',`<form id="parser-workspace-form" class="form-grid"><input type="hidden" name="edit_id"><label class="field wide">Single or multiline samples<textarea name="samples" required></textarea></label><div class="actions wide"><button type="button" class="secondary" data-action="parser-workspace-generate">Auto-populate complete parser</button><button type="button" class="secondary" data-action="parser-workspace-clear">New draft</button><button type="button" class="secondary" data-action="nfi-open-context">Map fields with NFI</button></div><label class="field">Parser name<input name="name" required maxlength="120" value="guided-parser-draft"></label><label class="field">Version<input name="version" required value="0.1.0"></label><div class="wide" data-parser-overview>Paste representative lines, then auto-populate the parser artifact.</div><label class="field wide">Complete parser artifact JSON<textarea name="parser" required>{}</textarea></label><label class="field wide">Validation cases JSON<textarea name="cases" required>[]</textarea></label><div class="actions wide"><button type="button" class="secondary" data-action="parser-workspace-validate">Validate locally</button><button type="submit" class="primary">Save approval-gated draft</button></div><div class="wide" data-parser-status></div></form>`)}${panel('Approval-gated parser drafts',`${runtime.length} live runtime parsers are available as reference. Drafts can be edited or removed only before review.`,table(['Parser','Revision','State','Validation','Actions'],rows,'No Parser Creation Workspace drafts exist yet.'))}${draftsResult.status==='rejected'?`<div class="callout warn">Draft catalog unavailable: ${esc(draftsResult.reason.message)}</div>`:''}`);
+    const navigation=state.navigationRequest;
+    const [draftsResult,runtimeResult]=await Promise.allSettled([
+      api('/assurance/parsers',{timeoutMs:10000}), api('/parsers',{timeoutMs:10000}),
+    ]);
+    if (state.page!=='parser-workspace' || state.navigationRequest!==navigation) return;
+    const drafts = draftsResult.value?.parsers || [];
+    const runtime = runtimeParserList(runtimeResult.value);
+    const rows = drafts.map(doc => {
+      const payload = doc.payload || doc;
+      const validation = payload.validation || {};
+      const editable = ['draft','rejected'].includes(doc.state);
+      const passed = parserWorkspaceCanSubmit(payload);
+      const recovery = renderParserRecovery(payload);
+      const validateMessage = validation.total > 0 ? `${number(validation.passed)}/${number(validation.total)} cases passed` : payload.requires_validation_examples === true ? 'Saved validation examples required' : 'Validation evidence unavailable';
+      return `<tr data-parser-candidate="${esc(doc.id)}" data-parser-revision="${esc(doc.revision)}" tabindex="-1"><td><b>${esc(payload.name||doc.id)}</b><br><small class="mono">${esc(doc.id)} · ${esc(payload.version || 'Version unavailable')}</small></td><td>${number(doc.revision)}</td><td>${badge(doc.state)}</td>
+        <td>${esc(validateMessage)}${validation.reason ? `<br>${esc(validation.reason)}` : ''}${recovery}</td><td>${editable ? `<button type="button" class="secondary small" data-action="parser-workspace-load" data-id="${esc(doc.id)}">Edit</button> <button type="button" class="danger small" data-action="parser-workspace-delete" data-id="${esc(doc.id)}">Delete</button> <button type="button" class="secondary small" data-action="parser-workspace-submit" data-id="${esc(doc.id)}" ${passed ? '' : 'disabled title="A valid parser and passing evidence are required"'}>Submit for review</button>${passed || recovery ? '' : '<br><small>Edit the draft and save passing validation cases before submitting.</small>'}${recovery ? ' <button type="button" class="secondary small" data-action="open-napi-synthesis">Open NAPI Synthesis</button>' : ''}` : ''}</td></tr>`;
+    });
+    const reference = runtimeResult.status === 'rejected' ? recoveryUnavailable('Live runtime parser inventory',runtimeResult.reason) : `<details><summary>${runtime.length} live runtime parsers are available as reference.</summary>${table(['Runtime parser','Version','Format'],runtime.map(parser=>`<tr><td>${esc(parser.id)}</td><td>${number(parser.version)}</td><td>${esc(parser.format || '—')}</td></tr>`),'The controller reported an empty runtime catalog.')}</details>`;
+    renderPage('parser-workspace', `${panel('Complete parser artifact editor','Generate a declarative parser, review the exact expected outputs, and save an approval-gated draft.', `<form id="parser-workspace-form" class="form-grid">
+      <input type="hidden" name="edit_id"><label class="field wide">Single or multiline samples<textarea name="samples"></textarea></label>
+      <div class="actions wide"><button type="button" class="secondary" data-action="parser-workspace-generate">Auto-populate complete parser</button><button type="button" class="secondary" data-action="parser-workspace-clear">New draft</button><button type="button" class="secondary" data-action="nfi-open-context">Map fields with NFI</button></div>
+      <label class="field">Parser name<input name="name" required maxlength="120" value="guided-parser-draft"></label><label class="field">Version<input name="version" required value="0.1.0"></label>
+      <div class="wide" data-parser-overview>Paste representative lines, then auto-populate the parser artifact.</div><div class="wide" data-parser-recovery></div>
+      <label class="field wide">Complete parser artifact JSON<textarea name="parser" required>{}</textarea></label>
+      <label class="field wide">Validation cases JSON<textarea name="cases" required>[]</textarea><span class="hint">Add 1–100 cases with a nonempty raw record and its exact expected output in a desired JSON object.</span></label>
+      <div class="actions wide"><button type="button" class="secondary" data-action="parser-workspace-validate">Validate locally</button><button type="button" class="secondary" data-action="parser-workspace-preview">Validate on controller</button><button type="submit" class="primary">Save approval-gated draft</button></div>
+      <div class="wide" data-parser-status role="status"></div><pre class="wide json-output" data-parser-validation-results hidden></pre>
+    </form>`)}${panel('Approval-gated parser drafts','Each draft must pass its validation cases before submission.',draftsResult.status==='rejected' ? recoveryUnavailable('Draft catalog',draftsResult.reason) : table(['Parser','Revision','State','Validation','Actions'],rows,'No Parser Creation Workspace drafts exist yet.'))}${panel('Live parser reference','Inventory reported by the controller runtime.',reference)}`);
+  }
+
+  function parserWorkspaceCanSubmit(payload) {
+    const validation=payload.validation || {};
+    return payload.validation_passed===true && exactRecoveryHash(payload.artifact_checksum) && !payload.requires_validation_examples && !payload.recovery?.blockers?.length && validation.total>0 && validation.passed===validation.total && validation.failed===0;
+  }
+
+  function renderParserRecovery(payload) {
+    const recovery=payload.recovery;
+    const blockers=Array.isArray(recovery?.blockers)?recovery.blockers.filter(item=>typeof item==='string'&&item.trim()):[];
+    if(!blockers.length)return '';
+    return `<div class="callout warn"><b>Imported draft recovery required</b><ul>${blockers.map(item=>`<li>${esc(item)}</li>`).join('')}</ul><p>${esc(recovery.recommendation || 'Reconstruct the extraction rules and exact expected outputs from representative evidence. Validate them on the controller and save a new draft revision.')}</p></div>`;
+  }
+
+  function parserWorkspaceDefinition(form) {
+    const cases = parseJSON(form.elements.cases.value,'Validation cases JSON');
+    if (!Array.isArray(cases) || !cases.length || cases.length > 100) throw new Error('Include 1–100 validation cases before you validate or save.');
+    for (const [index, item] of cases.entries()) {
+      if (typeof item?.raw !== 'string' || !item.raw.trim()) throw new Error(`Case ${index + 1} requires a nonempty raw record.`);
+      if (!item.desired || typeof item.desired !== 'object' || Array.isArray(item.desired) || !Object.keys(item.desired).length) throw new Error(`Case ${index + 1} requires a nonempty desired JSON object with the exact expected output.`);
+    }
+    const parser = parseJSON(form.elements.parser.value,'Parser artifact JSON');
+    if (!parser || typeof parser !== 'object' || Array.isArray(parser) || (parser.pattern_type === 'mapping' ? !parser.mapping_plan : !parser.fields?.length)) throw new Error('Enter a declarative parser with field definitions or a native mapping plan.');
+    return {parser,cases};
+  }
+
+  function setParserWorkspaceStatus(form, message, errors, failed=false) {
+    const status = form.querySelector('[data-parser-status]');
+    status.textContent = message;
+    status.classList.toggle('sync-error',failed);
+    const results = form.querySelector('[data-parser-validation-results]');
+    results.hidden = !errors;
+    results.textContent = errors ? pretty(errors) : '';
   }
 
   function renderAIProfileOrder(profiles,order,defaultID){
@@ -2891,10 +3109,26 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   function generateParserHelper(form) {
     const samples=String(form.elements.samples.value||'').replace(/\r\n?/g,'\n').split('\n').map(line=>line.replace(/[\t ]+$/,'')).filter(line=>line.trim());
     if(!samples.length)throw new Error('Paste at least one non-empty sample line');
-    const pairs=[...samples[0].matchAll(/([A-Za-z_][\w.-]*)\s*=\s*("[^"]*"|'[^']*'|[^\s,;]+)/g)],fields=pairs.length>1?pairs.map(([,name])=>name):['message'];
-    const family=pairs.length>1?'key_value':'custom_log',pattern=pairs.length>1?fields.map(name=>`${name}=(?P<${name}>\\S+)`).join('\\s+'):'(?P<message>.*)';
-    const parser={pattern_type:'regex',pattern,method:pairs.length>1?'key_value_regex':'regex',kv_delimiters:['='],fields:fields.map(name=>({name,source:`group:${name}`,type:'string'})),field_mapping:Object.fromEntries(fields.map(name=>[name,name])),known_fields:fields,projection:fields,template:Object.fromEntries(fields.map(name=>[name,'{'+name+'}']))};
-    form.elements.samples.value=samples.join('\n');form.elements.name.value=`${family}-draft`;form.elements.parser.value=pretty(parser);form.elements.cases.value=pretty(samples.map(raw=>({raw,service:family,desired:{}})));const overview=form.querySelector('[data-parser-overview]')||el('parser-helper-overview');if(overview)overview.textContent=`${parser.method} · ${fields.join(', ')} · ${samples.length} trimmed samples`;
+    if(samples.length>100)throw new Error('Use up to 100 representative sample lines.');
+    const pairValue=String.raw`"[^"]*"|'[^']*'|[^\s,;'"]+`;
+    const pairPattern=new RegExp(String.raw`([A-Za-z_][A-Za-z0-9_]{0,127})[ \t]*=[ \t]*(${pairValue})`,'g');
+    const samplePairs=samples.map(line=>[...line.matchAll(pairPattern)]);
+    const keys=samplePairs[0].map(([,name])=>name);
+    const consistent=keys.length>0&&keys.length<=256&&new Set(keys).size===keys.length&&samplePairs.every((pairs,index)=>
+      pairs.length===keys.length&&pairs.every(([,name],i)=>name===keys[i])&&samples[index].replace(pairPattern,'').trim()==='');
+    const pattern=consistent?`^[ \\t]*${keys.map(name=>`${name}[ \\t]*=[ \\t]*(?P<${name}>${pairValue})`).join('[ \\t]+')}$`:'^(?P<message>.+)$';
+    const values=consistent?new RegExp(pattern.replaceAll('(?P<','(?<')):null;
+    const cases=values?samples.map(raw=>({raw,service:'key_value',desired:values.exec(raw)?.groups})):[];
+    const structured=consistent&&cases.every(item=>item.desired);
+    const fields=structured?keys:['message'];
+    const family=structured?'key_value':'custom_log';
+    const parser={pattern_type:'regex',pattern:structured?pattern:'^(?P<message>.+)$',method:structured?'key_value_regex':'regex',kv_delimiters:['='],fields:fields.map(name=>({name,source:`group:${name}`,type:'string',required:true})),field_mapping:Object.fromEntries(fields.map(name=>[name,name])),known_fields:fields,projection:fields,template:Object.fromEntries(fields.map(name=>[name,'{'+name+'}']))};
+    form.elements.samples.value=samples.join('\n');
+    form.elements.name.value=`${family}-draft`;
+    form.elements.parser.value=pretty(parser);
+    form.elements.cases.value=pretty(structured?cases:samples.map(raw=>({raw,service:family,desired:{message:raw}})));
+    const overview=form.querySelector('[data-parser-overview]')||el('parser-helper-overview');
+    if(overview)overview.textContent=`${parser.method} · ${fields.join(', ')} · ${samples.length} trimmed samples`;
     renderParserHelperDetails(parser,form);
   }
   function renderParserHelperDetails(parser,container=document) {
@@ -3109,7 +3343,9 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     page.insertAdjacentHTML('afterbegin','<div class="dashboard-intro"><div><p class="eyebrow">UPES recovery · governed parser lifecycle</p><h1>Quarantine Resolution Wizard</h1><p>Resolve retained parsing failures in one nine-stage workspace while the current production parser remains authoritative.</p></div></div>');
     page.dataset.page='quarantine-wizard';setupQRWStepPanels(gprs||page);
   }
-  const LOADERS = { 'sample-history':loadSampleHistory, 'header-templates':()=>loadConfig('header-templates'), 'kv-templates':()=>loadConfig('kv-templates'), 'reference-ai':loadReferenceAI, 'building-blocks':loadBuildingBlocks, 'field-mapping':loadFieldMapping, operations:loadOperations, monitoring:async()=>renderMonitoring(), 'sync-fabric':async()=>renderSyncFabric(), 'nhle-monitor':async()=>renderSubsystemPage('nhle-monitor'), 'napi-monitor':async()=>renderSubsystemPage('napi-monitor'), 'nal-monitor':async()=>renderSubsystemPage('nal-monitor'), upes:loadUPES, nupire:loadNupire, assurance:loadAssurance, 'quarantine-wizard':loadQuarantineWizard, 'parser-workspace':loadParserWorkspace, 'field-integrity':loadFieldIntegrity, fleet:loadFleet, 'parser-sync':loadParserSync, clients:loadClientManagement, controller:loadControllerManagement, parsers:loadParsers, migration:loadMigration, 'input-paths':loadInputPaths, kv:()=>loadConfig('kv'), static:()=>loadConfig('static'), projection:()=>loadConfig('projection'), studio:()=>loadConfig('studio'), regex:()=>loadConfig('regex'), knownkeys:()=>loadConfig('knownkeys'), semantic:()=>loadConfig('semantic'), 'engine-network':()=>loadDomainEngine('engine-network'), 'engine-url':()=>loadDomainEngine('engine-url'), 'engine-email':()=>loadDomainEngine('engine-email'), 'engine-subject':()=>loadDomainEngine('engine-subject'), outputs:loadOutputEngine, metadata:loadMetadata, streams:loadStreams, unknowns:loadUnknowns, 'controller-gateway':loadControllerGateway, 'ai-privacy':loadAIPrivacy, 'api-monitor':loadAPIMonitor, latency:loadLatency, drift:loadDrift, performance:loadPerformance, rollouts:loadRollouts, artifacts:loadArtifacts, security:loadSecurity, system:loadSystem, communications:loadCommunicationStatus, notifications:loadNotifications, ai:loadAIProvider };
+  const LOADERS = { 'sample-history':loadSampleHistory, 'header-templates':()=>loadConfig('header-templates'), 'kv-templates':()=>loadConfig('kv-templates'), 'reference-ai':loadReferenceAI, 'building-blocks':loadBuildingBlocks, 'field-mapping':loadFieldMapping, operations:loadOperations, monitoring:async()=>renderMonitoring(), 'sync-fabric':async()=>renderSyncFabric(), 'nhle-monitor':async()=>renderSubsystemPage('nhle-monitor'), 'napi-monitor':async()=>renderSubsystemPage('napi-monitor'), 'nal-monitor':async()=>renderSubsystemPage('nal-monitor'), upes:loadUPES, nupire:loadNupire, assurance:loadAssurance, 'quarantine-wizard':loadQuarantineWizard, 'parser-workspace':loadParserWorkspace, 'field-integrity':loadFieldIntegrity, fleet:loadFleet, 'parser-sync':loadParserSync, clients:loadClientManagement, controller:loadControllerManagement, parsers:loadParsers, migration:loadMigration, 'input-paths':loadInputPaths, kv:()=>loadConfig('kv'), static:()=>loadConfig('static'), projection:()=>loadConfig('projection'), studio:()=>loadConfig('studio'), regex:()=>loadConfig('regex'), knownkeys:()=>loadConfig('knownkeys'), semantic:()=>loadConfig('semantic'), 'engine-network':()=>loadDomainEngine('engine-network'), 'engine-url':()=>loadDomainEngine('engine-url'), 'engine-email':()=>loadDomainEngine('engine-email'), 'engine-subject':()=>loadDomainEngine('engine-subject'), outputs:loadOutputEngine, metadata:loadMetadata, streams:loadStreams, unknowns:loadUnknowns, 'controller-gateway':loadControllerGateway, 'ai-privacy':loadAIPrivacy, 'api-monitor':loadAPIMonitor, latency:loadLatency, drift:loadDrift, performance:loadPerformance, rollouts:loadRollouts, 'backup-restore':loadBackupRestore, artifacts:loadArtifacts, security:loadSecurity, system:loadSystem, communications:loadCommunicationStatus, notifications:loadNotifications, ai:loadAIProvider,
+    'ai-guidance':()=>window.NLIAIGuidance.render({page,api,esc,pretty,notify,can,isCurrent:()=>state.page==='ai-guidance'&&!!state.user}),
+  };
 
   async function loadUPES(){
     const canonical=state.sync.snapshot||{},upes=canonical.subsystems?.upes;
@@ -3140,7 +3376,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     const rows=items.map(item=>{const metrics=item.metrics||{};return `<tr><td><button class="ghost small" data-action="nupire-detail" data-id="${esc(item.id)}">${esc(item.id)}</button><br><small>${esc(item.digest||'digest unavailable')}</small></td><td>${badge(item.state||'unknown')}</td><td>${metrics.samples!=null?`${number(metrics.exact_matches)} exact / ${number(metrics.samples)} samples`:'Held-out metrics unavailable'}</td><td>${time(item.updated_at)}</td></tr>`;});
     const lifecycle=[['Shadow','shadow'],['Canary','canary'],['Promotion','promoted'],['Rollback','rolled_back'],['Drift','drifted']].map(([label,status])=>`<div class="card"><div class="metric-label">${label}</div><div class="metric-value">${(items.length?number(items.filter(item=>item.state===status).length):'No candidates')}</div><div class="metric-note">Persisted candidates in this state</div></div>`).join('');
     let detail=empty('Select a persisted NUPIRE candidate to inspect its validation and evidence metadata.');
-    if(chosen){const transitions={evaluated:['shadow'],shadow:['approve'],approval:['canary'],canary:['promote'],promoted:['drift','rollback'],drifted:['rollback']}[chosen.state]||[];const controls=transitions.map(action=>`<button class="secondary small" data-action="nupire-transition" data-id="${esc(chosen.id)}" data-value="${action}">${esc(action)}</button>`).join(' ');detail=`<div class="grid cols-2"><div><p><b>${esc(chosen.id||selectedNupire)}</b> · ${badge(chosen.state||'unknown')}</p><p>Artifact digest: <code>${esc(chosen.digest||'unavailable')}</code> · integrity ${chosen.digest_valid?'valid':'unavailable'}</p><p>Held-out evidence: ${chosen.metrics?esc(pretty(chosen.metrics)):'Unavailable'}</p><div class="actions">${controls||'No transitions are available for this state.'}</div></div><div><p>Evidence provenance and lifecycle history</p><pre class="json-output">${esc(pretty({provenance:chosen.provenance,events:chosen.events,approved_by:chosen.approved_by}))}</pre></div></div>`;}
+    if(chosen){const source=chosen.parser_id||String(chosen.provenance?.source||'').match(/^assurance\/napi\/([A-Za-z0-9._-]+)$/)?.[1];const sourceLink=source?` <button class="secondary small" type="button" data-action="open-saved-parser" data-id="${esc(source)}">Open linked parser ${esc(source)}</button>`:'';const transitions={evaluated:['shadow'],shadow:['approve'],approval:['canary'],canary:['promote'],promoted:['drift','rollback'],drifted:['rollback']}[chosen.state]||[];const controls=transitions.map(action=>`<button class="secondary small" data-action="nupire-transition" data-id="${esc(chosen.id)}" data-value="${action}">${esc(action)}</button>`).join(' ');detail=`<div class="grid cols-2"><div><p><b>${esc(chosen.id||selectedNupire)}</b> · ${badge(chosen.state||'unknown')}</p>${chosen.scope==='evaluation'?'<p>NAPI evaluation record. Parser review and publication take place in the parser workspace.</p>':''}<p>Artifact digest: <code>${esc(chosen.digest||'unavailable')}</code> · integrity ${chosen.digest_valid?'valid':'unavailable'}</p><p>Held-out evidence: ${chosen.metrics?esc(pretty(chosen.metrics)):'Unavailable'}</p><div class="actions">${controls||'No transitions are available for this state.'}${sourceLink}</div></div><div><p>Evidence provenance and lifecycle history</p><pre class="json-output">${esc(pretty({provenance:chosen.provenance,events:chosen.events,approved_by:chosen.approved_by}))}</pre></div></div>`;}
     const artifactForm=chosen?.state==='discovery'?`<form id="nupire-artifact-form" class="form-grid"><input type="hidden" name="id" value="${esc(chosen.id)}"><label class="field wide">Declarative parser artifact JSON<textarea name="artifact" required placeholder='{"pattern_type":"key_value","fields":[]}'></textarea></label><button class="primary" type="submit">Attach candidate artifact</button></form>`:'';
     const evaluationForm=chosen?.state==='candidate'?`<form id="nupire-evaluation-form" class="form-grid"><input type="hidden" name="id" value="${esc(chosen.id)}"><label class="field wide">Measured held-out metrics JSON<textarea name="metrics" required placeholder="Enter measured sample count, exact_matches, field_precision, field_recall, error_rate, ambiguous"></textarea></label><label class="field wide">Held-out evidence IDs<input name="held_out_ids" required placeholder="Comma-separated immutable evidence IDs"></label><button class="primary" type="submit">Submit measured evaluation</button></form>`:'';
     renderPage('nupire',`<div class="dashboard-intro"><div><p class="eyebrow">Evidence-gated parser evolution</p><h1>NUPIRE / EGPE workspace</h1><p><b>NUPIRE</b> means <b>Nexora Universal Parsing Intelligence &amp; Recovery Engine</b>. <b>EGPE</b> means <b>Evidence-Gated Parser Evolution</b>. This operator-triggered workspace persists candidates and held-out evaluation evidence; it is outside the per-record hot path.</p></div><span>${badge(snapshot.evolution_state||'unknown')}</span></div>${panel('Candidate registry','Candidate records come from the durable NUPIRE lifecycle store. Evidence appears after held-out evaluation.',table(['Candidate','Status','Held-out evidence','Updated'],rows,'No NUPIRE candidates are persisted yet.'))}${panel('Create discovery','Record evidence identifiers and provenance before attaching a parser candidate. Raw log text is not stored by this workflow.',`<form id="nupire-discovery-form" class="form-grid"><label class="field">Discovery ID<input name="id" required maxlength="128"></label><label class="field">Source<input name="source" required maxlength="256"></label><label class="field">Generator<input name="generator" required maxlength="128"></label><label class="field">Training evidence IDs<input name="training_ids" required placeholder="Comma-separated IDs"></label><label class="field wide">Held-out evidence IDs<input name="held_out_ids" required placeholder="Independent comma-separated IDs"></label><button class="primary" type="submit">Create discovery record</button></form>`)}${panel('Candidate detail','Scores and evidence are shown only when present in the persisted record.',detail)}${artifactForm?panel('Submit candidate artifact','The controller accepts declarative JSON objects only; code and raw events are rejected.',artifactForm):''}${evaluationForm?panel('Held-out evaluation','Submit measurements produced by the assurance workflow and the immutable held-out evidence identifiers.',evaluationForm):''}${panel('Evolution lifecycle','Current lifecycle status is read from each persisted candidate.',`<div class="grid cols-3">${lifecycle}</div>`)}`);
@@ -3148,18 +3384,71 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
 
   async function submit(form) {
     const data=formObject(form);
+    if (!can(FORM_PERMISSIONS[form.id])) throw new Error('This action requires an authorized role.');
     switch(form.getAttribute('id')){
+      case 'bundle-restore-form': {
+        const recovery = state.recovery;
+        const backup = recovery?.backups.find(item => item.id === data.backup_id);
+        const reason = data.reason.trim();
+        if (!backup || !exactRecoveryHash(backup.snapshot_hash)) throw new Error('Choose a verified snapshot before proposing a restore.');
+        if (!reason || new TextEncoder().encode(reason).length > 1000) throw new Error('Enter a restore reason of 1–1000 bytes.');
+        const result = await api('/bundle-restores', {method:'POST', body:{backup_id:backup.id, expected_snapshot_hash:backup.snapshot_hash, reason}});
+        recovery.restoreOffset = 0;
+        recovery.restoreID = result.id;
+        notify(`Restore ${result.id} is awaiting independent approval.`);
+        if (state.recovery === recovery && state.page === 'backup-restore') await navigate('backup-restore');
+        break;
+      }
       case 'nupire-discovery-form': { const ids=value=>value.split(',').map(item=>item.trim()).filter(Boolean);const body={id:data.id,source:data.source,generator:data.generator,training_ids:ids(data.training_ids),held_out_ids:ids(data.held_out_ids)};if(!body.training_ids.length||!body.held_out_ids.length)throw new Error('Provide training and independent held-out evidence IDs');await api('/nupire/discoveries',{method:'POST',body});selectedNupire=data.id;notify('NUPIRE discovery record persisted.');await navigate('nupire');break; }
       case 'nupire-artifact-form': { const artifact=parseJSON(data.artifact,'Declarative artifact JSON');if(!artifact||Array.isArray(artifact)||typeof artifact!=='object')throw new Error('Candidate artifact must be a JSON object');await api('/nupire/candidates/'+encodeURIComponent(data.id)+'/artifact',{method:'POST',body:{artifact}});selectedNupire=data.id;notify('Declarative parser candidate persisted.');await navigate('nupire');break; }
       case 'nupire-evaluation-form': { const metrics=parseJSON(data.metrics,'Measured metrics JSON'),held_out_ids=data.held_out_ids.split(',').map(item=>item.trim()).filter(Boolean);if(!held_out_ids.length)throw new Error('Provide the held-out evidence IDs used for these measurements');await api('/nupire/candidates/'+encodeURIComponent(data.id)+'/evaluation',{method:'POST',body:{metrics,held_out_ids}});selectedNupire=data.id;notify('Held-out evaluation recorded by NUPIRE policy.');await navigate('nupire');break; }
-      case 'parser-workspace-form': { const parser=parseJSON(data.parser,'Parser artifact JSON'),cases=parseJSON(data.cases,'Validation cases JSON');if(!Array.isArray(cases)||!cases.length)throw new Error('Provide at least one validation case');const body={name:data.name,version:data.version,parser,cases,source_quarantine_record_id:state.quarantineDiagnosis?.id||''};const path=data.edit_id?`/assurance/parsers/${encodeURIComponent(data.edit_id)}`:'/assurance/parsers';const method=data.edit_id?'PUT':'POST';const result=await api(path,{method,body});notify(`Parser draft saved · validation ${result.validation?.score??'pending'}%. Independent approval remains required.`);await navigate('parser-workspace');break; }
+      case 'parser-workspace-form': {
+        const definition = parserWorkspaceDefinition(form);
+        const body = {name:data.name.trim(),version:data.version.trim(),...definition};
+        if (!body.name) throw new Error('Enter a parser name.');
+        const path = data.edit_id ? `/assurance/parsers/${encodeURIComponent(data.edit_id)}` : '/assurance/parsers';
+        const result = await api(path,{method:data.edit_id?'PUT':'POST',body});
+        const validation = result.validation || {};
+        notify(`Parser draft saved${validation.total > 0 ? ` · ${validation.passed}/${validation.total} cases passed` : ''}.`);
+        if (form.isConnected && state.page === 'parser-workspace') {
+          const sameInput=['name','version','parser','cases'].every(key=>form.elements[key].value===data[key]);
+          form.elements.edit_id.value = result.id;
+          setParserWorkspaceStatus(form,sameInput?`Draft ${result.id} saved. ${validation.passed ?? '—'}/${validation.total ?? '—'} controller cases passed.`:`The previous revision of ${result.id} was saved. Save again to validate the current edits.`,sameInput&&validation.failed>0 ? validation.results || validation.errors || validation : null,sameInput&&validation.failed>0);
+          if (sameInput && validation.total>0 && validation.passed===validation.total && validation.failed===0) await navigate('parser-workspace');
+        }
+        break;
+      }
       case 'parser-helper-form':
       case 'gprs-parser-helper-form': { const parser=parseJSON(data.parser,'Parser JSON'),cases=parseJSON(data.cases,'Validation cases JSON');if(!Array.isArray(cases)||!cases.length)throw new Error('Provide validation cases');const payload={name:data.name,version:data.version,parser,cases,source_quarantine_record_id:state.quarantineDiagnosis?.id||''},editId=data.edit_id.trim();const result=editId?await api(`/assurance/parsers/${encodeURIComponent(editId)}`,{method:'PUT',body:payload}):await api('/assurance/parsers',{method:'POST',body:payload});if(state.quarantineDiagnosis&&result.id)state.quarantineDiagnosis.parserId=result.id;if(state.gprsManual&&result.id){state.gprsManual.parserId=result.id;state.gprsManual.verification=null;}toast(editId?'Parser revision saved':'Parser draft created');const target=state.page==='quarantine-wizard'?'quarantine-wizard':'assurance';await navigate(target);page.querySelector('[data-assurance-tab=gprs]')?.click();page.querySelector('#assurance-panel-gprs')?.scrollIntoView({behavior:'smooth',block:'start'});break; }    case 'assurance-form': { const progress=notify('Running production parser assurance…','progress');try{const request={raw:data.raw,service:selectedAssuranceService(data),parser_id:data.parser_id==='auto'?'':data.parser_id,source:data.source,desired:parseJSON(data.desired,'Desired JSON'),field_mapping:parseJSON(data.mapping,'Field mapping')};const result=await api('/assurance/run',{method:'POST',body:{...request,preserve_source:true}});state.lastAssurance={request,result};if(data.retain_test_sample==='true')await retainTestSample({...request,preserve_source:true},'Assurance Lab');const helper=result.parser_creation_helper,form=el('parser-helper-form');if(helper&&form){const normalized=normalizeParserCreationHelper(helper,request);form.elements.samples.value=normalized.normalized;form.elements.name.value=`${String(helper.requested_family||request.service||'custom').replace(/[^A-Za-z0-9._-]/g,'-')}-draft`;form.elements.parser.value=pretty(normalized.parser);form.elements.cases.value=pretty(normalized.normalized.split('\n').filter(line=>line.trim()).map(raw=>({raw,service:request.service,desired:{}})));const overview=form.querySelector('[data-parser-overview]')||el('parser-helper-overview');if(overview)overview.innerHTML=`<dl><dt>Parser family</dt><dd>${esc(helper.requested_family||request.service)}</dd><dt>Detected format</dt><dd>${esc(helper.detected_format||'—')} · ${Number.isFinite(Number(helper.sample_lines))?Number(helper.sample_lines):normalized.sampleLines} sample lines</dd><dt>Selected parser / strategy</dt><dd>${esc(helper.selected_parser||'automatic')} / ${esc(helper.selected_strategy||'—')}</dd><dt>Match scope</dt><dd><code>${esc(pretty(normalized.scope))}</code></dd><dt>Regex</dt><dd><code>${esc(helper.suggested_regex||'—')}</code></dd><dt>Fields / projection</dt><dd>${esc(normalized.fieldNames.join(', '))} / ${esc(normalized.projection.join(', '))}</dd><dt>Template</dt><dd><code>${esc(pretty(normalized.template))}</code></dd></dl>`;renderParserHelperDetails(normalized.parser,form);}if(state.page==='assurance'){el('assurance-result').innerHTML=renderAssurance(result);page.querySelector('[data-action=clear-assurance]').disabled=false;page.querySelector('[data-action=download-assurance]').disabled=false;applyPermissions();}progress.done(result.passed?'Assurance passed':'Assurance completed with findings');if(!result.passed){notify('Deterministic failure recorded. Review the result, then explicitly request AI remediation if needed.',true);}}catch(error){progress.fail(error.message);throw error;}break; }
       case 'assurance-upload-form': { const file=form.querySelector('[name=file]').files[0];if(!file)throw new Error('Choose a log, text, or archive sample');if(state.proxy&&file.size>4_000_000){state.uploadError='Hosted upload limit is 4 MB. Use the controller WebView for this sample.';const status=el('assurance-upload-status');if(status)status.outerHTML=renderUploadStatus();throw new Error(state.uploadError);}const service=selectedAssuranceService(data),parser_id=data.parser_id==='auto'?'':data.parser_id,retain=data.retain==='true',body=new FormData();body.append('file',file,file.name);body.append('service',service);body.append('parser_id',parser_id);body.append('retain',String(retain));state.uploadError='';const status=el('assurance-upload-status');if(status)status.innerHTML='<div class="callout">Upload in progress. The controller validates file type, archive contents and configured limits.</div>';const progress=notify(`Uploading ${file.name} for ${retain?'encrypted retention':'transient analysis'}…`,'progress');try{const result=await api('/assurance/upload',{method:'POST',body});state.uploadReport={filename:file.name,type:result.mime_type||result.content_type||file.type||file.name.split('.').pop(),size:file.size,response:result};state.uploadError='';state.lastAssurance={request:{raw:'',service,parser_id,source:file.name,desired:{},field_mapping:{}},result:result.result||result.report?.result||result};notify(result.message||`Sample analyzed · ${result.report?.files_analyzed??result.files_analyzed??1} file(s)`);await navigate('assurance');}catch(error){const archive=/\.(zip|tar|gz|tgz)$/i.test(file.name),routeMissing=/404|not found|unknown route|not implemented/i.test(error.message);if(!retain&&!archive&&routeMissing){try{const raw=await file.text();const request={raw,service,parser_id,source:file.name,desired:{},field_mapping:{}};const result=await api('/assurance/run',{method:'POST',body:{...request,preserve_source:true}});state.uploadReport={filename:file.name,type:file.type||file.name.split('.').pop(),size:file.size,response:{retained:false,storage_status:'Not retained; analysis was transient'}};state.lastAssurance={request,result};notify('File analyzed as a single sample; this controller does not yet support server-side archive analysis.');await navigate('assurance');break;}catch(fallbackError){state.uploadError=fallbackError.message;progress.fail(fallbackError.message);throw fallbackError;}}state.uploadError=retain&&routeMissing?'This controller does not support encrypted Assurance upload retention yet. No fixture was saved. Upgrade the controller or retry with retention turned off.':error.message;const errorStatus=el('assurance-upload-status');if(errorStatus)errorStatus.outerHTML=renderUploadStatus();progress.fail(state.uploadError);throw error;}break; }
       case 'assurance-corpus-form': { const parsedCases=parseJSON(data.cases,'Cases JSON');if(!Array.isArray(parsedCases)||!parsedCases.length)throw new Error('Provide at least one corpus case');const defaultService=selectedAssuranceService(data),defaultParser=data.parser_id==='auto'?'':data.parser_id;const cases=parsedCases.map(item=>({...item,service:item.service||defaultService,parser_id:item.parser_id||defaultParser}));const progress=notify(`Validating ${cases.length} corpus cases…`,'progress');try{const result=await api('/assurance/corpus',{method:'POST',body:{cases:cases.map(item=>({...item,preserve_source:true}))}});notify(`Corpus completed: ${result.passed ?? result.passed_count ?? 'see report'} passed`);el('assurance-corpus-result').innerHTML=panel('Corpus result','Mixed-format corpus execution report.',`<pre class="json-output">${esc(pretty(result))}</pre>`);}catch(error){progress.fail(error.message);throw error;}break; }
       case 'assurance-parser-form': { const cases=parseJSON(data.cases,'Validation cases JSON');const parser=parseJSON(data.parser,'Parser JSON');const progress=notify('Creating and validating parser draft…','progress');try{const result=await api('/assurance/parsers',{method:'POST',body:{name:data.name,version:data.version,parser,cases,source_quarantine_record_id:state.quarantineDiagnosis?.id||''}});notify(`Draft created · validation ${result.validation?.score ?? 'pending'}%`);await navigate('assurance');}catch(error){progress.fail(error.message);throw error;}break; }
       case 'assurance-run-form': { const [plan_id,revision]=data.plan.split('@');if(!plan_id||!Number(revision))throw new Error('Choose an exact saved plan revision');const run=await api('/assurance/runs',{method:'POST',body:{plan_id,plan_revision:Number(revision),case_id:data.case_id,scenario:data.scenario||'parser-regression'}});notify(`${run.scenario||'Assurance'} run ${run.id} accepted: ${run.state}`);await navigate('assurance');page.querySelector('[data-assurance-tab=runs]')?.click();break; }
-      case 'napi-synthesis-form': { const discovery=parseJSON(data.discovery,'Discovery samples JSON'),held_out=parseJSON(data.held_out,'Held-out samples JSON'),negative=parseJSON(data.negative,'Negative samples JSON');if(!Array.isArray(discovery)||discovery.length<2)throw new Error('Provide at least two discovery samples');if(!Array.isArray(held_out)||!held_out.length)throw new Error('Provide at least one independent held-out sample');if(!Array.isArray(negative))throw new Error('Negative samples must be a JSON array');const progress=notify('Synthesizing bounded parser candidates…','progress');try{const result=await api('/assurance/napi/synthesize',{method:'POST',body:{id:data.id,name:data.name,version:data.version,candidate_limit:Number(data.candidate_limit||4),discovery,held_out,negative}});state.lastNAPI=result;progress.done(`Draft ${result.id} revision ${result.revision} created; independent approval remains required.`);await navigate('assurance');page.querySelector('[data-assurance-tab=synthesis]')?.click();}catch(error){progress.fail(error.message);throw error;}break; }
+      case 'napi-synthesis-form': {
+        const discovery=parseJSON(data.discovery,'Discovery samples JSON');
+        const held_out=parseJSON(data.held_out,'Held-out samples JSON');
+        const negative=parseJSON(data.negative,'Negative samples JSON');
+        if(!Array.isArray(discovery)||discovery.length<2)throw new Error('Provide at least two discovery samples.');
+        if(!Array.isArray(held_out)||!held_out.length)throw new Error('Provide at least one independent held-out sample.');
+        if(!Array.isArray(negative))throw new Error('Negative samples must be a JSON array.');
+        try {
+          const result=await api('/assurance/napi/synthesize',{method:'POST',body:{id:data.id,name:data.name,version:data.version,candidate_limit:Number(data.candidate_limit||4),discovery,held_out,negative}});
+          state.lastNAPI=result;
+          notify(`Draft ${result.id} revision ${result.revision} created. ${result.requires_validation_examples ? 'Save validation examples before review.' : 'Review the draft and its validation evidence.'}`);
+          if(form.isConnected && state.page==='assurance'){
+            await navigate('assurance');
+            page.querySelector('[data-assurance-tab=synthesis]')?.click();
+          }
+        } catch(error) {
+          const result=form.parentElement?.querySelector('[data-napi-inline-result]');
+          if(result){
+            result.hidden=false;
+            result.textContent=requestFailure(error)+(error.details?.reason ? ` · ${error.details.reason}` : '');
+          }
+          throw error;
+        }
+        break;
+      }
       case 'assurance-plan-form': { const plan=parseJSON(data.plan,'Test plan JSON'),editId=data.edit_id.trim(),id=data.id.trim();const result=await api(editId?`/assurance/plans/${encodeURIComponent(editId)}`:'/assurance/plans',{method:editId?'PUT':'POST',body:{id,name:data.name,version:data.version,plan}});notify(`Test plan ${result.id||id} revision ${result.revision||'saved'} stored`);await navigate('assurance');page.querySelector('[data-assurance-tab=plans]')?.click();break; }
       case 'gprs-replay-form': {const selected=[...form.elements.record_ids.selectedOptions],ids=selected.map(option=>option.value),nodes=[...new Set(selected.map(option=>option.dataset.node).filter(Boolean))],exactAck=selected.length>0&&selected.every(option=>option.dataset.ack==='true');if(!ids.length)throw new Error('Select at least one replay-eligible record');if(nodes.length!==1)throw new Error('Selected records must belong to one target node');if(!exactAck)throw new Error('Every selected record must have an exact current bundle acknowledgement');const node=nodes[0];if(data.node_id!==node)throw new Error('Target node must match the selected records');const target=state.page==='quarantine-wizard'?'quarantine-wizard':'assurance';setReplayStatus(form,'Submitting the targeted replay request. Live telemetry continues in the background.','success');try{const result=await api('/quarantine/reprocess',{method:'POST',body:{record_ids:ids,node_id:node,expected_bundle_hash:form.dataset.bundleHash}});state.qrwReplayAcceptedIds=[...new Set([...state.qrwReplayAcceptedIds,...ids])];state.qrwStep=9;notify(result.message||'Replay proposal accepted; per-record parser confirmation is pending.');await navigate(target);if(target==='assurance')page.querySelector('[data-assurance-tab=gprs]')?.click();}catch(error){setReplayStatus(form,replayGateMessage(error,exactAck)||`Replay request was not accepted: ${error.message}. Live telemetry remains active.`,'warn');}break; }
       case 'quarantine-reprocess-form': { const record_ids=data.record_ids.split(',').map(value=>value.trim()).filter(Boolean);if(!record_ids.length)throw new Error('Enter at least one quarantine record ID');setReplayStatus(form,`Requesting replay for ${record_ids.length} record(s). Live telemetry continues in the background.`,'success');try{const result=await api('/quarantine/reprocess',{method:'POST',body:{record_ids,node_id:data.node_id.trim()}});notify(result.message||`Replay request ${result.rollout_id||result.proposal_id||'queued'}; client confirmation is pending.`);await navigate('unknowns');}catch(error){setReplayStatus(form,replayGateMessage(error)||`Replay request was not accepted: ${error.message}. Live telemetry remains active.`,'warn');}break; }
@@ -3240,6 +3529,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
 
   async function action(button) {
     const id=button.dataset.id, value=button.dataset.value;
+    if (/^(bundle-|parser-workspace-)/.test(button.dataset.action) && !can(actionPermission(button))) throw new Error('This action requires an authorized role.');
     if(button.hasAttribute?.('data-map-sample')&&!can('assurance:run'))throw new Error('Mapping requires Assurance run access.');
     if(button.dataset.action==='parser-helper-validate'){
       const progress=notify('Validating the generated parser against its exact evidence…','progress');
@@ -3256,6 +3546,52 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       return;
     }
     switch(button.dataset.action){
+      case 'bundle-create-backup': {
+        const recovery = state.recovery;
+        const backup = await api('/bundle-backups', {method:'POST', body:{}});
+        recovery.backupOffset = 0;
+        notify(`Backup ${backup.id} saved.`);
+        if (state.recovery === recovery && state.page === 'backup-restore') await navigate('backup-restore');
+        break;
+      }
+      case 'bundle-export': {
+        const file = await api(`/bundle-backups/${encodeURIComponent(id)}/export`, {asBlob:true});
+        downloadBlob(`nli-parser-bundle-${id}.json`, file);
+        break;
+      }
+      case 'bundle-page': {
+        const offset = Math.max(0, Number(value) || 0);
+        if (id === 'backups') state.recovery.backupOffset = offset;
+        if (id === 'restores') state.recovery.restoreOffset = offset;
+        await navigate('backup-restore');
+        break;
+      }
+      case 'bundle-inspect-restore': {
+        state.recovery.restoreID = id;
+        await navigate('backup-restore');
+        page.querySelector('.recovery-evidence')?.scrollIntoView({block:'center'});
+        break;
+      }
+      case 'bundle-approve-restore':
+      case 'bundle-resume-restore': {
+        const recovery = state.recovery;
+        const restore = recovery?.restores.find(item => item.id === id);
+        if (!restore) throw new Error('Refresh the restore history and try again.');
+        const approving = button.dataset.action === 'bundle-approve-restore';
+        if (approving) {
+          if (restore.proposed_by === state.user?.username) throw new Error('An independent reviewer must approve this restore.');
+          if (restore.state !== 'pending_approval' || !exactRecoveryHash(restore.snapshot_hash) || !restore.base_revision) throw new Error('The exact restore approval scope is unavailable. Refresh and review again.');
+          if (!confirm(`Approve restore ${id} for snapshot ${restore.snapshot_hash} against controller revision ${restore.base_revision}? Client delivery requires separate rollout approval.`)) break;
+        } else if ((!can('rollout:approve') && !can('rollout:trigger')) || !['applying','controller_published'].includes(restore.state)) {
+          throw new Error('This restore cannot be resumed by the current role or state.');
+        }
+        const body = approving ? {expected_snapshot_hash:restore.snapshot_hash, expected_base_revision:restore.base_revision} : {};
+        const result = await api(`/bundle-restores/${encodeURIComponent(id)}/${approving?'approve':'resume'}`, {method:'POST', body});
+        recovery.restoreID = id;
+        notify(result.rollout_proposal_id ? `Restore ${id} has a fleet rollout proposal. Check rollout approval and client acknowledgements.` : `Restore ${id} updated. Refresh progress for controller and client evidence.`);
+        if (state.recovery === recovery && state.page === 'backup-restore') await navigate('backup-restore');
+        break;
+      }
       case 'nfi-cancel-analysis': {nfiAnalysisController?.abort();qrwLivePreviewController?.abort();clearTimeout(nfiLiveTimer);const status=el('nfi-live-state');if(status)status.textContent='Analysis cancelled locally; no draft was published. Editing remains available.';break;}
       case 'nfi-fleet-status': {const result=await api('/parser-sync'),assets=result.assets||[];el('nfi-fleet-status').innerHTML=assets.length?assets.map(asset=>`<div class="nfi-profile"><b>${esc(asset.asset_id||asset.id)}</b> ${badge(asset.status||asset.runtime_sync?.status||'reported')}<pre>${esc(pretty({desired:asset.desired,clients:asset.clients,acknowledgement:asset.acknowledgement}))}</pre><button type="button" class="secondary small" data-action="parser-sync-verify" data-id="${esc(asset.asset_id||asset.id)}" data-class="${esc(asset.asset_class||'parser_pack')}">Verify reported state</button><button type="button" class="secondary small" data-action="parser-sync-retry" data-id="${esc(asset.asset_id||asset.id)}" data-class="${esc(asset.asset_class||'parser_pack')}">Request approval-gated rollout retry</button></div>`).join(''):`<pre>${esc(pretty(result))}</pre><p>No mapping-specific client acknowledgement was supplied; no deployment success is inferred.</p>`;break;}
       case 'nfi-mode': {state.nfiSenseMode=value;state.nfiGuideStep=2;el('nfi-mode-status').textContent=value==='manual'?'Manual Sense: select raw characters/tokens, Add Custom Field, or choose any native extraction strategy. Existing mappings are preserved.':'Suggest & Sense: use Suggest from raw log, then review each proposed mapping. Existing custom fields are preserved.';nfiGuideRefresh();break;}
@@ -3276,7 +3612,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       case 'input-profile-download': {const doc=await api(`/config/input-paths/${encodeURIComponent(id)}`);downloadJSON(`${id}-input-profile.json`,doc);break;}
       case 'dashboard-history-apply': {const from=page.querySelector('#dashboard-from')?.value||'',to=page.querySelector('#dashboard-to')?.value||'';state.dashboardFrom=from;state.dashboardTo=to;page.dataset.dirty='false';await applyDashboardHistory({force:true});break;}
       case 'dashboard-history-download': {if(!state.dashboardHistory?.points)throw new Error('Historical measurements are not loaded yet.');downloadJSON(`nli-command-center-${state.dashboardRange}.json`,{range:state.dashboardRange,from:state.dashboardHistory.from,to:state.dashboardHistory.to,node_id:state.dashboardClient==='all'?undefined:state.dashboardClient,points:state.dashboardHistory.points,canonical_history:state.dashboardHistory.canonical_history});break;}
-      case 'reload': {const restoreGprs=state.page==='assurance'&&page.querySelector('[data-assurance-panel=gprs]')?.hidden===false;await navigate(state.page);if(restoreGprs)page.querySelector('[data-assurance-tab=gprs]')?.click();break;}
+      case 'reload': await refreshWorkspace();break;
       case 'notification-ack':
       case 'notification-state': await updateNotificationState(id,value||'read');toast(`Notification ${value==='snooze'?'set aside for one hour':value||'marked read'}`);break;
       case 'notification-dismiss': await api(`/notifications/audit-${encodeURIComponent(id)}`,{method:'DELETE',body:{}});toast('Notification removed from this user’s active feed');await refreshNotificationBell();await loadNotifications();break;
@@ -3335,10 +3671,84 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       case 'assurance-run-cancel': { const result=await api(`/assurance/runs/${encodeURIComponent(id)}/cancel`,{method:'POST',body:{}});notify(`Assurance run ${id} is ${result.state}`);await navigate('assurance');page.querySelector('[data-assurance-tab=runs]')?.click();break; }
       case 'assurance-run-download': { const doc=await api(`/assurance/runs/${encodeURIComponent(id)}`);downloadJSON(`${id}-assurance-run.json`,doc);break; }
       case 'assurance-plan-delete': { if(confirm(`Delete Assurance test plan ${id}?`)){await api(`/assurance/plans/${encodeURIComponent(id)}`,{method:'DELETE',body:{}});toast('Assurance test plan deleted');await navigate('assurance');page.querySelector('[data-assurance-tab=plans]')?.click();}break; }
-      case 'parser-workspace-generate': { const form=button.closest('form');generateParserHelper(form);const status=form.querySelector('[data-parser-status]');if(status)status.textContent='Complete draft generated locally. Review every field and validation case before saving.';break; }
-      case 'parser-workspace-validate': { const form=button.closest('form'),parser=parseJSON(form.elements.parser.value,'Parser artifact JSON'),cases=parseJSON(form.elements.cases.value,'Validation cases JSON');if(!parser.pattern_type||!parser.pattern||!Array.isArray(parser.fields)||(!parser.fields.length&&!parser.mapping_plan?.fields?.some(field=>['kv_all','kv_eol'].includes(field.method)&&field.output_policy==='flatten')))throw new Error('Parser requires pattern_type, pattern and at least one field');if(!Array.isArray(cases)||!cases.length)throw new Error('Provide validation cases');const status=form.querySelector('[data-parser-status]');if(status)status.textContent=`Local structure valid: ${parser.fields.length} fields and ${cases.length} cases. Save to run authoritative controller validation.`;break; }
-      case 'parser-workspace-clear': { const form=button.closest('form');form.reset();form.elements.edit_id.value='';form.elements.parser.value='{}';form.elements.cases.value='[]';form.querySelector('[data-parser-overview]').textContent='Paste representative lines, then auto-populate the parser artifact.';form.querySelector('[data-parser-status]').textContent='';break; }
-      case 'parser-workspace-load': { const doc=await api(`/assurance/parsers/${encodeURIComponent(id)}`),p=doc.payload||doc,form=page.querySelector('#parser-workspace-form');form.elements.edit_id.value=id;form.elements.samples.value=(p.cases||[]).map(item=>item.raw||'').filter(Boolean).join('\n');form.elements.name.value=p.name||id;form.elements.version.value=p.version||'0.1.0';form.elements.parser.value=pretty(p.parser||{});form.elements.cases.value=pretty(p.cases||[]);form.querySelector('[data-parser-overview]').textContent=`Editing ${id} revision ${doc.revision||'—'}. Saving creates a new draft revision.`;form.scrollIntoView({behavior:'smooth',block:'start'});break; }
+      case 'parser-workspace-generate': {
+        const form=button.closest('form');
+        generateParserHelper(form);
+        page.dataset.dirty='true';
+        setParserWorkspaceStatus(form,'Expected values were populated from the samples. Review them and verify parser scope before submitting.');
+        break;
+      }
+      case 'parser-workspace-validate': {
+        const form=button.closest('form'),{cases}=parserWorkspaceDefinition(form);
+        setParserWorkspaceStatus(form,`Local structure valid. The draft has ${cases.length} exact validation case${cases.length===1?'':'s'}. Use controller validation to check the outputs.`);
+        break;
+      }
+      case 'parser-workspace-preview': {
+        const form = button.closest('form');
+        const definition = parserWorkspaceDefinition(form);
+        const current = () => [form.elements.parser.value,form.elements.cases.value].join('\u0000');
+        const source = current();
+        const result = await api('/assurance/parser-preview',{method:'POST',body:definition});
+        if (form.isConnected && source === current()) {
+          const validation=result.validation||{};
+          setParserWorkspaceStatus(form,`Controller validation: ${number(validation.passed)}/${number(validation.total)} cases passed.`,result.passed===true?null:validation.results||validation.errors||validation,result.passed!==true);
+        }
+        break;
+      }
+      case 'parser-workspace-clear': {
+        const form=button.closest('form');
+        form.reset();
+        form.elements.edit_id.value='';
+        form.querySelector('[data-parser-overview]').textContent='Paste representative lines, then auto-populate the parser artifact.';
+        form.querySelector('[data-parser-recovery]').textContent='';
+        setParserWorkspaceStatus(form,'');
+        break;
+      }
+      case 'parser-workspace-load': {
+        const form=page.querySelector('#parser-workspace-form');
+        const doc=await api(`/assurance/parsers/${encodeURIComponent(id)}`),payload=doc.payload||doc;
+        if(!form?.isConnected)break;
+        if(!['draft','rejected'].includes(doc.state))throw new Error('This parser has advanced past editing. Refresh the candidate list.');
+        form.elements.edit_id.value=id;
+        form.elements.samples.value=(payload.cases||[]).map(item=>item.raw||'').filter(Boolean).join('\n');
+        form.elements.name.value=payload.name||id;
+        form.elements.version.value=payload.version||'0.1.0';
+        form.elements.parser.value=pretty(payload.parser||{});
+        form.elements.cases.value=pretty(payload.cases||[]);
+        form.querySelector('[data-parser-overview]').textContent=`Editing ${id} revision ${doc.revision||'—'}. Saving creates a new draft revision.`;
+        form.querySelector('[data-parser-recovery]').innerHTML=renderParserRecovery(payload) || (payload.requires_validation_examples === true ? `<div class="callout warn">${esc(payload.validation?.reason || 'Add approved, redacted validation examples and save this draft revision before submitting it for review.')}</div>` : '');
+        setParserWorkspaceStatus(form,'');
+        page.dataset.dirty='true';
+        form.scrollIntoView({behavior:'smooth',block:'start'});
+        break;
+      }
+      case 'parser-workspace-submit': {
+        await api(`/assurance/parsers/${encodeURIComponent(id)}/submit`,{method:'POST',body:{}});
+        notify(`Parser draft ${id} submitted for review.`);
+        if (state.page === 'parser-workspace') await navigate('parser-workspace');
+        break;
+      }
+      case 'open-napi-synthesis': {
+        await visitWorkspace('assurance');
+        if(state.page!=='assurance')break;
+        page.querySelector('[data-assurance-tab=synthesis]')?.click();
+        page.querySelector('#napi-synthesis-form [name=id]')?.focus();
+        break;
+      }
+      case 'open-saved-parser': {
+        await visitWorkspace('parser-workspace');
+        if(state.page!=='parser-workspace')break;
+        const row=page.querySelector(`[data-parser-candidate="${CSS.escape(id)}"]`);
+        if(!row)throw new Error(`Parser ${id} is missing from the current catalog snapshot.`);
+        row.focus();
+        if(button.dataset.revision && row.dataset.parserRevision!==button.dataset.revision) notify(`Parser ${id} is now at revision ${row.dataset.parserRevision}. The source operation referred to revision ${button.dataset.revision}.`,'warning');
+        break;
+      }
+      case 'open-napi-evidence': {
+        selectedNupire=id;
+        await visitWorkspace('nupire');
+        break;
+      }
       case 'parser-workspace-delete': { if(confirm(`Delete draft parser ${id}?`)){await api(`/assurance/parsers/${encodeURIComponent(id)}`,{method:'DELETE',body:{}});notify('Draft parser deleted');await navigate('parser-workspace');}break; }
       case 'assurance-open-parsers': location.hash='parsers';break;
       case 'engine-test': { const spec=ENGINE_SPECS[button.dataset.page];state.lastAssurance={request:{raw:spec.sample,service:spec.family,source:spec.slug,desired:{},field_mapping:{}},result:null};location.hash='assurance';break; }
@@ -3776,7 +4186,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       case 'purge-case': if(confirm('Permanently purge this encrypted fixture and every revision?')){await api(`/assurance/cases/${encodeURIComponent(id)}`,{method:'DELETE',body:{}});toast('Fixture purged');await navigate('assurance');}break;
       case 'download-case': { const progress=notify('Downloading retained fixture…','progress');try{const response=await fetchWithTimeout(`/api/v1/assurance/cases/${encodeURIComponent(id)}/download`,{credentials:'same-origin',headers:{Accept:'text/plain, application/octet-stream'}},55000);if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error||`Download failed (${response.status})`);}const blob=await response.blob();downloadBlob(`nli-v21-case-${id}.log`,blob);notify('Retained fixture downloaded');}catch(error){progress.fail(error.message);throw error;}break; }
       case 'download-upload-fixture': { const progress=notify('Downloading retained sample from the authenticated controller…','progress');try{if(!id)throw new Error('The controller did not return a retained fixture ID.');const response=await fetchWithTimeout(`/api/v1/assurance/cases/${encodeURIComponent(id)}/download`,{credentials:'same-origin',headers:{Accept:'text/plain, application/octet-stream'}},55000);if(!response.ok){const result=await response.json().catch(()=>({}));throw new Error(result.error||`Authenticated fixture download failed (${response.status})`);}downloadBlob(button.dataset.filename||`nli-v21-fixture-${id}.log`,await response.blob());notify('Retained fixture downloaded through the controller');}catch(error){progress.fail(error.message);throw error;}break; }
-      case 'navigate': await navigate(button.dataset.page);break;
+      case 'navigate': await visitWorkspace(button.dataset.page);break;
       case 'qrw-controller-preview': {await qrwVerifyController();break;}
       case 'qrw-token-field': {if(state.qrwFields.length>=128)throw new Error('A mapping can contain at most 128 fields');const token=Number(button.dataset.token),item=qrwTokens(qrwRaw())[token-1];if(!item)throw new Error('Token is no longer present');state.qrwFields.push(qrwField({name:`token_${token}_custom`,label:`Token ${token}`,method:'position',source:String(token),policy:'required',preview:item.value,status:'unresolved'}));el('qrw-field-rows').innerHTML=renderQRWFieldRows();break;}
       case 'qrw-selection-field': {const selection=window.getSelection(),anchor=selection?.anchorNode?.parentElement,focus=selection?.focusNode?.parentElement,host=el('nfi-raw-selection');if(!selection||!selection.toString()||!host||!host.contains(anchor)||!host.contains(focus))throw new Error('Select text inside the raw evidence explorer first.');const range=selection.getRangeAt(0),prefix=range.cloneRange();prefix.selectNodeContents(host);prefix.setEnd(range.startContainer,range.startOffset);const start=[...prefix.toString()].length+1,end=start+[...range.toString()].length-1;if(state.qrwFields.length>=128)throw new Error('A mapping can contain at most 128 fields');state.qrwFields.push(qrwField({name:`characters_${start}_${end}`,label:'Selected raw characters',method:'character',source:String(start),source_end:String(end),policy:'required',preview:range.toString(),status:'unresolved'}));el('qrw-field-rows').innerHTML=renderQRWFieldRows();break;}
@@ -3825,7 +4235,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
         const source = button.closest('[data-sample-template-actions]')?.previousElementSibling;
         const raw = source?.value ?? workspaceAISample(button);
         if (!raw.trim()) throw new Error('Load or paste a raw log sample first.');
-        await navigate(button.dataset.kind);
+        await visitWorkspace(button.dataset.kind);
         const sample = el('template-composition-sample');
         if (sample && state.page === button.dataset.kind) {
           sample.value = raw;
@@ -4099,11 +4509,12 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   }
 
   async function connectStream() {
-    if(!state.user)return;
+    const user=state.user;
+    if(!user)return;
     startSyncFallback();
     const protocol=location.protocol==='https:'?'wss':'ws';
     if(!state.socket||state.socket.readyState>1){const socket=new WebSocket(`${protocol}://${location.host}/api/v1/stream`);state.socket=socket;socket.onmessage=event=>{try{const data=JSON.parse(event.data);if(data.type==='ai_provider_changed'){notify(`AI provider status: ${data.status||'updated'}`);if(data.napi||data.subsystem)applyServerSubsystemUpdate('napi',data.napi||data.subsystem);if(state.page==='ai'&&page.dataset.dirty!=='true')navigate('ai');return;}if(data.type==='ai_proposal_changed'){notify(`AI remediation ${data.id||''}: ${data.status||'updated'}`);if(data.napi||data.subsystem)applyServerSubsystemUpdate('napi',data.napi||data.subsystem);if(state.page==='assurance')navigate('assurance');return;}if(data.type==='assurance_run_changed'){if(data.nal||data.subsystem)applyServerSubsystemUpdate('nal',data.nal||data.subsystem);if(state.page==='assurance')navigate('assurance');return;}state.live.unshift(data);state.live=state.live.slice(0,200);if(state.page==='metadata'){const target=el('live-records');if(target)target.innerHTML=renderMetadataRows(state.live);}}catch{}};}
-    if(!state.sync.snapshot){try{acceptSyncSnapshot(await fetchCanonicalSnapshot());}catch(error){state.streamMode='snapshot unavailable';notify(`Canonical synchronization snapshot failed: ${error.message}`,'error');}}
+    if(!state.sync.snapshot){try{const snapshot=await fetchCanonicalSnapshot({timeoutMs:8000});if(state.user!==user)return;acceptSyncSnapshot(snapshot);}catch(error){if(state.user!==user)return;state.streamMode='snapshot unavailable';el('stream-state').textContent='Sync snapshot unavailable · retrying';}}
     if(typeof EventSource!=='function'){state.streamMode='polling';el('stream-state').textContent='Live sync · recovery';await pollCanonicalSnapshot('streaming unsupported');return;}
     if(state.streamSource)return;
     const url=`/api/v1/sync/stream?last_revision=${encodeURIComponent(state.sync.snapshot?.revision||0)}`,source=new EventSource(url,{withCredentials:true});state.streamSource=source;state.sync.connectionStartedAt=Date.now();
@@ -4135,7 +4546,29 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       state.browserHeartbeatInFlight=false;
     }
   }
-  async function boot(user){state.user=user;favoriteWorkspaces=new Set();favoritesLoaded=false;buildNav();updateFavoriteButton();refreshFavorites();el('identity-name').textContent=user.username;el('identity-role').textContent=user.role;el('auth-view').hidden=true;el('app-view').hidden=false;await ensureCSRF();refreshApprovalBadge();await refreshNotificationBell();sendBrowserHeartbeat();await connectStream();await navigate(location.hash.slice(1)||'operations');}
+  async function boot(user) {
+    state.user=user;
+    state.navigationRequest=null;
+    state.recovery=null;
+    favoriteWorkspaces=new Set();
+    favoritesLoaded=false;
+    buildNav();
+    updateFavoriteButton();
+    refreshFavorites();
+    el('identity-name').textContent=user.username;
+    el('identity-role').textContent=user.role;
+    el('auth-view').hidden=true;
+    el('app-view').hidden=false;
+    refreshApprovalBadge();
+    refreshNotificationBell();
+    sendBrowserHeartbeat();
+    const initial = location.hash.slice(1) || 'operations';
+    const syncStartup = connectStream().catch(() => {});
+    // Command Center consumes the shared initial snapshot. Other workspaces
+    // can load even when the optional synchronization service is unavailable.
+    if (initial === 'operations') await syncStartup;
+    if (state.user === user && !state.navigationRequest) await navigate(initial);
+  }
 
   el('login-form').addEventListener('submit',async event=>{event.preventDefault();if(!state.controllerReady){showPreviewOnly(CONTROLLER_REQUIRED);return;}const data=formObject(event.currentTarget);el('login-error').textContent='';try{await api('/auth/login',{method:'POST',body:data});const principal=await api('/auth/me');await boot(principal);}catch(error){el('login-error').textContent=error.message;}});
   el('retry-controller').addEventListener('click',checkController);
@@ -4191,14 +4624,26 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   el('nav').addEventListener('click', event => {
     const button = event.target.closest('[data-page]');
     if (!button) return;
-    const id = button.dataset.page;
-    if (location.hash.slice(1) !== id) history.pushState(null, '', `#${id}`);
-    navigate(id);
+    visitWorkspace(button.dataset.page);
   });
-  page.addEventListener('submit',async event=>{event.preventDefault();const button=event.submitter,inlineReplay=['gprs-replay-form','quarantine-reprocess-form'].includes(event.target.id);if(button)button.disabled=true;const progress=inlineReplay?null:notify('Processing request…','progress');try{await submit(event.target);}catch(error){if(inlineReplay)setReplayStatus(event.target,replayGateMessage(error)||`Replay request was not accepted: ${error.message}. Live telemetry remains active.`,'warn');else{progress.fail(error.message);toast(error.message,true);}}finally{if(button)button.disabled=false;}});
+  page.addEventListener('submit',async event=>{
+    if (event.defaultPrevented) return;
+    event.preventDefault();
+    const form=event.target,button=event.submitter,inlineReplay=['gprs-replay-form','quarantine-reprocess-form'].includes(form.id),inlineParser=form.id==='parser-workspace-form';
+    if(button)button.disabled=true;
+    const progress=inlineReplay||inlineParser?null:notify('Processing request…','progress');
+    try{await submit(form);}
+    catch(error){
+      if(inlineReplay)setReplayStatus(form,replayGateMessage(error)||`Replay request was not accepted. ${requestFailure(error)}`,'warn');
+      else if(inlineParser)setParserWorkspaceStatus(form,requestFailure(error),null,true);
+      else progress.fail(requestFailure(error));
+    }
+    finally{progress?.clear();if(button)button.disabled=false;}
+  });
   page.addEventListener('input',()=>{for(const host of page.querySelectorAll('[data-ai-mapping-host]')){if(host.aiProposal&&mappingAIRaw(host)!==host.aiProposal.raw){host.querySelector('[data-ai-mapping-proposal]').hidden=true;host.querySelector('[data-ai-mapping-status]').textContent='Raw evidence changed; request a fresh AI proposal before import.';}}});
   page.addEventListener('reset',event=>{
     const form=event.target;
+    if(form.id==='bundle-restore-form') page.dataset.dirty='false';
     if(!form.matches('[data-workspace-ai-form]'))return;
     form.aiRequestID=(form.aiRequestID||0)+1;
     delete form.aiResult;
@@ -4210,7 +4655,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     const aiPending=button.hasAttribute('data-map-sample')||AI_REQUEST_ACTIONS.has(button.dataset.action);
     if(aiPending){button.dataset.aiPending='true';button.setAttribute('aria-busy','true');}
     button.disabled=true;
-    try{await action(button);}catch(error){toast(error.message,true);}finally{
+    try{await action(button);}catch(error){const form=button.closest('#parser-workspace-form');if(form)setParserWorkspaceStatus(form,requestFailure(error),null,true);else toast(requestFailure(error),true);}finally{
     button.disabled=false;
     if(aiPending){delete button.dataset.aiPending;button.removeAttribute('aria-busy');}
     if(['qrw-token-field','qrw-selection-field','qrw-add-field','qrw-field-duplicate','qrw-field-delete','qrw-field-up','qrw-field-down','qrw-operation-add','qrw-operation-delete','qrw-operation-up','qrw-suggest-fields','qrw-import-plan'].includes(button.dataset.action))nfiScheduleLive();queueMicrotask(nfiDecorate);}});
@@ -4218,6 +4663,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   page.addEventListener('focusin',event=>{const row=event.target.closest('[data-qrw-row]');if(row){const field=state.qrwFields.find(f=>f.id===row.dataset.qrwRow);if(field)nfiHighlight(field);}});
   page.addEventListener('pointerover',updateChartReadout);page.addEventListener('focusin',updateChartReadout);
   page.addEventListener('input',event=>{
+    if(event.target.closest('#parser-workspace-form')&&['parser','cases'].includes(event.target.name))setParserWorkspaceStatus(event.target.form,'Validation is pending for the edited artifact.');
     if(event.target.closest('#gprs-parser-helper-form')&&['parser','cases'].includes(event.target.name)){state.gprsPreview=null;const status=event.target.closest('form').querySelector('[data-parser-helper-status]');if(status)status.textContent='Candidate JSON changed. Run complete parser validation again before review.';}
     if(event.target.id==='nfi-raw'||event.target.matches('#gprs-preview-form [name=raw_evidence]')){if(el('nfi-runtime-evidence'))el('nfi-runtime-evidence').hidden=true;nfiScheduleLive();if(event.target.id==='nfi-raw')state.nfiRaw=event.target.value;qrwControllerPreview=null;const host=el('nfi-inspector-host');if(host&&new TextEncoder().encode(event.target.value).length<=1048576)host.innerHTML=qrwRawInspector();const status=el('qrw-field-status');if(status)status.textContent='Raw sample changed. The preview will use the current sample.';return;}
     if(['nfi-service','nfi-scope-pattern','nfi-global-scope','nfi-mapping-priority'].includes(event.target.id)){state.nfiMappingPriority=Number(el('nfi-mapping-priority')?.value)||0;state.nfiService=el('nfi-service')?.value||'auto';state.nfiScopePattern=el('nfi-scope-pattern')?.value||'';state.nfiGlobalScope=el('nfi-global-scope')?.checked===true;nfiScheduleLive();return;}
@@ -4316,14 +4762,22 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   });
   page.addEventListener('change',async event=>{if(event.target.id!=='nfi-sample-file')return;const file=event.target.files?.[0];if(!file)return;try{if(file.size>1048576)throw new Error('Sample file exceeds the 1 MiB mapping limit.');const text=await file.text();state.nfiCorpus=text;state.nfiRaw=text.split(/\r?\n/).find(line=>line.trim())||'';el('nfi-raw').value=state.nfiRaw;el('nfi-corpus').value=text;el('nfi-inspector-host').innerHTML=qrwRawInspector();toast('Sample loaded locally. Learn structures or map the selected raw record.');}catch(error){toast(error.message,true);}});
   page.addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(button?.dataset.action==='parser-helper-generate'){try{generateParserHelper(button.closest('form'));}catch(error){toast(error.message,true);}}});
-  page.addEventListener('keydown',event=>{const tab=event.target.closest('[role=tab][data-assurance-tab],[role=tab][data-ai-tab],[role=tab][data-monitoring-tab]');if(!tab||!['ArrowRight','ArrowLeft','Home','End'].includes(event.key))return;event.preventDefault();const selector=tab.hasAttribute('data-ai-tab')?'[role=tab][data-ai-tab]':tab.hasAttribute('data-monitoring-tab')?'[role=tab][data-monitoring-tab]':'[role=tab][data-assurance-tab]',tabs=[...page.querySelectorAll(selector)],index=tabs.indexOf(tab),next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length;tabs[next].focus();tabs[next].click();});
+  page.addEventListener('keydown',event=>{
+    const tab=event.target.closest('[role=tab]'),tablist=tab?.closest('[role=tablist]');
+    if(!tablist||!['ArrowRight','ArrowLeft','Home','End'].includes(event.key))return;
+    event.preventDefault();
+    const tabs=[...tablist.querySelectorAll('[role=tab]:not([disabled]):not([hidden])')];
+    const index=tabs.indexOf(tab),next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length;
+    tabs[next]?.focus();
+    tabs[next]?.click();
+  });
   let refreshAnimations=0;
   async function refreshCurrentWorkspace(){
     const button=el('refresh');
     refreshAnimations++;
     button.setAttribute('aria-busy','true');
     button.dataset.refreshing='true';
-    try{await navigate(state.page);}
+    try{await refreshWorkspace();}
     finally{if(--refreshAnimations===0){button.removeAttribute('aria-busy');delete button.dataset.refreshing;}}
   }
   el('refresh').addEventListener('click',refreshCurrentWorkspace); el('logout').addEventListener('click',()=>signOut(true)); el('menu-toggle').addEventListener('click',()=>el('sidebar').classList.toggle('open'));
@@ -4345,12 +4799,12 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   setInterval(()=>refreshDashboardHistoryInBackground(),5000);
   // Reconcile the current workspace while preserving any form the operator has started editing.
   setInterval(async()=>{
-    if(!state.user || state.loadingPage || document.hidden || page.dataset.dirty==='true' || !LOADERS[state.page] || SYNC_PAGES.has(state.page) || ['header-templates','kv-templates'].includes(state.page))return;
+    if(!state.user || state.loadingPage || document.hidden || page.dataset.dirty==='true' || !LOADERS[state.page] || SYNC_PAGES.has(state.page) || ['header-templates','kv-templates','parser-workspace','backup-restore','ai-guidance'].includes(state.page))return;
     const refreshAge=state.page==='ai'?5000:(state.page==='operations'?15000:30000);
     if(state.loadedAt && Date.now()-state.loadedAt<refreshAge)return;
-    const current=state.page;
+    const current=state.page,tab=selectedWorkspaceTab();
     state.loadingPage=true;
-    try{await LOADERS[current]();state.lastRefreshFailure='';if(state.page===current && state.user){state.loadedAt=Date.now();updateFreshness();}}
+    try{await LOADERS[current]();state.lastRefreshFailure='';if(state.page===current && state.user){restoreWorkspaceTab(current,tab);state.loadedAt=Date.now();updateFreshness();}}
     catch(error){if(state.lastRefreshFailure!==error.message){state.lastRefreshFailure=error.message;notify(`Live ${TITLES[current]} refresh failed: ${error.message}`,'error');}}
     finally{if(state.page===current)state.loadingPage=false;}
   },5000);

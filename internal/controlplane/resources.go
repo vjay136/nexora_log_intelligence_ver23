@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	parsercatalog "nexora.local/nli-v20/configs/catalog"
 	"nexora.local/nli-v20/internal/auditlog"
 	"nexora.local/nli-v20/internal/auth"
 	"nexora.local/nli-v20/internal/engine"
@@ -45,7 +46,14 @@ var clickhouseColumnPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$
 func documentView(doc metastore.Document) map[string]any {
 	var payload any = map[string]any{}
 	_ = json.Unmarshal(doc.Payload, &payload)
-	return map[string]any{"id": doc.ID, "revision": doc.Revision, "state": doc.State, "sha256": doc.Hash, "created_by": doc.CreatedBy, "created_at": doc.CreatedAt, "updated_at": doc.UpdatedAt, "payload": payload}
+	view := map[string]any{"id": doc.ID, "revision": doc.Revision, "state": doc.State, "sha256": doc.Hash, "created_by": doc.CreatedBy, "created_at": doc.CreatedAt, "updated_at": doc.UpdatedAt, "payload": payload}
+	if doc.State == "active" && !doc.Deleted {
+		if packID := parsercatalog.EmbeddedReferencePackID(doc.Collection, doc.ID, doc.Revision, doc.Payload); packID != "" {
+			view["runtime_disposition"] = "embedded_reference"
+			view["parser_pack_id"] = packID
+		}
+	}
+	return view
 }
 func rolloutProposalView(doc metastore.Document) map[string]any {
 	view := documentView(doc)

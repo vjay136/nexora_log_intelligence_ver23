@@ -142,6 +142,7 @@ type Server struct {
 	fieldSenseOnce           sync.Once
 	fieldSense               *fieldSenseAdmission
 	parserMutationMu         sync.Mutex
+	bundleRecovery           *bundleRecoveryGate
 	parserMaterializeMu      sync.Mutex
 	automaticRuntimeMu       sync.Mutex
 	automaticRuntime         *automaticRuntimeSnapshot
@@ -261,6 +262,10 @@ func New(cfg Config) (*Server, error) {
 	s.artifactKeys = parsePublicKeys(cfg)
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
+	if err := s.initializeBundleRecovery(context.Background()); err != nil {
+		_ = storage.Close()
+		return nil, fmt.Errorf("initialize bundle recovery: %w", err)
+	}
 	// Materialize the release-approved parser catalog during startup. This makes
 	// controller state verifiable before the first client registers.
 	parserBundle, err := s.buildActiveParserBundle(context.Background())
@@ -550,6 +555,10 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/metrics/openmetrics", guard(middleware.PermissionReadTelemetry, s.handleOpenMetrics))
 	s.mux.HandleFunc("/api/v1/verification/sample-corpus", guard(middleware.PermissionReadParsers, s.handleSampleCorpusVerification))
 	s.mux.HandleFunc("/api/v1/parser-sync", s.handleParserSync)
+	s.mux.HandleFunc(bundleBackupsRoute, s.handleBundleBackups)
+	s.mux.HandleFunc(bundleBackupsRoute+"/", s.handleBundleBackups)
+	s.mux.HandleFunc(bundleRestoresRoute, s.handleBundleRestores)
+	s.mux.HandleFunc(bundleRestoresRoute+"/", s.handleBundleRestores)
 	s.mux.HandleFunc("/api/v1/parser-sync/", s.handleParserSync)
 	s.mux.HandleFunc("/api/v1/metadata", guard(middleware.PermissionReadTelemetry, s.handleMetadata))
 	s.mux.HandleFunc("/api/v1/stream", guard(middleware.PermissionReadTelemetry, s.handleStream))
@@ -584,6 +593,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/field-mapping/suggest", guard(middleware.PermissionParsePreview, s.handleFieldMappingSuggest))
 	s.mux.HandleFunc("/api/v1/field-mapping/ai-suggest", guard(middleware.PermissionParsePreview, s.handleFieldMappingAISuggest))
 	s.mux.HandleFunc("/api/v1/ai/workspace", guard(middleware.PermissionParsePreview, s.handleAIWorkspace))
+	s.mux.HandleFunc("/api/v1/ai/guidance", s.handleAIGuidance)
+	s.mux.HandleFunc("/api/v1/ai/guidance/evaluate", s.handleAIGuidanceEvaluate)
+	s.mux.HandleFunc("/api/v1/ai/guidance/revisions", s.handleAIGuidanceRevisions)
 	s.mux.HandleFunc("/api/v1/assurance/cases", s.handleAssuranceCases)
 	s.mux.HandleFunc("/api/v1/assurance/cases/", s.handleAssuranceCase)
 	s.mux.HandleFunc("/api/v1/assurance/parsers", s.handleAssuranceParsers)
@@ -676,7 +688,8 @@ func jsonCreated(w http.ResponseWriter, value any) {
 func jsonError(w http.ResponseWriter, message string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": message, "http_status": status,
+		"request_id": w.Header().Get("X-Request-ID"), "retryable": status == http.StatusTooManyRequests || status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {

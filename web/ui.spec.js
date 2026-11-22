@@ -5,7 +5,7 @@ import { contrast as designContrast } from './design-engine.js';
 // These browser regressions verify frontend behavior independently of network
 // and database availability. e2e.spec.js separately exercises a real controller.
 const origin = 'http://127.0.0.1:4176';
-const tabs = ['sample-history', 'header-templates', 'kv-templates', 'operations', 'monitoring', 'streams', 'sync-fabric', 'nhle-monitor', 'napi-monitor', 'nal-monitor', 'assurance', 'quarantine-wizard', 'upes', 'parser-workspace', 'nupire', 'api-monitor', 'latency', 'field-integrity', 'fleet', 'parser-sync', 'clients', 'controller', 'ai-privacy', 'parsers', 'reference-ai', 'building-blocks', 'field-mapping', 'migration', 'input-paths', 'kv', 'static', 'projection', 'studio', 'regex', 'knownkeys', 'semantic', 'engine-network', 'engine-url', 'engine-email', 'engine-subject', 'outputs', 'metadata', 'unknowns', 'drift', 'performance', 'rollouts', 'artifacts', 'security', 'system', 'communications', 'notifications', 'ai'];
+const tabs = ['sample-history', 'header-templates', 'kv-templates', 'operations', 'monitoring', 'streams', 'sync-fabric', 'nhle-monitor', 'napi-monitor', 'nal-monitor', 'assurance', 'quarantine-wizard', 'upes', 'parser-workspace', 'nupire', 'api-monitor', 'latency', 'field-integrity', 'fleet', 'parser-sync', 'clients', 'controller', 'controller-gateway', 'ai-privacy', 'parsers', 'reference-ai', 'building-blocks', 'field-mapping', 'migration', 'input-paths', 'kv', 'static', 'projection', 'studio', 'regex', 'knownkeys', 'semantic', 'engine-network', 'engine-url', 'engine-email', 'engine-subject', 'outputs', 'metadata', 'unknowns', 'drift', 'performance', 'rollouts', 'backup-restore', 'artifacts', 'security', 'system', 'communications', 'notifications', 'ai', 'ai-guidance'];
 const assets = Object.fromEntries(await Promise.all(['index.html', 'app.js', 'styles.css', 'design-engine.js', 'design-engine.css', 'nli-mark.svg', 'nexora-logo-v21.png', 'login-banner-v22.jpg', 'nexora-poster-v21.png'].map(async name => [name, await readFile(new URL(name, import.meta.url))])));
 
 test('login inventory comes from the webapp and controller health', async ({page}) => {
@@ -19,6 +19,159 @@ test('login inventory comes from the webapp and controller health', async ({page
   await expect(page.locator('#login-roles')).toHaveText('6');
   await expect(page.locator('#login-parsers')).toHaveText('23');
 });
+
+const recoveryFixture = {
+  id:'a'.repeat(64), snapshot_hash:'a'.repeat(64), bundle_hash:'b'.repeat(64),
+  version:4, schema_version:1, release:'23.0.0-7', asset_count:2,
+  asset_counts:{parser_pack:1,templates:1}, embedded_parser_count:12, settings_scope:['templates'],
+  scope:{includes_embedded_validation_examples:true}, created_at:'2026-11-22T00:00:00Z', kind:'manual',
+};
+
+test('R7 Backup & Restore captures, exports, proposes, reviews, resumes and verifies exact client state', async ({page}) => {
+  await mockController(page);
+  const backup = recoveryFixture;
+  const base = 'c'.repeat(64), desired = 'd'.repeat(64);
+  const restore = {id:'restore-independent',state:'pending_approval',backup_id:backup.id,snapshot_hash:backup.snapshot_hash,base_revision:base,base_bundle_hash:backup.bundle_hash,proposed_by:'second-operator',reason:'Recover verified settings'};
+  let backups=[], restores=[restore], controllerHash='', materializedHash='', clientAck=false, rolloutStarted=false, rolloutReads=0, runtimeError=false, failApproval=true;
+  const posts=[];
+  await page.route('**/api/v1/bundle-backups?**',route=>{
+    const offset=Number(new URL(route.request().url()).searchParams.get('offset'));
+    return route.fulfill({json:{backups:offset ? [] : backups,limit:25,offset,has_more:!offset&&backups.length>0,automatic_capture:{state:'failed',error:'Storage was recovering.'}}});
+  });
+  await page.route('**/api/v1/bundle-backups',route=>{
+    posts.push(['capture',route.request().postDataJSON()]);
+    backups=[backup];
+    return route.fulfill({status:201,json:backup});
+  });
+  const exported=JSON.stringify({backup,snapshot:{schema_version:1,bundle:{bundle_hash:backup.bundle_hash}}});
+  await page.route(`**/api/v1/bundle-backups/${backup.id}/export`,route=>route.fulfill({contentType:'application/json',body:exported}));
+  await page.route('**/api/v1/bundle-restores?**',route=>route.fulfill({json:{restores,limit:25,offset:0,has_more:false}}));
+  await page.route('**/api/v1/bundle-restores',route=>{
+    const body=route.request().postDataJSON();
+    posts.push(['propose',body]);
+    const doc={...restore,id:'restore-own',proposed_by:'test-operator',reason:body.reason};
+    restores=[doc,...restores];
+    return route.fulfill({status:201,json:doc});
+  });
+  await page.route('**/api/v1/bundle-restores/restore-independent/approve',route=>{
+    posts.push(['approve',route.request().postDataJSON()]);
+    if(failApproval) return route.fulfill({status:409,json:{error:'Refresh the controller baseline',request_id:'approval-conflict'}});
+    Object.assign(restore,{state:'controller_published',approved_by:'test-operator',desired_bundle_hash:desired,desired_revision:5,pre_restore_backup_id:'pre-recovery'});
+    controllerHash=desired; materializedHash=desired;
+    return route.fulfill({json:restore});
+  });
+  await page.route('**/api/v1/bundle-restores/restore-independent/resume',route=>{
+    posts.push(['resume',route.request().postDataJSON()]);
+    Object.assign(restore,{state:'rollout_proposed',rollout_proposal_id:'fleet-recovery',target_nodes:['exact-client','pending-client','missing-client']});
+    return route.fulfill({json:restore});
+  });
+  await page.route('**/api/v1/parser-sync/runtime',route=>runtimeError ? route.fulfill({status:503,json:{error:'Client evidence store unavailable',request_id:'runtime-read'}}) : route.fulfill({json:{
+    controller:{bundle_hash:controllerHash,materialized_hash:materializedHash,status:controllerHash===materializedHash?'applied':'drifted'}, clients:[
+      {node_id:'exact-client',desired_hash:desired,applied_hash:desired,exact_acknowledgement:clientAck},
+      {node_id:'pending-client',desired_hash:desired,applied_hash:backup.bundle_hash,exact_acknowledgement:false},
+      {node_id:'not-targeted',desired_hash:desired,applied_hash:desired,exact_acknowledgement:true},
+    ],
+  }}));
+  await page.route('**/api/v1/rollouts',route=>{
+    rolloutReads++;
+    return route.fulfill({json:{proposals:restore.rollout_proposal_id?[{id:'fleet-recovery',state:rolloutStarted?'active':'pending_approval',payload:{name:'Restored bundle',type:'parser_sync',bundle_hash:desired,live_rollout_id:rolloutStarted?'fleet-live':undefined}}]:[],live:rolloutStarted?[{id:'fleet-live',status:'running'}]:[]}});
+  });
+  await login(page);
+  await page.getByTestId('nav-backup-restore').click();
+  await page.getByRole('button',{name:'Create backup'}).click();
+  const snapshot=page.getByRole('row').filter({hasText:'23.0.0-7'});
+  await expect(snapshot).toContainText(backup.snapshot_hash);
+  await expect(snapshot).toContainText(backup.bundle_hash);
+  await expect(snapshot).toContainText('2 managed assets');
+  await expect(snapshot).toContainText('12 embedded parser references');
+  await expect(page.getByText(/Automatic capture failed.*Existing backups remain available/)).toBeVisible();
+  await expect(snapshot).toContainText('Approved embedded validation examples included');
+  const downloadWait=page.waitForEvent('download');
+  await snapshot.getByRole('button',{name:'Export JSON'}).click();
+  const download=await downloadWait;
+  expect(download.suggestedFilename()).toBe(`nli-parser-bundle-${backup.id}.json`);
+  expect(await readFile(await download.path(),'utf8')).toBe(exported);
+  await page.getByRole('button',{name:'Next backups'}).click();
+  await expect(snapshot).toHaveCount(0);
+  await page.getByRole('button',{name:'Previous backups'}).click();
+  await expect(snapshot).toBeVisible();
+  await page.getByLabel('Snapshot',{exact:true}).selectOption(backup.id);
+  await page.getByLabel('Restore reason').fill('Discard this entry');
+  await page.getByRole('button',{name:'Reset proposal'}).click();
+  await expect(page.getByLabel('Restore reason')).toHaveValue('');
+  await expect(page.getByLabel('Snapshot',{exact:true})).toHaveValue('');
+  await page.getByLabel('Snapshot',{exact:true}).selectOption(backup.id);
+  await page.getByLabel('Restore reason').fill('Recover approved bundle');
+  await page.getByRole('button',{name:'Propose restore'}).click();
+  const own=page.getByRole('row').filter({hasText:'restore-own'});
+  await expect(own).toContainText('Awaiting an independent reviewer');
+  await expect(own.getByRole('button',{name:'Approve restore'})).toHaveCount(0);
+  const recorded=page.getByRole('row').filter({hasText:'restore-independent'});
+  page.once('dialog',dialog=>dialog.dismiss());
+  await recorded.getByRole('button',{name:'Approve restore'}).click();
+  expect(posts.map(([action])=>action)).toEqual(['capture','propose']);
+  page.once('dialog',dialog=>dialog.accept());
+  await recorded.getByRole('button',{name:'Approve restore'}).click();
+  await expect(page.getByRole('alert')).toContainText('Request ID approval-conflict');
+  failApproval=false;
+  page.once('dialog',dialog=>dialog.accept());
+  await recorded.getByRole('button',{name:'Approve restore'}).click();
+  await expect(recorded).toContainText('Controller published');
+  await expect(page.getByText('Controller reports the exact restored bundle.')).toBeVisible();
+  await expect(page.getByText('Target clients are awaiting a rollout proposal.')).toBeVisible();
+  await recorded.getByRole('button',{name:'Resume restore'}).click();
+  await expect(page.getByText('0 of 3 target clients report an exact applied acknowledgement.')).toBeVisible();
+  await expect(page.getByRole('row').filter({hasText:'missing-client'})).toContainText('Evidence unavailable');
+  await expect(page.getByText('not-targeted',{exact:true})).toHaveCount(0);
+  await own.getByRole('button',{name:'Inspect progress'}).click();
+  await expect(page.getByText('Restore restore-own',{exact:true})).toBeVisible();
+  await recorded.getByRole('button',{name:'Inspect progress'}).click();
+  await expect(page.getByText('Restore restore-independent',{exact:true})).toBeVisible();
+  runtimeError=true;
+  await page.getByRole('button',{name:'Refresh backup and rollout status'}).click();
+  await expect(page.getByText('Client acknowledgements are unknown.')).toBeVisible();
+  await expect(page.getByText(/Runtime inventory unavailable.*HTTP 503.*Request ID runtime-read/)).toBeVisible();
+  runtimeError=false; rolloutStarted=true; clientAck=true; materializedHash=backup.bundle_hash;
+  await page.getByRole('button',{name:'Refresh backup and rollout status'}).click();
+  await expect(page.getByText('Controller reports a different or unverified bundle.')).toBeVisible();
+  await expect(page.getByText('1 of 3 target clients report an exact applied acknowledgement.')).toBeVisible();
+  materializedHash=desired;
+  await page.getByRole('button',{name:'Refresh backup and rollout status'}).click();
+  await expect(page.getByText('1 of 3 target clients report an exact applied acknowledgement.')).toBeVisible();
+  await expect(page.getByRole('row').filter({hasText:'exact-client'})).toContainText('Exact acknowledgement');
+  await expect(page.getByRole('row').filter({hasText:'pending-client'})).toContainText('Awaiting exact acknowledgement');
+  await page.getByRole('button',{name:'Open Approvals & Rollouts'}).click();
+  await expect(page.locator('#page')).toHaveAttribute('data-page','rollouts');
+  expect(rolloutReads).toBeGreaterThan(1);
+  expect(posts).toEqual([
+    ['capture',{}],['propose',{backup_id:backup.id,expected_snapshot_hash:backup.snapshot_hash,reason:'Recover approved bundle'}],
+    ['approve',{expected_snapshot_hash:backup.snapshot_hash,expected_base_revision:base}],
+    ['approve',{expected_snapshot_hash:backup.snapshot_hash,expected_base_revision:base}],['resume',{}],
+  ]);
+});
+
+for (const [role, permissions, allowed] of [
+  ['viewer',['parsers:read'],[]],
+  ['parser_author',['parsers:read','parsers:manage'],['Create backup','Export JSON']],
+  ['ops',['parsers:read','rollout:trigger'],['Propose restore']],
+  ['reviewer',['parsers:read','rollout:approve'],['Approve restore']],
+]) {
+  test(`R7 Backup & Restore shows only ${role} actions`,async({page})=>{
+    await mockController(page,{role,permissions});
+    await page.route('**/api/v1/bundle-backups?**',route=>route.fulfill({json:{backups:[recoveryFixture]}}));
+    await page.route('**/api/v1/bundle-restores?**',route=>route.fulfill({json:{restores:[{
+      id:'restore-role',state:'pending_approval',backup_id:recoveryFixture.id,snapshot_hash:recoveryFixture.snapshot_hash,
+      base_revision:'c'.repeat(64),proposed_by:'another-operator',
+    }]}}));
+    await login(page);
+    await page.getByTestId('nav-backup-restore').click();
+    await expect(page.getByRole('heading',{name:'Durable backups'})).toBeVisible();
+    await expect(page.getByRole('button',{name:'Inspect progress'})).toBeVisible();
+    for (const name of ['Create backup','Export JSON','Propose restore','Approve restore']) {
+      await expect(page.getByRole('button',{name,exact:true})).toHaveCount(allowed.includes(name)?1:0);
+    }
+  });
+}
 
 test('stale approvals remain visible with mutation disabled', async ({page}) => {
   await mockController(page);
@@ -548,7 +701,7 @@ test('AI model order and exclusive default can be saved independently',async({pa
   expect(order).toEqual(['first','second']);
 });
 
-async function mockController(page, { role = 'admin', healthIdentity = 'v21', upesSnapshot = null, assurancePassed = true, nupireCandidates = [], quarantineRaw = 'exact raw source line', qrwParsers = [], qrwRecords = null, qrwSyncAssets = null, navigationCounts = null, managedParsers = [], controllerNotifications = [], rolloutSeed = [], rolloutApprovalFailure = null, replayFailure = null, replayPending = false } = {}) {
+async function mockController(page, { role = 'admin', permissions = ['assurance:run'], healthIdentity = 'v21', upesSnapshot = null, assurancePassed = true, nupireCandidates = [], quarantineRaw = 'exact raw source line', qrwParsers = [], qrwRecords = null, qrwSyncAssets = null, navigationCounts = null, managedParsers = [], controllerNotifications = [], rolloutSeed = [], rolloutApprovalFailure = null, replayFailure = null, replayPending = false } = {}) {
   const observed = [];
   const favorites = new Set();
   const cases = [];
@@ -590,7 +743,8 @@ async function mockController(page, { role = 'admin', healthIdentity = 'v21', up
     const path = new URL(request.url()).pathname;
     if (!path.startsWith('/api/v1/')) {
       const name = path === '/' ? 'index.html' : path.slice(1);
-      return route.fulfill({ status: assets[name] ? 200 : 404, contentType: name.endsWith('.js') ? 'application/javascript' : name.endsWith('.css') ? 'text/css' : name.endsWith('.svg') ? 'image/svg+xml' : name.endsWith('.png') ? 'image/png' : name.endsWith('.jpg') ? 'image/jpeg' : 'text/html', body: assets[name] || 'Not found' });
+      const asset = assets[name] || (name==='ai-guidance.js' ? await readFile(new URL(name,import.meta.url)) : null);
+      return route.fulfill({ status: asset ? 200 : 404, contentType: name.endsWith('.js') ? 'application/javascript' : name.endsWith('.css') ? 'text/css' : name.endsWith('.svg') ? 'image/svg+xml' : name.endsWith('.png') ? 'image/png' : name.endsWith('.jpg') ? 'image/jpeg' : 'text/html', body: asset || 'Not found' });
     }
     observed.push(`${request.method()} ${path}`);
     const headers = { 'content-type': 'application/json', 'x-nli-controller': healthIdentity, 'x-nli-upstream': 'controller' };
@@ -616,10 +770,14 @@ async function mockController(page, { role = 'admin', healthIdentity = 'v21', up
     }
     if (path === '/api/v1/auth/login' && request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { ...headers, allow: 'POST, OPTIONS' } });
     if (path === '/api/v1/auth/login') { authenticated = true; return fulfill({ status: 'ok' }); }
-    if (path === '/api/v1/auth/me') return authenticated ? fulfill({ username: 'test-operator', role, permissions: ['assurance:run'] }) : fulfill({ error: 'unauthorized' }, 401);
+    if (path === '/api/v1/auth/me') return authenticated ? fulfill({ username: 'test-operator', role, permissions }) : fulfill({ error: 'unauthorized' }, 401);
     if (path === '/api/v1/field-mapping') return fulfill({engine:'native-field-mapping-v1',profile_count:0,profiles:[],methods:['position','key_value','delimiter','character'],operations:['split','merge','replace'],limits:{max_fields:128,max_operations:16,max_input_bytes:1048576}});
     if (path === '/api/v1/parser-packs/deleted') return fulfill({deleted_parsers:[],count:0});
     if (path === '/api/v1/parser-sync/runtime') return fulfill({controller:{status:'unavailable',parsers:[]},clients:[]});
+    if (path === '/api/v1/bundle-backups') return fulfill({backups:[],limit:25,offset:0,has_more:false});
+    if (path === '/api/v1/bundle-restores') return fulfill({restores:[],limit:25,offset:0,has_more:false});
+    if (path === '/api/v1/ai/guidance') return fulfill({catalog:[],revisions:[],evaluations:[]});
+    if (path === '/api/v1/ai/capabilities') return fulfill({available:true,status:'configured_not_connection_verified',enabled_profiles:1,credential_ready_profiles:1});
     if (path === '/api/v1/auth/workspace-favorites') {
       if (!authenticated) return fulfill({ error: 'unauthorized' }, 401);
       if (request.method() === 'PUT') {
@@ -1005,15 +1163,19 @@ test('every visible inner tab activates without browser, request, or render erro
   const { observed } = await mockController(page);
   const errors = [];
   const failedResponses = [];
+  const inventory={};
   page.on('pageerror', error => errors.push(error.message));
   page.on('response', response => { if (response.status() >= 500) failedResponses.push(`${response.status()} ${new URL(response.url()).pathname}`); });
   await login(page);
+  const actualRoutes=await page.locator('#nav .nav-item').evaluateAll(items=>items.map(item=>item.dataset.page));
+  expect([...actualRoutes].sort()).toEqual([...tabs].sort());
   for (const workspace of tabs) {
     await page.getByTestId(`nav-${workspace}`).click();
     await expect(page.locator('#page')).toHaveAttribute('data-page', workspace);
     await expect(page.locator('.loading-state')).toHaveCount(0);
     await expect(page.locator('.error-state')).toHaveCount(0);
     const innerTabNames = await page.locator('#page [role=tab]:visible').allTextContents();
+    if (innerTabNames.length) inventory[workspace]=innerTabNames.map(name=>name.trim());
     for (const rawName of innerTabNames) {
       const name = rawName.trim();
       const tab = page.locator('#page').getByRole('tab', { name, exact: true }).first();
@@ -1027,6 +1189,7 @@ test('every visible inner tab activates without browser, request, or render erro
   expect(errors).toEqual([]);
   expect(failedResponses).toEqual([]);
   expect(observed.length).toBeGreaterThan(40);
+  if(process.env.NLI_UI_INVENTORY) console.log(JSON.stringify({routes:actualRoutes.length,innerTabs:inventory}));
 });
 
 test('one canonical synchronization snapshot feeds Command Center, NHLE, NAPI and NAL', async ({ page }) => {
@@ -1161,8 +1324,8 @@ test('navigation leads with Command Center, Assurance Lab, approvals and notific
   await mockController(page);
   await login(page);
   const ids=await page.locator('.nav-item').evaluateAll(items=>items.map(item=>item.dataset.page));
-  expect(ids.slice(0,24)).toEqual(['operations','monitoring','streams','assurance','quarantine-wizard','upes','rollouts','parser-sync','artifacts','parser-workspace','nupire','field-integrity','ai','sample-history','header-templates','kv-templates','parsers','reference-ai','building-blocks','field-mapping','studio','regex','knownkeys','drift']);
-  expect(ids[24]).toBe('notifications');
+  expect(ids.slice(0,26)).toEqual(['operations','monitoring','streams','assurance','quarantine-wizard','upes','rollouts','backup-restore','parser-sync','artifacts','parser-workspace','nupire','field-integrity','ai','ai-guidance','sample-history','header-templates','kv-templates','parsers','reference-ai','building-blocks','field-mapping','studio','regex','knownkeys','drift']);
+  expect(ids[26]).toBe('notifications');
   const input=ids.indexOf('input-paths'),output=ids.indexOf('outputs'),parsing=ids.indexOf('kv');
   expect(ids[input+1]).toBe('migration');
   expect(ids[input+2]).toBe('outputs');
@@ -1885,6 +2048,85 @@ test('NAPI Synthesis validates separate datasets and exposes review-gated eviden
   await expect(result).toContainText('false');
 });
 
+test('R7 NAPI recovery preserves the blocked import and links one new draft to its evaluation',async({page})=>{
+  const imported={id:'napi-guided-parser',revision:1,state:'draft',payload:{name:'NAPI guided parser',version:'0.1.0',parser:{pattern_type:'',pattern:'',fields:[]},cases:[],validation_passed:false,recovery:{
+    blockers:['Exported parser has empty pattern_type.','Exported parser has empty pattern.','No retained exact validation cases were exported.','No artifact checksum binding fresh validation to review was exported.'],recommendation:'Reconstruct from representative evidence and validate the new revision.',
+  }}};
+  const createdID='napi-guided-parser-2';
+  const nupireID='napi-guided-parser-2-0-1-0-artifact';
+  const validation={eligible:true,held_out:{total:2,exact:2,failed:0}};
+  const nextAction='Save approved validation examples in Parser Creation Workspace before review.';
+  const parser={pattern_type:'regex',pattern:'^(?P<message>.+)$',fields:[{name:'message',source:'group:message',type:'string'}]};
+  const created={id:createdID,revision:2,state:'draft',payload:{name:'New NAPI draft',version:'0.1.0',generated_by:'napi-bounded-v1',artifact_checksum:'e'.repeat(64),parser,requires_validation_examples:true,validation:{status:'requires_validation_examples',reason:nextAction},validation_passed:false}};
+  const evidence={id:nupireID,state:'evaluated',scope:'evaluation',parser_id:createdID,digest:'d'.repeat(64),digest_valid:true,provenance:{source:`assurance/napi/${createdID}`,generator:'napi-bounded-v1'}};
+  const {observed}=await mockController(page);
+  let generated=false;
+  await page.route('**/api/v1/assurance/parsers',route=>route.fulfill({json:{parsers:generated?[imported,created]:[imported]}}));
+  await page.route('**/api/v1/assurance/parsers/napi-guided-parser',route=>route.fulfill({json:imported}));
+  let attachedExamples;
+  await page.route(`**/api/v1/assurance/parsers/${createdID}`,route=>{
+    if(route.request().method()==='PUT'){
+      attachedExamples=route.request().postDataJSON().cases;
+      created.revision++;
+      Object.assign(created.payload,{requires_validation_examples:false,validation_passed:true,validation:{total:1,passed:1,failed:0}});
+      return route.fulfill({json:{...created,validation:created.payload.validation}});
+    }
+    return route.fulfill({json:created});
+  });
+  await page.route('**/api/v1/assurance/napi/synthesize',route=>{
+    expect(route.request().postDataJSON().id).toBe(createdID);
+    generated=true;
+    return route.fulfill({status:201,json:{id:createdID,revision:created.revision,state:'draft',draft_created:true,requires_validation_examples:true,next_action:nextAction,validation,nupire:evidence}});
+  });
+  await page.route('**/api/v1/nupire/snapshot',route=>route.fulfill({json:{candidates:[evidence],evolution_state:'available'}}));
+  await page.route(`**/api/v1/nupire/candidates/${nupireID}`,route=>route.fulfill({json:evidence}));
+  await login(page);
+  await page.getByTestId('nav-parser-workspace').click();
+  const blocked=page.locator('[data-parser-candidate=napi-guided-parser]');
+  await expect(blocked).toContainText('Imported draft recovery required');
+  await expect(blocked).toContainText('No retained exact validation cases were exported.');
+  await expect(blocked.getByRole('button',{name:'Submit for review'})).toBeDisabled();
+  await blocked.getByRole('button',{name:'Edit',exact:true}).click();
+  const editor=page.locator('#parser-workspace-form');
+  await expect(editor).toContainText('Reconstruct from representative evidence');
+  await expect(editor.locator('[name=cases]')).toHaveValue('[]');
+  await editor.getByRole('button',{name:'New draft'}).click();
+  await expect(editor.getByText('Imported draft recovery required')).toHaveCount(0);
+  await page.getByTestId('nav-napi-monitor').click();
+  await page.getByRole('button',{name:'Open NAPI Synthesis'}).click();
+  await expect(page.getByRole('tab',{name:'NAPI Synthesis'})).toHaveAttribute('aria-selected','true');
+  await page.getByRole('button',{name:'Refresh',exact:true}).click();
+  await expect(page.getByRole('tab',{name:'NAPI Synthesis'})).toHaveAttribute('aria-selected','true');
+  const synthesis=page.getByTestId('napi-synthesis-form');
+  await expect(synthesis.getByLabel('Parser ID')).toHaveValue(createdID);
+  await synthesis.getByRole('button',{name:'Synthesize and validate draft'}).click();
+  await expect(page.getByRole('tabpanel',{name:'NAPI Synthesis'}).getByText(nextAction,{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:`Open ${createdID} revision 2`}).click();
+  const saved=page.locator(`[data-parser-candidate=${createdID}]`);
+  await expect(saved).toBeFocused();
+  await expect(saved).toContainText('Saved validation examples required');
+  await expect(saved.getByRole('button',{name:'Submit for review'})).toBeDisabled();
+  await expect(blocked.getByRole('button',{name:'Submit for review'})).toBeDisabled();
+  await page.getByTestId('nav-napi-monitor').click();
+  await page.getByRole('button',{name:'Open NAPI Synthesis'}).click();
+  await page.getByRole('button',{name:'Inspect linked NUPIRE evidence'}).click();
+  await expect(page.getByRole('heading',{name:'Candidate detail'})).toBeVisible();
+  await expect(page.getByText(/NAPI evaluation record. Parser review and publication/)).toBeVisible();
+  await page.getByRole('button',{name:`Open linked parser ${createdID}`}).click();
+  await expect(saved).toBeFocused();
+  await saved.getByRole('button',{name:'Edit',exact:true}).click();
+  await expect(editor).toContainText(nextAction);
+  const cases=[{raw:'message 42',desired:{message:'message 42'}}];
+  await editor.locator('[name=cases]').fill(JSON.stringify(cases));
+  await editor.getByRole('button',{name:'Validate on controller'}).click();
+  await expect(editor.locator('[data-parser-status]')).toContainText('1/1 cases passed');
+  await editor.getByRole('button',{name:'Save approval-gated draft'}).click();
+  await expect(saved.getByRole('button',{name:'Submit for review'})).toBeEnabled();
+  expect(attachedExamples).toEqual(cases);
+  expect(observed.some(path=>path.startsWith('POST /api/v1/assurance/parsers/'))).toBe(false);
+  expect(observed.some(path=>path.startsWith('POST /api/v1/parser-sync/'))).toBe(false);
+});
+
 test('Assurance Test Plans saves versioned declarative plans through the controller API', async ({ page }) => {
   const { assurancePlans } = await mockController(page);
   await login(page);
@@ -2220,10 +2462,31 @@ test('quarantine diagnosis stays in the self-contained Resolution Wizard', async
 });
 
 test('Parser Creation Workspace builds a complete editable draft without publishing', async ({ page }) => {
-  const { observed } = await mockController(page);
+  const { observed } = await mockController(page,{qrwParsers:[{id:'legacy-empty-cases',revision:1,state:'draft',payload:{name:'Legacy draft',cases:[],validation:{total:0,passed:0,failed:0}}}]});
+  let saved;
+  const validation={status:'passed',total:2,passed:2,failed:0,score:100};
+  let parserDoc;
+  await page.route('**/api/v1/assurance/parsers', route=>{
+    if(route.request().method()==='POST') {
+      saved=route.request().postDataJSON();
+      parserDoc={id:'test-parser-r7',revision:1,state:'draft',payload:{...saved,validation,validation_passed:true,artifact_checksum:'e'.repeat(64)}};
+      return route.fulfill({status:201,json:{...parserDoc,validation}});
+    }
+    if(!parserDoc)return route.fallback();
+    return route.fulfill({json:{parsers:[parserDoc]}});
+  });
+  await page.route('**/api/v1/assurance/parsers/test-parser-r7/submit',route=>{
+    parserDoc.state='in_review';
+    return route.fulfill({json:parserDoc});
+  });
   await login(page);
   await page.getByTestId('nav-parser-workspace').click();
   const form = page.locator('#parser-workspace-form');
+  await expect(page.getByText('1 live runtime parsers are available as reference.')).toBeVisible();
+  await expect(page.getByRole('row').filter({hasText:'Legacy draft'}).getByRole('button',{name:'Submit for review'})).toBeDisabled();
+  await page.getByRole('button', { name: 'Validate on controller' }).click();
+  await expect(form.locator('[data-parser-status]')).toContainText('Include 1–100 validation cases');
+  expect(observed.filter(path=>path==='POST /api/v1/assurance/parser-preview')).toHaveLength(0);
   await form.locator('[name=samples]').fill('level=INFO user=alice   \r\nlevel=WARN user=bob\t  \r\n');
   const autoPopulate = page.getByRole('button', { name: 'Auto-populate complete parser' });
   await expect(autoPopulate).toBeVisible();
@@ -2232,11 +2495,61 @@ test('Parser Creation Workspace builds a complete editable draft without publish
   await expect(form.locator('[name=samples]')).toHaveValue('level=INFO user=alice\nlevel=WARN user=bob');
   const parser = JSON.parse(await form.locator('[name=parser]').inputValue());
   expect(parser).toMatchObject({ pattern_type: 'regex', known_fields: ['level', 'user'], projection: ['level', 'user'] });
+  const cases=JSON.parse(await form.locator('[name=cases]').inputValue());
+  expect(cases.map(item=>item.desired)).toEqual([{level:'INFO',user:'alice'},{level:'WARN',user:'bob'}]);
   await page.getByRole('button', { name: 'Validate locally' }).click();
   await expect(form.locator('[data-parser-status]')).toContainText('Local structure valid');
+  await page.getByRole('button', { name: 'Validate on controller' }).click();
+  await expect(form.locator('[data-parser-status]')).toContainText('2/2 cases passed');
   await page.getByRole('button', { name: 'Save approval-gated draft' }).click();
-  await expect.poll(() => observed.includes('POST /api/v1/assurance/parsers')).toBe(true);
+  const newDraft=page.getByRole('row').filter({hasText:'test-parser-r7'});
+  await expect(newDraft).toContainText('2/2 cases passed');
+  expect(saved).toMatchObject({parser,cases});
+  await newDraft.getByRole('button',{name:'Submit for review'}).click();
+  await expect(newDraft).toContainText('in_review');
   expect(observed.some(path => /assurance\/parsers\/.*\/(approve|publish)/.test(path))).toBe(false);
+});
+
+test('R7 parser workspace and sample handoff survive independent catalog and sign-in failures',async({page})=>{
+  await mockController(page);
+  const failures=[];
+  const browserErrors=[];
+  page.on('response',response=>{if(response.status()===503)failures.push(new URL(response.url()).pathname);});
+  page.on('pageerror',error=>browserErrors.push(error.message));
+  let notification;
+  await page.route('**/api/v1/notifications?limit=30', route=>{notification=route;});
+  await page.route('**/api/v1/assurance/parsers', route=>route.fulfill({status:503,json:{error:'Parser storage recovering',request_id:'catalog-read'}}));
+  await page.goto(`${origin}/#parser-workspace`);
+  await page.getByLabel('Username').fill('test-operator');
+  await page.getByLabel('Password').fill('test-only-password');
+  await page.getByRole('button',{name:'Sign in securely'}).click();
+  const workspace=page.locator('#page');
+  await expect(workspace).toHaveAttribute('data-page','parser-workspace');
+  await expect(workspace.getByText(/Draft catalog unavailable.*HTTP 503.*Request ID catalog-read/)).toBeVisible();
+  await expect(workspace.getByText('1 live runtime parsers are available as reference.')).toBeVisible();
+  await expect(workspace.getByRole('button',{name:'Save approval-gated draft'})).toBeEnabled();
+  await expect.poll(()=>!!notification).toBe(true);
+  await notification.fulfill({status:503,json:{error:'Notifications unavailable'}});
+  await page.route('**/api/v1/config/templates',route=>route.fulfill({status:503,json:{error:'Header store unavailable',request_id:'header-read'}}));
+  const log='smtp status=failed user=alice';
+  await page.getByTestId('nav-building-blocks').click();
+  await page.locator('#block-raw').fill(log);
+  await page.getByRole('button',{name:'Create KV pair template',exact:true}).first().click();
+  await expect(page).toHaveURL(`${origin}/#kv-templates`);
+  await expect(page.getByLabel('Sample log',{exact:true})).toHaveValue(log);
+  await expect(workspace.getByText(/Saved log pattern templates unavailable.*Request ID header-read/)).toBeVisible();
+  await page.getByRole('button',{name:'Reset samples'}).click();
+  await expect(page.getByLabel('Sample log',{exact:true})).toHaveValue('');
+  await page.goBack();
+  await expect(workspace).toHaveAttribute('data-page','building-blocks');
+  for(const id of ['parser-workspace','operations','parser-workspace','parsers','parser-workspace']){
+    await page.getByTestId(`nav-${id}`).click();
+    await expect(workspace).toHaveAttribute('data-page',id);
+    await expect(workspace.locator('.error-state')).toHaveCount(0);
+  }
+  expect(failures.filter(path=>path==='/api/v1/assurance/parsers').length).toBeGreaterThan(1);
+  await expect(page.locator('#toast-region .bad')).toHaveCount(0);
+  expect(browserErrors).toEqual([]);
 });
 
 test('operations does not fan out beyond shared canonical recovery', async ({ page }) => {

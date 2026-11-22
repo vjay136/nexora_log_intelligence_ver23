@@ -10,8 +10,8 @@ const ui = fs.readFileSync(path.join(root, 'web', 'ui.spec.js'), 'utf8');
 
 const routes = [
   'operations', 'monitoring', 'streams',
-  'assurance', 'quarantine-wizard', 'upes', 'rollouts', 'parser-sync',
-  'artifacts', 'parser-workspace', 'nupire', 'field-integrity', 'ai',
+  'assurance', 'quarantine-wizard', 'upes', 'rollouts', 'backup-restore', 'parser-sync',
+  'artifacts', 'parser-workspace', 'nupire', 'field-integrity', 'ai', 'ai-guidance',
   'sample-history', 'header-templates', 'kv-templates', 'parsers', 'reference-ai', 'building-blocks', 'field-mapping', 'studio', 'regex', 'knownkeys', 'drift', 'notifications',
   'sync-fabric', 'nhle-monitor', 'napi-monitor', 'nal-monitor',
   'input-paths', 'migration', 'outputs', 'metadata', 'unknowns', 'performance',
@@ -49,7 +49,7 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-test('Controller management includes the ordered gateway workspace', () => {
+test('Primary navigation includes all 55 workspaces in their declared order', () => {
   const nav = app.slice(app.indexOf('const NAV = ['), app.indexOf('const TITLES'));
   const actual = [...nav.matchAll(/\[\s*'[^']+'\s*,\s*'([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(actual, routes);
@@ -84,6 +84,7 @@ test('critical UI actions remain wired to authoritative controller APIs', () => 
   for (const endpoint of [
     '/assurance/parsers', '/rollouts', '/parser-sync', '/config/input-paths',
     '/config/output-destinations', '/quarantine/records/', '/notifications',
+    '/bundle-backups', '/bundle-restores',
   ]) {
     assert.ok(app.includes(endpoint), `missing controller API wiring: ${endpoint}`);
   }

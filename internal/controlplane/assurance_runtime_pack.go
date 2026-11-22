@@ -49,7 +49,16 @@ func assuranceRuntimePack(id, version, author string, definition map[string]any,
 		groups[name] = group
 		fieldType := parserpolicy.FieldTypeString
 		if value, ok := field["type"].(string); ok && value != "" {
-			fieldType = parserpolicy.FieldType(value)
+			switch value {
+			case "integer":
+				fieldType = parserpolicy.FieldTypeInt
+			case "boolean":
+				fieldType = parserpolicy.FieldTypeBool
+			case "timestamp":
+				fieldType = parserpolicy.FieldTypeTime
+			default:
+				fieldType = parserpolicy.FieldType(value)
+			}
 		}
 		required, _ := field["required"].(bool)
 		definition := parserpolicy.FieldDef{Type: fieldType, Required: required}

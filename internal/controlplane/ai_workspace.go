@@ -197,6 +197,14 @@ func (s *Server) handleAIWorkspace(w http.ResponseWriter, r *http.Request) {
 
 	system := aiWorkspaceGuide + " " + aiWorkspaceWorkflows[input.Workspace] + " Respond with concise plain text and the exact next action you can support."
 	isDraft := input.Mode == "fix" && input.Artifact != ""
+	var verifiedGuidance map[string]any
+	if !isDraft {
+		verifiedGuidance = verifiedWorkspaceGuidance(input.Workspace, input.Tab, input.Question)
+		if verifiedGuidance != nil {
+			catalog, _ := json.Marshal(verifiedGuidance)
+			system += " Refer to controls from this verified NLI workspace catalog: " + string(catalog)
+		}
+	}
 	if isDraft {
 		if strings.TrimSpace(input.Raw) == "" {
 			jsonError(w, "A raw example is required to test the proposed draft", http.StatusBadRequest)
@@ -272,6 +280,10 @@ func (s *Server) handleAIWorkspace(w http.ResponseWriter, r *http.Request) {
 		response["next_action"] = aiWorkspaceNextAction[input.Artifact]
 	} else {
 		response["answer"] = masker.MaskSecrets(reply)
+		response["answer_origin"] = "provider"
+		if verifiedGuidance != nil {
+			response["verified_guidance"] = verifiedGuidance
+		}
 	}
 	success = true
 	jsonOK(w, response)

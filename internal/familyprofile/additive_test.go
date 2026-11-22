@@ -2,9 +2,40 @@ package familyprofile
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	parserassets "nexora.local/nli-v20/configs/parsers"
 )
+
+func TestShippedParserFilesDoNotDuplicateEmbeddedProfiles(t *testing.T) {
+	builtins := mustBuiltins(t)
+	assets, err := parserassets.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := t.TempDir()
+	for _, asset := range assets {
+		if err := os.WriteFile(filepath.Join(installed, asset.Name), asset.Data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolved, diagnostics, err := ResolveResilient(installed)
+	if err != nil || len(diagnostics) != 0 || len(resolved) != len(builtins) {
+		t.Fatalf("shipped files were not reconciled: profiles=%d diagnostics=%+v err=%v", len(resolved), diagnostics, err)
+	}
+	for _, embedded := range builtins {
+		profile := findProfile(t, resolved, embedded.Pack.ID)
+		if profile.Managed || profile.Pack.SHA256 != embedded.Pack.SHA256 {
+			t.Errorf("shipped file displaced embedded parser %q", embedded.Pack.ID)
+		}
+	}
+	if _, err := Resolve(installed); err != nil {
+		t.Fatalf("strict loading rejected the shipped files: %v", err)
+	}
+}
 
 func TestAddOnCannotReplaceProtectedBuiltinIdentity(t *testing.T) {
 	builtins := mustBuiltins(t)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"sort"
 
 	"nexora.local/nli-v20/internal/nupire"
 )
@@ -17,8 +17,12 @@ func (s *Server) registerNAPICandidate(ctx context.Context, parserID, version, a
 	if err != nil {
 		return nil, fmt.Errorf("marshal declarative candidate: %w", err)
 	}
-	artifactHash := napiJSONHash(candidate.Definition)
-	candidateID := safeID(parserID + "-" + strings.ReplaceAll(version, ".", "-") + "-" + artifactHash[:12])
+	trainingIDs := napiEvidenceIDs(discovery)
+	heldOutIDs := napiEvidenceIDs(heldOut)
+	sort.Strings(trainingIDs)
+	sort.Strings(heldOutIDs)
+	evaluationHash := napiJSONHash(map[string]any{"artifact": napiJSONHash(candidate.Definition), "version": version, "training": trainingIDs, "held_out": heldOutIDs})
+	candidateID := safeID(parserID + "-evaluation-" + evaluationHash[:16])
 	if candidateID == "" {
 		return nil, fmt.Errorf("invalid NUPIRE candidate identity")
 	}
@@ -26,11 +30,9 @@ func (s *Server) registerNAPICandidate(ctx context.Context, parserID, version, a
 		return existing, nil
 	}
 
-	trainingIDs := napiEvidenceIDs(discovery)
-	heldOutIDs := napiEvidenceIDs(heldOut)
 	if _, err = s.nupire.CreateDiscovery(candidateID, nupire.Provenance{
 		Source:      "assurance/napi/" + parserID,
-		Generator:   "napi-bounded-v1",
+		Generator:   napiGenerator,
 		TrainingIDs: trainingIDs,
 		HeldOutIDs:  heldOutIDs,
 	}, actor); err != nil {

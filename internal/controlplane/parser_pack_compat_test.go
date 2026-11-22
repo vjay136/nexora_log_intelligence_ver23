@@ -11,10 +11,135 @@ import (
 	"strings"
 	"testing"
 
+	parserassets "nexora.local/nli-v20/configs/parsers"
+	"nexora.local/nli-v20/internal/familyprofile"
 	metastore "nexora.local/nli-v20/internal/store"
+	parserpolicy "nexora.local/nli-v20/parser-policy"
 )
 
 type rolloutProposalFailingStore struct{ metastore.Store }
+
+func TestCatalogReconcilesExactShippedParserReferences(t *testing.T) {
+	fixture := newAPIFixture(t)
+	ctx := context.Background()
+	baseline, err := fixture.server.buildActiveParserBundle(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := parserassets.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := make(map[string]string, len(assets))
+	for _, asset := range assets {
+		pack, err := parserpolicy.LoadParserPackBytes(asset.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected[pack.ID] = pack.SHA256
+		_, err = fixture.server.metadata.Put(ctx, metastore.Document{
+			Collection: "parser-packs", ID: pack.ID, State: "active",
+			Payload: asset.Data, CreatedBy: "release-import",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	response, body := fixture.request(http.MethodGet, "/api/v1/parser-packs", nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("read Parser Catalog: %d %s", response.StatusCode, body)
+	}
+	var catalog struct {
+		ParserPacks []struct {
+			ID          string `json:"id"`
+			State       string `json:"state"`
+			ReadOnly    bool   `json:"read_only"`
+			RuntimeSync struct {
+				Distribution string `json:"distribution"`
+				SHA256       string `json:"sha256"`
+			} `json:"runtime_sync"`
+		} `json:"parser_packs"`
+	}
+	if err := json.Unmarshal(body, &catalog); err != nil || len(catalog.ParserPacks) != len(expected) {
+		t.Fatalf("expected all shipped catalog entries: %s (%v)", body, err)
+	}
+	for _, row := range catalog.ParserPacks {
+		if row.State != "published" || !row.ReadOnly || row.RuntimeSync.Distribution != "embedded" || row.RuntimeSync.SHA256 != expected[row.ID] {
+			t.Errorf("catalog entry was not verified as embedded: %+v", row)
+		}
+	}
+	snapshot, err := fixture.server.automaticParserRuntime(ctx)
+	if err != nil || len(snapshot.managedIDs) != 0 || len(snapshot.packDiagnostics) != 0 {
+		t.Fatalf("shipped references affected managed runtime: %+v (%v)", snapshot, err)
+	}
+	bundle, err := fixture.server.buildActiveParserBundle(ctx)
+	if err != nil || bundle.BundleHash != baseline.BundleHash {
+		t.Fatalf("embedded references affected the fleet bundle hash: %q (want %q), %v", bundle.BundleHash, baseline.BundleHash, err)
+	}
+	response, body = fixture.request(http.MethodGet, "/api/v1/parser-sync/runtime", nil)
+	var inventory struct {
+		Controller struct {
+			Embedded []familyprofile.BuiltinPackInfo `json:"embedded_parsers"`
+		} `json:"controller"`
+	}
+	if err := json.Unmarshal(body, &inventory); response.StatusCode != http.StatusOK || err != nil || len(inventory.Controller.Embedded) != len(expected) {
+		t.Fatalf("runtime inventory omitted built-ins: %d %s (%v)", response.StatusCode, body, err)
+	}
+	for _, embedded := range inventory.Controller.Embedded {
+		if embedded.SHA256 != expected[embedded.ID] || embedded.Version != "5.0.0" {
+			t.Errorf("unexpected runtime inventory entry: %+v", embedded)
+		}
+	}
+}
+
+func TestCatalogRejectsAlteredOrForgedEmbeddedParser(t *testing.T) {
+	assets, err := parserassets.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, err := parserpolicy.LoadParserPackBytes(assets[0].Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := metastore.Document{ID: "release-catalog-alias", State: "active", Payload: assets[0].Data}
+	if _, _, err := runtimeParserPackForDocument(record); err != nil {
+		t.Fatalf("exact released parser under an existing alias was rejected: %v", err)
+	}
+	record.Payload, err = json.Marshal(map[string]any{
+		"runtime_pack": json.RawMessage(assets[0].Data), "runtime_id": pack.ID, "catalog_id": record.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runtimeParserPackForDocument(record); err != nil {
+		t.Fatalf("exact released parser in a legacy envelope was rejected: %v", err)
+	}
+	record.State = "in_review"
+	if _, _, err := runtimeParserPackForDocument(record); err == nil {
+		t.Fatal("exact protected parser entered the managed review lifecycle")
+	}
+	record.State = "active"
+	pack.Author = "modified-author"
+	record.Payload, err = json.Marshal(pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runtimeParserPackForDocument(record); err == nil || !strings.Contains(err.Error(), "SHA256 mismatch") {
+		t.Fatalf("forged shipped seal bypassed strict validation: %v", err)
+	}
+	if err := parserpolicy.SealParserPack(pack); err != nil {
+		t.Fatal(err)
+	}
+	record.Payload, err = json.Marshal(pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := parserDocumentView(record)
+	runtimeSync := view["runtime_sync"].(map[string]any)
+	if view["status"] != "blocked" || !strings.Contains(runtimeSync["reason"].(string), "protected built-in parser") {
+		t.Fatalf("changed and resealed built-in escaped catalog isolation: %+v", view)
+	}
+}
 
 func (s rolloutProposalFailingStore) Put(ctx context.Context, document metastore.Document) (metastore.Document, error) {
 	if document.Collection == "rollout-proposals" {

@@ -1087,11 +1087,38 @@ func (s *Server) handleAssuranceParser(w http.ResponseWriter, r *http.Request) {
 			if _, ok := input.Parser["version"]; !ok {
 				input.Parser["version"] = 1
 			}
-			validation := validateParserCandidate(input.Parser, input.Cases)
+			napiDraft := isNAPIReviewDraft(previous)
+			var validation map[string]any
+			if napiDraft {
+				if err := upgradeLegacyNAPIReviewDefinition(input.Parser); err != nil {
+					jsonError(w, err.Error(), http.StatusUnprocessableEntity)
+					return
+				}
+				validation = validateNAPIReviewDraft(r.Context(), id, input.Version, doc.CreatedBy, input.Parser, input.Cases)
+			} else {
+				validation = validateParserCandidateContext(r.Context(), input.Parser, input.Cases)
+			}
 			if !s.validateParserEvidenceLink(w, r, sourceEvidenceID) {
 				return
 			}
-			updated := map[string]any{"id": id, "name": input.Name, "version": input.Version, "parser": input.Parser, "artifact_checksum": parserArtifactChecksum(input.Parser), "cases": input.Cases, "validation": validation, "validation_passed": validation["failed"] == 0 && validation["total"] == len(input.Cases), "review_state": "draft", "activated": false, "source_quarantine_record_id": sourceEvidenceID}
+			updated := map[string]any{"id": id, "name": input.Name, "version": input.Version, "parser": input.Parser, "artifact_checksum": parserArtifactChecksum(input.Parser), "cases": input.Cases, "validation": validation, "validation_passed": validation["status"] == "passed", "review_state": "draft", "activated": false, "source_quarantine_record_id": sourceEvidenceID}
+			if napiDraft {
+				for _, key := range []string{"generated_by", "synthesis_evidence", "requires_human_approval"} {
+					if value, ok := previous[key]; ok {
+						updated[key] = value
+					}
+				}
+				updated["requires_validation_examples"] = false
+				updated["synthesis_evidence_matches_definition"] = previous["artifact_checksum"] == updated["artifact_checksum"]
+				if recovery, ok := previous["recovery"].(map[string]any); ok {
+					if validation["status"] == "passed" {
+						delete(recovery, "blockers")
+					} else {
+						recovery["blockers"] = []string{fmt.Sprint(validation["reason"])}
+					}
+					updated["recovery"] = recovery
+				}
+			}
 			for _, key := range []string{"repair_of", "repair_of_revision", "repair_of_checksum", "repair_created_at", "repair_created_by"} {
 				if value, ok := previous[key]; ok {
 					updated[key] = value
@@ -1167,17 +1194,31 @@ func (s *Server) handleAssuranceParser(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "parser draft has no declarative parser", 409)
 			return
 		}
-		if len(cases) == 0 && body["generated_by"] == "napi-bounded-v1" {
-			jsonError(w, "NAPI validation evidence is immutable; rerun synthesis with separate discovery and held-out samples", 409)
+		napiDraft := isNAPIReviewDraft(body)
+		if len(cases) == 0 && napiDraft {
+			jsonError(w, napiExamplesNeeded, http.StatusConflict)
 			return
 		}
-		validation := validateParserCandidate(definition, cases)
+		var validation map[string]any
+		if napiDraft {
+			version, _ := body["version"].(string)
+			validation = validateNAPIReviewDraft(r.Context(), id, version, doc.CreatedBy, definition, cases)
+		} else {
+			validation = validateParserCandidateContext(r.Context(), definition, cases)
+		}
 		body["validation"] = validation
-		body["validation_passed"] = validation["failed"] == 0 && validation["total"] == len(cases)
+		body["validation_passed"] = validation["status"] == "passed"
 	case "submit":
 		if doc.State != "draft" && doc.State != "rejected" {
 			jsonError(w, "parser is not in an editable state", 409)
 			return
+		}
+		if isNAPIReviewDraft(body) {
+			cases, _ := body["cases"].([]any)
+			if len(cases) == 0 {
+				jsonError(w, napiExamplesNeeded, http.StatusConflict)
+				return
+			}
 		}
 		if body["validation_passed"] != true {
 			jsonError(w, "all parser validation cases must pass before review", 409)

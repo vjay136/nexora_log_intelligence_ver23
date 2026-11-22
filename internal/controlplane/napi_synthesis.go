@@ -1,17 +1,23 @@
 package controlplane
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"regexp"
 	"regexp/syntax"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"nexora.local/nli-v20/internal/familyprofile"
+	"nexora.local/nli-v20/internal/fieldmapping"
 	"nexora.local/nli-v20/internal/middleware"
 	"nexora.local/nli-v20/internal/registry"
 	metastore "nexora.local/nli-v20/internal/store"
@@ -24,6 +30,8 @@ const (
 	napiMaxRegexBytes  = 4096
 	napiMaxRegexInst   = 4096
 	napiMaxCaptureSets = 64
+	napiGenerator      = "napi-bounded-v1"
+	napiExamplesNeeded = "Open Edit in Parser Review and add representative redacted validation examples with exact expected JSON. Save the draft, then submit it for review."
 )
 
 type napiSynthesisInput struct {
@@ -49,13 +57,14 @@ type napiRegexSafety struct {
 }
 
 type napiCandidate struct {
-	ID         string
-	Strategy   string
-	Rationale  []string
-	Definition map[string]any
-	Safety     napiRegexSafety
-	Evaluation map[string]any
-	Eligible   bool
+	ID           string
+	Strategy     string
+	Rationale    []string
+	Definition   map[string]any
+	Safety       napiRegexSafety
+	Evaluation   map[string]any
+	Eligible     bool
+	RuntimeReady bool
 }
 
 // handleNAPISynthesize runs bounded, deterministic discovery outside the
@@ -105,12 +114,12 @@ func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 	if id == "" {
 		id = safeID(input.Name)
 	}
-	if id == "" {
-		jsonError(w, "parser id is invalid", http.StatusBadRequest)
+	if len(id) < 2 || len(id) > 56 {
+		jsonError(w, "parser id must contain 2..56 supported characters", http.StatusBadRequest)
 		return
 	}
-	if existing, err := s.metadata.Get(r.Context(), "parser-packs", id, 0); err == nil && existing.State != "draft" && existing.State != "rejected" {
-		jsonError(w, "an in-review, approved or published parser with this id cannot be replaced by synthesis", http.StatusConflict)
+	if familyprofile.IsBuiltinPackID(id) || id == "deleted" {
+		jsonError(w, "parser id is reserved or belongs to the embedded baseline", http.StatusConflict)
 		return
 	}
 
@@ -119,7 +128,10 @@ func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 	for index := range candidates {
 		candidates[index].Safety = analyzeNAPIRegex(candidates[index].Definition)
 		candidates[index].Evaluation = evaluateNAPICandidate(candidates[index].Definition, input.Discovery, input.HeldOut, input.Negative)
-		candidates[index].Eligible = candidates[index].Safety.Safe && napiEvaluationEligible(candidates[index].Evaluation)
+		if candidates[index].Safety.Safe && napiEvaluationEligible(candidates[index].Evaluation) {
+			candidates[index].RuntimeReady = validateNAPIRuntime(r.Context(), id, input.Version, principal.Username, candidates[index].Definition, append(append([]assuranceRequest(nil), input.Discovery...), input.HeldOut...)) == nil
+		}
+		candidates[index].Eligible = candidates[index].RuntimeReady
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].Eligible != candidates[j].Eligible {
@@ -141,13 +153,13 @@ func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 		s.auditAction(principal, "napi.synthesize", "parser-packs/"+id, "failure", map[string]string{"reason": "no_eligible_candidate"})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
-		_ = json.NewEncoder(w).Encode(map[string]any{"state": "rejected", "draft_created": false, "reason": "no candidate passed discovery, independent held-out, negative and safety gates", "candidates": reports})
+		_ = json.NewEncoder(w).Encode(map[string]any{"state": "rejected", "draft_created": false, "reason": "no candidate passed discovery, independent held-out, negative, safety and production runtime gates", "candidates": reports})
 		return
 	}
 
 	selected := candidates[0]
 	provenance := map[string]any{
-		"engine":                  "napi-bounded-v1",
+		"engine":                  napiGenerator,
 		"generated_at":            time.Now().UTC(),
 		"discovery_sample_hashes": napiSampleHashes(input.Discovery),
 		"held_out_sample_hashes":  napiSampleHashes(input.HeldOut),
@@ -159,10 +171,11 @@ func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 		"raw_samples_persisted":   false,
 	}
 	validation := selected.Evaluation
+	checksum := parserArtifactChecksum(selected.Definition)
 	payload, _ := json.Marshal(map[string]any{
 		"id": id, "name": input.Name, "version": input.Version,
-		"parser":     selected.Definition,
-		"validation": validation, "validation_passed": true,
+		"parser": selected.Definition, "artifact_checksum": checksum,
+		"validation": map[string]any{"status": "requires_validation_examples", "reason": napiExamplesNeeded}, "validation_passed": false,
 		"synthesis_evidence": map[string]any{
 			"selected_candidate": selected.ID, "strategy": selected.Strategy,
 			"rationale": selected.Rationale, "regex_safety": selected.Safety,
@@ -171,11 +184,10 @@ func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 			"limitations": []string{"validated only for the supplied bounded samples", "production activation still requires independent review and publish", "no claim is made for unseen log formats"},
 		},
 		"review_state": "draft", "activated": false,
-		"requires_human_approval": true, "generated_by": "napi-bounded-v1",
+		"requires_human_approval": true, "requires_validation_examples": true, "generated_by": napiGenerator,
 	})
-	saved, err := s.metadata.Put(r.Context(), metastore.Document{Collection: "parser-packs", ID: id, State: "draft", Payload: payload, CreatedBy: principal.Username})
-	if err != nil {
-		jsonError(w, "NAPI draft persistence failed", http.StatusServiceUnavailable)
+	saved, ok := s.saveNAPIDraft(w, r, principal.Username, id, payload)
+	if !ok {
 		return
 	}
 	nupireRecord, nupireErr := s.registerNAPICandidate(r.Context(), id, input.Version, principal.Username, selected, input.Discovery, input.HeldOut)
@@ -185,6 +197,8 @@ func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.auditAction(principal, "nupire.napi.bind", "parser-packs/"+id, "success", map[string]string{"candidate_id": fmt.Sprint(nupireRecord["id"]), "state": fmt.Sprint(nupireRecord["state"])})
 	}
+	nupireRecord["parser_id"] = id
+	nupireRecord["scope"] = "evaluation"
 	s.auditAction(principal, "napi.synthesize", "parser-packs/"+id, "success", map[string]string{"state": "draft", "strategy": selected.Strategy, "held_out": fmt.Sprint(len(input.HeldOut))})
 	jsonCreated(w, map[string]any{
 		"id": id, "revision": saved.Revision, "state": "draft", "draft_created": true,
@@ -192,9 +206,91 @@ func (s *Server) handleNAPISynthesize(w http.ResponseWriter, r *http.Request) {
 		"validation": validation, "regex_safety": selected.Safety,
 		"candidates": reports, "provenance": provenance,
 		"nupire":                  nupireRecord,
-		"requires_human_approval": true, "published": false,
+		"requires_human_approval": true, "requires_validation_examples": true, "next_action": napiExamplesNeeded,
+		"artifact_checksum": checksum, "published": false,
 		"elapsed_us": time.Since(started).Microseconds(),
 	})
+}
+
+func (s *Server) saveNAPIDraft(w http.ResponseWriter, r *http.Request, author, id string, payload []byte) (metastore.Document, bool) {
+	s.parserMutationMu.Lock()
+	defer s.parserMutationMu.Unlock()
+	ctx := r.Context()
+	existing, err := s.metadata.Get(ctx, "parser-packs", id, 0)
+	if err == nil {
+		if existing.State != "draft" && existing.State != "rejected" {
+			jsonError(w, "an in-review, approved or published parser with this id cannot be replaced by synthesis", http.StatusConflict)
+			return metastore.Document{}, false
+		}
+		author = existing.CreatedBy
+	} else if !errors.Is(err, os.ErrNotExist) {
+		jsonError(w, "the current parser revision could not be verified", http.StatusServiceUnavailable)
+		return metastore.Document{}, false
+	}
+	saved, err := s.metadata.Put(ctx, metastore.Document{Collection: "parser-packs", ID: id, State: "draft", Payload: payload, CreatedBy: author})
+	if err != nil {
+		jsonError(w, "NAPI draft persistence failed", http.StatusServiceUnavailable)
+		return metastore.Document{}, false
+	}
+	return saved, true
+}
+
+func validateNAPIRuntime(ctx context.Context, id, version, author string, definition map[string]any, cases []assuranceRequest) error {
+	pack, err := assuranceRuntimePack(id, version, author, definition, cases)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(pack)
+	if err != nil {
+		return err
+	}
+	_, err = familyprofile.ValidateManagedPackBytesContext(ctx, id, encoded)
+	return err
+}
+
+func isNAPIReviewDraft(body map[string]any) bool {
+	if body["generated_by"] == napiGenerator {
+		return true
+	}
+	recovery, _ := body["recovery"].(map[string]any)
+	filename, _ := recovery["source_filename"].(string)
+	return recovery["source_format"] == "user-export" && strings.HasPrefix(strings.ToLower(filename), "napi-")
+}
+
+// Older NAPI exports carry registry-only KV or JSON selectors. The conversion
+// is run only when an operator edits a draft with real validation examples.
+// It does not invent missing selectors, sample input, or expected output.
+func upgradeLegacyNAPIReviewDefinition(definition map[string]any) error {
+	patternType, _ := definition["pattern_type"].(string)
+	format, _ := definition["format"].(string)
+	if patternType != "" || (format != "json" && format != "key_value") {
+		return nil
+	}
+	var fields []registry.FieldDef
+	encoded, err := json.Marshal(definition["fields"])
+	if err != nil || json.Unmarshal(encoded, &fields) != nil || len(fields) == 0 {
+		return errors.New("legacy NAPI definition needs explicit source selectors or a new synthesized draft")
+	}
+	plan, err := napiMappingPlan(format, fields)
+	if err != nil {
+		return fmt.Errorf("legacy NAPI definition needs supported source selectors or a new synthesis: %w", err)
+	}
+	definition["pattern_type"] = "mapping"
+	definition["mapping_plan"] = plan
+	delete(definition, "pattern")
+	delete(definition, "fields")
+	return nil
+}
+
+func validateNAPIReviewDraft(ctx context.Context, id, version, author string, definition map[string]any, cases []assuranceRequest) map[string]any {
+	validation := validateParserCandidateContext(ctx, definition, cases)
+	if validation["status"] == "passed" {
+		if err := validateNAPIRuntime(ctx, id, version, author, definition, cases); err != nil {
+			validation["status"] = "runtime_incompatible"
+			validation["reason"] = err.Error()
+		}
+	}
+	return validation
 }
 
 func normalizeNAPISamples(input *napiSynthesisInput) error {
@@ -253,9 +349,9 @@ func (s *Server) generateNAPICandidates(id string, discovery []assuranceRequest,
 		}
 	}
 	if allNAPIJSON(discovery) {
-		add(napiCandidate{ID: "json-fields", Strategy: "json", Rationale: []string{"every discovery record is a JSON object", "field sources use existing json primitives"}, Definition: napiParserDefinition(id, "json", "", "", fields, "json")})
+		add(napiCandidate{ID: "json-fields", Strategy: "json", Rationale: []string{"every discovery record is a JSON object", "field sources use the same native mapping stage as production"}, Definition: napiMappingDefinition(id, "json", fields)})
 	}
-	add(napiCandidate{ID: "key-value", Strategy: "key_value", Rationale: []string{"uses the existing bounded key-value tokenizer", "field sources are derived from expected keys"}, Definition: napiParserDefinition(id, "key_value", "", "", fields, "kv")})
+	add(napiCandidate{ID: "key-value", Strategy: "key_value", Rationale: []string{"uses the existing production key-value mapping", "field sources are derived from expected keys"}, Definition: napiMappingDefinition(id, "key_value", fields)})
 	if definition, rationale := synthesizeNAPIRegex(id, discovery, fields); definition != nil {
 		add(napiCandidate{ID: "anchored-regex", Strategy: "regex", Rationale: rationale, Definition: definition})
 	}
@@ -270,6 +366,7 @@ func (s *Server) generateNAPICandidates(id string, discovery []assuranceRequest,
 				// primitive, but bind the candidate to the requested draft identity.
 				definition["id"] = id
 				definition["version"] = 1
+				delete(definition, "tests")
 				add(napiCandidate{ID: "registered-" + parser.ID, Strategy: "registered", Rationale: []string{"reuses an existing reviewed runtime parser primitive", "candidate is still re-evaluated against discovery and held-out samples"}, Definition: definition})
 			}
 		}
@@ -327,7 +424,7 @@ func napiFieldType(value any) string {
 }
 
 func napiParserDefinition(id, format, pattern, patternType string, fields []registry.FieldDef, sourceKind string) map[string]any {
-	definitions := make([]map[string]any, 0, len(fields))
+	definitions := make([]any, 0, len(fields))
 	for _, field := range fields {
 		source := sourceKind + ":" + field.Name
 		if sourceKind == "group" {
@@ -336,6 +433,49 @@ func napiParserDefinition(id, format, pattern, patternType string, fields []regi
 		definitions = append(definitions, map[string]any{"name": field.Name, "source": source, "type": field.Type, "required": field.Required})
 	}
 	return map[string]any{"id": id, "version": 1, "description": "NAPI bounded candidate", "format": format, "pattern": pattern, "pattern_type": patternType, "fields": definitions}
+}
+
+func napiMappingDefinition(id, format string, fields []registry.FieldDef) map[string]any {
+	sourceKind := "kv"
+	if format == "json" {
+		sourceKind = "json"
+	}
+	selectors := make([]registry.FieldDef, 0, len(fields))
+	for _, field := range fields {
+		field.Source = sourceKind + ":" + field.Name
+		selectors = append(selectors, field)
+	}
+	plan, err := napiMappingPlan(format, selectors)
+	if err != nil {
+		return nil
+	}
+	return map[string]any{"id": id, "version": 1, "description": "NAPI bounded candidate", "format": format, "pattern_type": "mapping", "mapping_plan": plan}
+}
+
+// Both NAPI JSON and KV share the compiled mapping used by Assurance previews
+// and the deployed ParserPack runtime. No separate production parser is added.
+func napiMappingPlan(format string, fields []registry.FieldDef) (fieldmapping.Plan, error) {
+	plan := fieldmapping.Plan{Version: 1, Fields: make([]fieldmapping.Field, 0, len(fields))}
+	sourceKind, method := "kv", "key_value"
+	if format == "json" {
+		sourceKind, method = "json", "json_path"
+	}
+	for _, source := range fields {
+		key, ok := strings.CutPrefix(source.Source, sourceKind+":")
+		if !ok || key == "" || key == "*" {
+			return plan, fmt.Errorf("field %q requires an explicit %s source", source.Name, sourceKind)
+		}
+		if format == "json" {
+			key = "$[" + strconv.Quote(key) + "]"
+		}
+		policy := "optional"
+		if source.Required {
+			policy = "required"
+		}
+		plan.Fields = append(plan.Fields, fieldmapping.Field{Name: source.Name, Method: method, Source: key, Type: source.Type, Policy: policy})
+	}
+	_, err := fieldmapping.Compile(plan)
+	return plan, err
 }
 
 func allNAPIJSON(samples []assuranceRequest) bool {
@@ -531,7 +671,7 @@ func napiEvaluationEligible(evaluation map[string]any) bool {
 func napiCandidateReports(candidates []napiCandidate) []map[string]any {
 	out := make([]map[string]any, 0, len(candidates))
 	for _, candidate := range candidates {
-		out = append(out, map[string]any{"id": candidate.ID, "strategy": candidate.Strategy, "rationale": candidate.Rationale, "definition": candidate.Definition, "regex_safety": candidate.Safety, "evaluation": candidate.Evaluation, "eligible": candidate.Eligible})
+		out = append(out, map[string]any{"id": candidate.ID, "strategy": candidate.Strategy, "rationale": candidate.Rationale, "definition": candidate.Definition, "regex_safety": candidate.Safety, "evaluation": candidate.Evaluation, "eligible": candidate.Eligible, "runtime_ready": candidate.RuntimeReady})
 	}
 	return out
 }

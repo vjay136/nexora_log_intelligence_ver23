@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-test('Ver21 operator-guide contract inventories every current primary navigation route', async () => {
+test('Operator guide inventories every current primary navigation route', async () => {
   const app = await readFile(resolve(root, 'web/app.js'), 'utf8');
   const guide = await readFile(resolve(root, 'docs/V20_OPERATOR_DEMO_GUIDE.md'), 'utf8');
   const nav = app.match(/const NAV = \[([\s\S]*?)\n  \];/)?.[1];
@@ -15,7 +15,7 @@ test('Ver21 operator-guide contract inventories every current primary navigation
   for (const [id, title] of ids) {
     assert.ok(guide.includes(`\`${id}\``), `guide missing route id ${id} (${title})`);
   }
-  for (const label of ['Unified Sync Fabric', 'NHLE Live', 'NAPI Live', 'NAL Live', 'NUPIRE / EGPE', 'Monitoring (11 views)', 'Assurance Lab (11 tools)', 'UPES · Parser Recovery', 'Guided Parser Repair Studio (GPRS)']) {
+  for (const label of ['Unified Sync Fabric', 'NHLE Live', 'NAPI Live', 'NAL Live', 'NUPIRE / EGPE', 'Monitoring (11 views)', 'Assurance Lab (11 tools)', 'UPES · Parser Recovery', 'Guided Parser Repair Studio (GPRS)', 'Backup & Restore', 'AI Guidance & Revisions']) {
     assert.ok(guide.includes(label), `guide missing significant workspace section ${label}`);
   }
 });

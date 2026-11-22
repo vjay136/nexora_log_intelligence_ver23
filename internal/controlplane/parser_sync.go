@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	parsercatalog "nexora.local/nli-v20/configs/catalog"
 	"nexora.local/nli-v20/internal/canonicaljson"
+	"nexora.local/nli-v20/internal/familyprofile"
 	"nexora.local/nli-v20/internal/fieldmapping"
 	"nexora.local/nli-v20/internal/fleet"
 	"nexora.local/nli-v20/internal/middleware"
@@ -315,7 +317,7 @@ func parserBundleAcknowledged(state map[string]any, hash string) bool {
 		state["asset_drifted"] != true
 }
 
-func (s *Server) buildActiveParserBundle(ctx context.Context) (parserAssetBundle, error) {
+func (s *Server) buildPublishedParserBundle(ctx context.Context) (parserAssetBundle, error) {
 	bundle := parserAssetBundle{SchemaVersion: 1, Assets: []parserBundleAsset{}}
 	seenRuntimeParserID := map[string]string{}
 	seenRuntimePayload := map[string]string{}
@@ -375,6 +377,10 @@ func (s *Server) buildActiveParserBundle(ctx context.Context) (parserAssetBundle
 					return bundle, ctx.Err()
 				}
 				if compatibilityErr != nil {
+					continue
+				}
+				if familyprofile.IsBuiltinPackID(pack.ID) {
+					// Verified embedded references do not require a fleet transfer.
 					continue
 				}
 				canonicalPayload, canonicalErr := canonicaljson.Normalize(encoded)
@@ -473,6 +479,7 @@ func (s *Server) materializeParserBundle(bundle parserAssetBundle) (string, erro
 	if err := s.materializeParserInventory(bundle); err != nil {
 		return "", err
 	}
+	s.captureAutomaticBundleBackup(bundle)
 	return readHash, nil
 }
 
@@ -661,6 +668,26 @@ func replyParserRolloutProposalError(w http.ResponseWriter, err error) {
 // and target set for independent approval. Clients do not receive the bundle
 // until the separate rollout approval endpoint starts the live rollout.
 func (s *Server) proposeParserBundleRollout(ctx context.Context, actor, name, reason, targetMode string, bundle parserAssetBundle, targetIDs []string) (metastore.Document, error) {
+	return s.proposeParserBundleRolloutWithID(ctx, "", actor, name, reason, targetMode, bundle, targetIDs)
+}
+
+func (s *Server) proposeParserBundleRolloutWithID(ctx context.Context, proposalID, actor, name, reason, targetMode string, bundle parserAssetBundle, targetIDs []string) (metastore.Document, error) {
+	if proposalID != "" {
+		existing, err := s.metadata.Get(ctx, "rollout-proposals", proposalID, 0)
+		if err == nil {
+			var identity struct {
+				Type       string `json:"type"`
+				BundleHash string `json:"bundle_hash"`
+			}
+			if json.Unmarshal(existing.Payload, &identity) == nil && !existing.Deleted && identity.Type == rolloutTypeParserSync && identity.BundleHash == bundle.BundleHash {
+				return existing, nil
+			}
+			return metastore.Document{}, errors.New("parser sync proposal identity already belongs to a different rollout")
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return metastore.Document{}, fmt.Errorf("%w: read parser sync proposal: %v", errParserRolloutMetadata, err)
+		}
+	}
 	if targetMode == "" {
 		targetMode = "all_eligible"
 	}
@@ -721,7 +748,7 @@ func (s *Server) proposeParserBundleRollout(ctx context.Context, actor, name, re
 			existingMode = "all_eligible"
 		}
 		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(existingPayload["bundle_hash"])), bundle.BundleHash) {
-			if existingMode == targetMode && equalStringSlices(existingTargets, targetIDs) {
+			if proposalID == "" && existingMode == targetMode && equalStringSlices(existingTargets, targetIDs) {
 				return existing, nil
 			}
 			// A targeted repair must not withdraw another clientâ€™s current approval.
@@ -740,8 +767,10 @@ func (s *Server) proposeParserBundleRollout(ctx context.Context, actor, name, re
 	if err != nil {
 		return metastore.Document{}, err
 	}
-	id := fmt.Sprintf("parser-sync-%d", time.Now().UnixNano())
-	created, err := s.metadata.Put(ctx, metastore.Document{Collection: "rollout-proposals", ID: id, State: "pending_approval", Payload: encoded, CreatedBy: actor})
+	if proposalID == "" {
+		proposalID = fmt.Sprintf("parser-sync-%d", time.Now().UnixNano())
+	}
+	created, err := s.metadata.Put(ctx, metastore.Document{Collection: "rollout-proposals", ID: proposalID, State: "pending_approval", Payload: encoded, CreatedBy: actor})
 	if err != nil {
 		return metastore.Document{}, fmt.Errorf("%w: create proposal: %v", errParserRolloutMetadata, err)
 	}
@@ -1330,7 +1359,12 @@ func (s *Server) listParserSync(w http.ResponseWriter, r *http.Request) {
 		}
 		desired := map[string]any{"revision": asset.Revision, "sha256": asset.SHA256, "state": "published"}
 		controller := map[string]any{"revision": controllerRevision, "sha256": controllerHash, "status": controllerStatus}
-		assetViews = append(assetViews, map[string]any{"asset_class": asset.AssetClass, "asset_id": asset.AssetID, "name": asset.Name, "desired": desired, "controller": controller, "desired_revision": asset.Revision, "desired_hash": asset.SHA256, "state": "published", "controller_applied_revision": controllerRevision, "controller_applied_hash": controllerHash, "controller_status": controllerStatus, "auto_rollout": map[string]any{"enabled": false, "status": rolloutState}, "rollout": rolloutSummary(latest), "rollout_proposal": proposalView})
+		view := map[string]any{"asset_class": asset.AssetClass, "asset_id": asset.AssetID, "name": asset.Name, "desired": desired, "controller": controller, "desired_revision": asset.Revision, "desired_hash": asset.SHA256, "state": "published", "controller_applied_revision": controllerRevision, "controller_applied_hash": controllerHash, "controller_status": controllerStatus, "auto_rollout": map[string]any{"enabled": false, "status": rolloutState}, "rollout": rolloutSummary(latest), "rollout_proposal": proposalView}
+		if packID := parsercatalog.EmbeddedReferencePackID(asset.AssetClass, asset.AssetID, asset.Revision, asset.Payload); packID != "" {
+			view["runtime_disposition"] = "embedded_reference"
+			view["parser_pack_id"] = packID
+		}
+		assetViews = append(assetViews, view)
 	}
 	acknowledgementPct := 0.0
 	if totalClients > 0 {

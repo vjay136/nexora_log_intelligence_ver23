@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	parserassets "nexora.local/nli-v20/configs/parsers"
 	parserpolicy "nexora.local/nli-v20/parser-policy"
@@ -59,10 +61,8 @@ type ManagedPackDiagnostic struct {
 	Reason string
 }
 
-// Resolve returns embedded profiles merged with an optional active managed
-// generation. A managed pack with the same ID replaces the embedded revision;
-// this lets the controller's existing active/rollback directory swap select the
-// generation without mutating or auto-activating pack state here.
+// Resolve returns embedded profiles and the active managed add-ons. Installed
+// copies of embedded packs are ignored once their original seals are verified.
 func Resolve(directory string) ([]Profile, error) {
 	profiles, _, err := resolve(directory, false)
 	return profiles, err
@@ -93,6 +93,9 @@ func resolve(directory string, isolateInvalid bool) ([]Profile, []ManagedPackDia
 	managedIDs := make(map[string]struct{}, len(managed))
 	for _, profile := range managed {
 		if IsBuiltinPackID(profile.Pack.ID) {
+			if embedded, exists := byID[profile.Pack.ID]; exists && embedded.Pack.SHA256 == profile.Pack.SHA256 {
+				continue
+			}
 			reason := fmt.Sprintf("managed add-on identity %q conflicts with a protected built-in parser", profile.Pack.ID)
 			if !isolateInvalid {
 				return nil, diagnostics, fmt.Errorf("%s", reason)
@@ -144,6 +147,53 @@ func Builtins() ([]Profile, error) {
 	}
 	sortProfiles(profiles)
 	return profiles, nil
+}
+
+// BuiltinPackInfo identifies a verified product-reviewed pack in the binary.
+type BuiltinPackInfo struct {
+	ID       string `json:"id"`
+	Version  string `json:"version"`
+	Revision int    `json:"revision"`
+	SHA256   string `json:"sha256"`
+}
+
+var builtinPackInventory = sync.OnceValues(func() ([]BuiltinPackInfo, error) {
+	profiles, err := Builtins()
+	if err != nil {
+		return nil, err
+	}
+	packs := make([]BuiltinPackInfo, 0, len(profiles))
+	for _, profile := range profiles {
+		pack := profile.Pack
+		packs = append(packs, BuiltinPackInfo{ID: pack.ID, Version: pack.Version, Revision: pack.Revision, SHA256: pack.SHA256})
+	}
+	return packs, nil
+})
+
+// BuiltinPackInventory returns the immutable identities available at runtime.
+func BuiltinPackInventory() ([]BuiltinPackInfo, error) {
+	packs, err := builtinPackInventory()
+	return slices.Clone(packs), err
+}
+
+// MatchesEmbeddedPack checks that this pack has the same verified content as
+// the embedded asset. Recompute the seal so a caller cannot copy its digest
+// onto different contents.
+func MatchesEmbeddedPack(pack *parserpolicy.ParserPack) (bool, error) {
+	if pack == nil {
+		return false, nil
+	}
+	packs, err := builtinPackInventory()
+	if err != nil {
+		return false, err
+	}
+	for _, embedded := range packs {
+		if embedded.ID == pack.ID && embedded.SHA256 == pack.SHA256 {
+			digest, err := parserpolicy.CanonicalParserPackHash(pack)
+			return digest == embedded.SHA256, err
+		}
+	}
+	return false, nil
 }
 
 // LoadManagedDirectory loads ParserPacks from one flat active generation. It
