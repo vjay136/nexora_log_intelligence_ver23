@@ -2389,9 +2389,13 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     return JSON.stringify({node_ids:[...(result.node_ids||[])].sort(),groups:(result.groups||[]).map(group=>({id:group.id,revision:group.revision})).sort((a,b)=>a.id.localeCompare(b.id))});
   }
   function clientDirectoryChanged() {
+    // Invalidate an in-flight pre-change read as well as the TTL. Otherwise a
+    // remote update can reuse that old request and cache stale names/groups.
+    const generation=++clientDirectoryGeneration;
+    clientDirectoryRequest=null;
     clientDirectoryAt=0;
-    loadClientDirectory(true).then(()=>{
-      if(!state.user)return;
+    return loadClientDirectory(true).then(()=>{
+      if(!state.user||generation!==clientDirectoryGeneration)return;
       if(page.dataset.dirty==='true') {
         const result=page.querySelector('[data-directory-result],[data-client-action-result]');
         if(result){result.hidden=false;result.textContent='The client directory changed. Your edits are retained; refresh before saving if another operator changed this revision.';}

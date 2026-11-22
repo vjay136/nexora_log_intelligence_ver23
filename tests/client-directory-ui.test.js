@@ -7,7 +7,7 @@ const app=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8');
 const helpers=app.slice(app.indexOf('  let clientDirectory='),app.indexOf('  function agentMetricsLabel('));
 function directory(api=async()=>({nodes:[],groups:[]})) {
   const state={user:{username:'operator'}};
-  return {state,...vm.runInNewContext(`${helpers}\n({label:clientLabel,groups:clientGroups,clear:clearClientDirectory,load:loadClientDirectory,signature:clientTargetSignature,seed:nodes=>{clientDirectory={nodes,groups:[]};clientDirectoryNodes=new Map(nodes.map(node=>[node.node_id,node]));},snapshot:()=>clientDirectory})`,{Map,Date,Number,String,JSON,state,api,can:()=>true,requestFailure:error=>error.message,esc:String,number:String})};
+  return {state,...vm.runInNewContext(`${helpers}\n({label:clientLabel,groups:clientGroups,clear:clearClientDirectory,load:loadClientDirectory,changed:clientDirectoryChanged,signature:clientTargetSignature,seed:nodes=>{clientDirectory={nodes,groups:[]};clientDirectoryNodes=new Map(nodes.map(node=>[node.node_id,node]));},snapshot:()=>clientDirectory})`,{Map,Date,Number,String,JSON,state,api,can:()=>true,requestFailure:error=>error.message,esc:String,number:String,page:{dataset:{dirty:'true'},querySelector:()=>null},navigate:()=>{}})};
 }
 
 test('Shared labels use indexed10000-node directory, retain identity fallback and honor cleared aliases',()=>{
@@ -30,4 +30,17 @@ test('Frozen group target signatures include revisions and normalized exact IDs'
   assert.notEqual(first,d.signature({node_ids:['a','c'],groups:[{id:'mail',revision:3}]}));
   assert.match(app,/target_mode:all\?'all_eligible':'selected',node_ids:all\?\[\]:nodeIds,bundle_hash:bundleHash/);
   assert.match(app,/nodeIds\.length>1000/);assert.match(app,/targetNodes\.length>4096/);
+});
+
+test('A remote directory change supersedes an in-flight older snapshot',async()=>{
+  const replies=[];const d=directory(()=>new Promise(resolve=>replies.push(resolve)));
+  const oldRequest=d.load();
+  const changed=d.changed();
+  assert.equal(replies.length,2,'a fresh post-change request must replace the pending read');
+  replies[0]({nodes:[{node_id:'one',display_name:'Stale label'}],groups:[]});
+  await oldRequest;
+  assert.notEqual(d.label('one'),'Stale label');
+  replies[1]({nodes:[{node_id:'one',display_name:'Current label'}],groups:[]});
+  await changed;
+  assert.equal(d.label('one'),'Current label');
 });
