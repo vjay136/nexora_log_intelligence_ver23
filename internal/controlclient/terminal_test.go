@@ -84,8 +84,9 @@ func TestTerminalHeartbeatFallbackPreservesExistingCapabilities(t *testing.T) {
 }
 
 type fakeTerminalBroker struct {
-	states         map[string]nodeterminal.State
-	writes, closed []string
+	states             map[string]nodeterminal.State
+	writes, closed     []string
+	readErr, resizeErr error
 }
 
 func (f *fakeTerminalBroker) Status(context.Context) (terminalrpc.Status, error) {
@@ -107,8 +108,13 @@ func (f *fakeTerminalBroker) Input(_ context.Context, id string, seq uint64, dat
 	f.writes = append(f.writes, string(data))
 	return seq, nil
 }
-func (f *fakeTerminalBroker) Resize(context.Context, string, uint16, uint16) error { return nil }
+func (f *fakeTerminalBroker) Resize(context.Context, string, uint16, uint16) error {
+	return f.resizeErr
+}
 func (f *fakeTerminalBroker) Read(_ context.Context, id string, after uint64, _ int) (nodeterminal.Output, error) {
+	if f.readErr != nil {
+		return nodeterminal.Output{}, f.readErr
+	}
 	return nodeterminal.Output{State: f.states[id], Start: after, Next: after + 3, Data: []byte("out")}, nil
 }
 func (f *fakeTerminalBroker) Close(_ context.Context, id, _ string) error {
@@ -210,5 +216,55 @@ func TestTerminalExplicitDisableAndCapabilityRevocationBypassProbeGrace(t *testi
 				t.Fatal("explicit disable/revocation must close without waiting for transient-error grace")
 			}
 		})
+	}
+}
+
+func TestTerminalTransientReadAndResizeDoNotReplayOrReopen(t *testing.T) {
+	for _, operation := range []string{"read", "resize"} {
+		t.Run(operation, func(t *testing.T) {
+			ctx := context.Background()
+			f := &fakeTerminalBroker{states: map[string]nodeterminal.State{}}
+			r := newTerminalRelay(f)
+			d := protocol.TerminalSessionDirective{ID: "existing", Cols: 80, Rows: 24, Inputs: []protocol.TerminalInput{{Sequence: 1, Data: []byte("once\n")}}}
+			r.owned[d.ID] = d
+			if operation == "read" {
+				f.readErr = context.DeadlineExceeded
+			} else {
+				f.resizeErr = context.DeadlineExceeded
+			}
+			response := protocol.TerminalExchangeResponse{Sessions: []protocol.TerminalSessionDirective{d}}
+			r.apply(ctx, response)
+			if len(r.owned) != 1 || len(f.writes) != 0 || len(f.closed) != 0 || len(f.states) != 0 || r.dead[d.ID] {
+				t.Fatal("transient probe executed input, reopened or closed an existing shell")
+			}
+			f.readErr, f.resizeErr = nil, nil
+			r.apply(ctx, response)
+			r.apply(ctx, response)
+			if len(f.writes) != 1 || len(r.probeFailed) != 0 {
+				t.Fatal("recovery did not deliver exactly once and clear the probe failure")
+			}
+			if operation == "read" {
+				f.readErr = context.DeadlineExceeded
+			} else {
+				f.resizeErr = context.DeadlineExceeded
+			}
+			r.probeFailed[d.ID] = time.Now().Add(-11 * time.Second)
+			r.snapshot(ctx, terminalrpc.Status{})
+			r.apply(ctx, response)
+			if len(r.owned) != 0 || !r.dead[d.ID] || len(f.closed) != 1 {
+				t.Fatal("persistent probe failure did not close and tombstone the session")
+			}
+		})
+	}
+}
+
+func TestTerminalAmbiguousStdinStillClosesWithoutProbeGrace(t *testing.T) {
+	f := &fakeTerminalBroker{states: map[string]nodeterminal.State{}}
+	r := newTerminalRelay(f)
+	d := protocol.TerminalSessionDirective{ID: "existing", Cols: 80, Rows: 24, Inputs: []protocol.TerminalInput{{Sequence: 2, Data: []byte("never-retry\n")}}}
+	r.owned[d.ID] = d
+	r.apply(context.Background(), protocol.TerminalExchangeResponse{Sessions: []protocol.TerminalSessionDirective{d}})
+	if len(r.owned) != 0 || !r.dead[d.ID] || len(f.closed) != 1 || len(f.writes) != 0 {
+		t.Fatal("stdin failure incorrectly received read-only probe grace")
 	}
 }

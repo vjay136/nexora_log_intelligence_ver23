@@ -52,16 +52,21 @@ type terminalRelay struct {
 	deadAt      map[string]time.Time
 	pending     []protocol.TerminalSessionUpdate
 	lastSuccess time.Time
+	probeFailed map[string]time.Time
 }
 
 func newTerminalRelay(b terminalBroker) *terminalRelay {
-	return &terminalRelay{broker: b, owned: map[string]protocol.TerminalSessionDirective{}, dead: map[string]bool{}, deadAt: map[string]time.Time{}}
+	return &terminalRelay{broker: b, owned: map[string]protocol.TerminalSessionDirective{}, dead: map[string]bool{}, deadAt: map[string]time.Time{}, probeFailed: map[string]time.Time{}}
 }
 
 // The controller expires sessions within thirty minutes. An hour of replay
 // tombstones outlives every valid session and transport retry while allowing a
 // long-running sidecar to reclaim ended-session IDs without persisting history.
-func (r *terminalRelay) markDead(id string) { r.dead[id] = true; r.deadAt[id] = time.Now() }
+func (r *terminalRelay) markDead(id string) {
+	r.dead[id] = true
+	r.deadAt[id] = time.Now()
+	delete(r.probeFailed, id)
+}
 func (r *terminalRelay) pruneDead(now time.Time) {
 	for id, at := range r.deadAt {
 		if now.Sub(at) > time.Hour {
@@ -77,6 +82,26 @@ func (r *terminalRelay) closeAll(ctx context.Context) {
 		delete(r.owned, id)
 	}
 }
+
+// Reads and same-size resizes are safe to repeat for an already-owned shell.
+// Keep one bounded failure clock across both paths; a healthy status/exchange
+// must not reset persistent broker read failures. Never use this for stdin or
+// an ambiguous open, and never reopen an ended session.
+func (r *terminalRelay) probeExpired(ctx context.Context, id string) bool {
+	since, exists := r.probeFailed[id]
+	if !exists {
+		r.probeFailed[id] = time.Now()
+		return false
+	}
+	if time.Since(since) < 10*time.Second {
+		return false
+	}
+	_ = r.broker.Close(ctx, id, "local terminal remained unavailable")
+	delete(r.owned, id)
+	r.markDead(id)
+	return true
+}
+
 func (r *terminalRelay) snapshot(ctx context.Context, status terminalrpc.Status) []protocol.TerminalSessionUpdate {
 	r.pruneDead(time.Now())
 	if r.generation != "" && r.generation != status.Generation {
@@ -87,9 +112,9 @@ func (r *terminalRelay) snapshot(ctx context.Context, status terminalrpc.Status)
 	for id, d := range r.owned {
 		out, err := r.broker.Read(ctx, id, d.After, 64<<10)
 		if err != nil {
-			updates = append(updates, protocol.TerminalSessionUpdate{ID: id, Status: "closed", Reason: "Local terminal became unavailable"})
-			r.markDead(id)
-			delete(r.owned, id)
+			if r.probeExpired(ctx, id) {
+				updates = append(updates, protocol.TerminalSessionUpdate{ID: id, Status: "closed", Reason: "Local terminal remained unavailable; reconnect"})
+			}
 			continue
 		}
 		state := "running"
@@ -122,15 +147,31 @@ func (r *terminalRelay) apply(ctx context.Context, response protocol.TerminalExc
 		}
 		var state nodeterminal.State
 		var err error
-		if _, owned := r.owned[d.ID]; owned {
+		_, owned := r.owned[d.ID]
+		if owned {
 			var output nodeterminal.Output
 			output, err = r.broker.Read(ctx, d.ID, d.After, 1)
+			if err != nil {
+				if r.probeExpired(ctx, d.ID) {
+					r.pending = append(r.pending, protocol.TerminalSessionUpdate{ID: d.ID, Status: "closed", Reason: "Local terminal remained unavailable; reconnect"})
+				}
+				continue
+			}
 			state = output.State
 		} else {
 			state, err = r.broker.Open(ctx, d.ID, d.Cols, d.Rows)
 		}
 		if err == nil && !state.Closed && !state.Closing {
 			err = r.broker.Resize(ctx, d.ID, d.Cols, d.Rows)
+			if err != nil && owned {
+				if r.probeExpired(ctx, d.ID) {
+					r.pending = append(r.pending, protocol.TerminalSessionUpdate{ID: d.ID, Status: "closed", Reason: "Local terminal remained unavailable; reconnect"})
+				}
+				continue
+			}
+		}
+		if err == nil {
+			delete(r.probeFailed, d.ID)
 		}
 		if err == nil && !state.Closed && !state.Closing {
 			for _, input := range d.Inputs {
