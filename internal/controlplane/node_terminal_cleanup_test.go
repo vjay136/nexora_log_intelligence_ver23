@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"nexora.local/nli-v20/internal/protocol"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,5 +35,38 @@ func TestTerminalClosedSessionCleanupIsNotRepeated(t *testing.T) {
 	time.Sleep(1200 * time.Millisecond)
 	if probe.calls.Load() != 1 {
 		t.Fatal("retained closed sessions repeatedly consume broker cleanup calls")
+	}
+}
+
+func TestTerminalTransportLeaseCannotBeRenewedByBrowserOrHeartbeat(t *testing.T) {
+	f := newAPIFixture(t)
+	token := terminalTestEnroll(t, f, "transport-lease-node")
+	status := protocol.TerminalStatus{Supported: true, Enabled: true, PrivilegeMode: "operator", Generation: "same-broker-generation", MaxSessions: 4, LifetimeSeconds: 1800, IdleTimeoutSeconds: 300}
+	terminalTestExchange(t, f, "transport-lease-node", token, protocol.TerminalExchangeRequest{Terminal: status})
+	response, data := f.request("POST", "/api/v1/terminal/sessions", map[string]any{"node_id": "transport-lease-node", "cols": 80, "rows": 24, "password": "Admin-password-12345!", "reason": "Lost worker must not replay queued commands"})
+	if response.StatusCode != 200 {
+		t.Fatalf("open status %d", response.StatusCode)
+	}
+	id := decodeMap(t, data)["session"].(map[string]any)["id"].(string)
+	f.server.terminal.mu.Lock()
+	session := f.server.terminal.sessions[id]
+	session.transportUntil = time.Now().Add(-time.Second)
+	session.lease = time.Now().Add(time.Minute)
+	session.inputs = []protocol.TerminalInput{{Sequence: 1, Data: []byte("must-never-replay\r")}}
+	f.server.terminal.mu.Unlock()
+	// A generic status/heartbeat must never grant a new terminal transport lease.
+	f.server.terminal.observe("transport-lease-node", status)
+	code, out := terminalTestExchange(t, f, "transport-lease-node", token, protocol.TerminalExchangeRequest{Terminal: status})
+	if code != 200 || len(out.Sessions) != 0 {
+		t.Fatal("late worker exchange revived an expired shell or queued stdin")
+	}
+	response, _ = f.request("POST", "/api/v1/terminal/sessions/"+id+"/input", map[string]any{"sequence": 1, "data": "echo replay\r"})
+	if response.StatusCode != 409 {
+		t.Fatal("expired transport accepted input")
+	}
+	f.server.terminal.mu.Lock()
+	defer f.server.terminal.mu.Unlock()
+	if terminalActive(session) || len(session.inputs) != 0 {
+		t.Fatal("expired terminal retained active commands")
 	}
 }

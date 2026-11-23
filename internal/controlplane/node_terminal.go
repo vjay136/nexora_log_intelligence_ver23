@@ -50,6 +50,7 @@ type terminalSession struct {
 	lastInputSeq                uint64
 	closedAt                    time.Time
 	closeQueued                 bool
+	transportUntil              time.Time
 }
 type terminalObservation struct {
 	status protocol.TerminalStatus
@@ -147,7 +148,7 @@ func (t *terminalRelay) run() {
 			for id, s := range t.sessions {
 				if terminalActive(s) {
 					_, role, err := t.s.auth.ValidateToken(s.token)
-					if err != nil || role != auth.RoleAdmin || time.Now().After(s.lease) || time.Now().After(s.ExpiresAt) {
+					if err != nil || role != auth.RoleAdmin || time.Now().After(s.lease) || time.Now().After(s.ExpiresAt) || (s.NodeID != "@controller" && time.Now().After(s.transportUntil)) {
 						t.closeLocked(s, "Session expired or authorization revoked")
 					}
 				}
@@ -315,7 +316,7 @@ func (s *Server) handleTerminalSessions(w http.ResponseWriter, r *http.Request) 
 	if life < 1 || life > 1800 {
 		life = 1800
 	}
-	session := &terminalSession{ID: id, NodeID: in.NodeID, Status: "pending", ExpiresAt: time.Now().Add(time.Duration(life) * time.Second), IdleTimeoutSeconds: st.IdleTimeoutSeconds, owner: owner, username: p.Username, token: token, generation: st.Generation, lease: time.Now().Add(15 * time.Second), cols: in.Cols, rows: in.Rows}
+	session := &terminalSession{ID: id, NodeID: in.NodeID, Status: "pending", ExpiresAt: time.Now().Add(time.Duration(life) * time.Second), IdleTimeoutSeconds: st.IdleTimeoutSeconds, owner: owner, username: p.Username, token: token, generation: st.Generation, lease: time.Now().Add(15 * time.Second), transportUntil: time.Now().Add(30 * time.Second), cols: in.Cols, rows: in.Rows}
 	t.mu.Lock()
 	active, user, nodeCount := 0, 0, 0
 	for _, v := range t.sessions {
@@ -577,6 +578,15 @@ func (s *Server) handleTerminalExchange(w http.ResponseWriter, r *http.Request) 
 	t.observe(in.NodeID, in.Terminal)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	for _, v := range t.sessions {
+		if v.NodeID == in.NodeID && terminalActive(v) && v.generation == in.Terminal.Generation {
+			if time.Now().After(v.transportUntil) {
+				t.closeLocked(v, "Node terminal transport expired; connect a new session")
+			} else {
+				v.transportUntil = time.Now().Add(15 * time.Second)
+			}
+		}
+	}
 	for _, u := range in.Sessions {
 		v := t.sessions[u.ID]
 		if v != nil && v.NodeID == in.NodeID && terminalActive(v) && v.generation == in.Terminal.Generation {

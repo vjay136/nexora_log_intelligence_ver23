@@ -270,6 +270,17 @@ def main():
         t.wait(lambda d:d['session']['status']=='closed',45)
         t.http.call('POST',t.path+'/input',{'sequence':1,'data':'echo forbidden-replay\n'},409)
         sessions.remove(t);checks.append('broker_restart_closes_old_generation_without_replay')
+        # A live browser must not keep a shell alive after client-control stops.
+        lost=Terminal(fresh,client);sessions.append(lost)
+        docker('exec',a.client,'systemctl','stop','nli-client-control.service')
+        lost.wait(lambda d:d['session']['status']=='closed',35)
+        fresh.call('POST',lost.path+'/input',{'sequence':1,'data':'echo forbidden-old-command\n'},409)
+        sessions.remove(lost)
+        docker('exec',a.client,'systemctl','start','nli-client-control.service')
+        recovered=Terminal(fresh,client);sessions.append(recovered)
+        require(recovered.id!=lost.id and 'FRESH_SHELL' in recovered.command('printf FRESH_SHELL'),'Client-control restart did not establish a fresh isolated session')
+        recovered.close();sessions.remove(recovered)
+        checks.append('client_control_loss_expires_despite_browser_polling_and_requires_fresh_session')
         result={'release':'v23.0.0-10','checks':checks,'status':'passed','production_nodes_modified':False,'ssh_used':False,'transcripts_persisted':False,'tls':'verified fixture CA and localhost hostname'}
         if pipeline_proof is not None:result['watched_parser_pipeline']=pipeline_proof
         a.result.parent.mkdir(parents=True,exist_ok=True);a.result.write_text(json.dumps(result,indent=2)+'\n')
