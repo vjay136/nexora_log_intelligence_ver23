@@ -518,6 +518,28 @@
       "source": "current client UPES runtime statistics",
       "availability": "Always exported by client /metrics; current process-local queue length, reset at agent restart.",
       "endpoint": "client"
+    },
+    {
+      "name": "nli_input_policy_errors_total",
+      "group": "client",
+      "type": "counter",
+      "help": "Records blocked before parsing because an enabled input policy could not evaluate a complete supported record.",
+      "labels": [],
+      "unit": "records",
+      "source": "client log policy runtime statistics",
+      "availability": "Always exported by client /metrics; process-local cumulative count, reset at agent restart.",
+      "endpoint": "client"
+    },
+    {
+      "name": "nli_output_fields_removed_total",
+      "group": "client",
+      "type": "counter",
+      "help": "Customer JSON root fields removed by enabled output policies.",
+      "labels": [],
+      "unit": "fields",
+      "source": "client log policy runtime statistics",
+      "availability": "Always exported by client /metrics; process-local cumulative count, reset at agent restart.",
+      "endpoint": "client"
     }
   ]
 }

@@ -10,94 +10,408 @@
     }
   ],
   "__requires": [
-    {"type":"grafana","id":"grafana","name":"Grafana","version":"10.0.0"},
-    {"type":"datasource","id":"prometheus","name":"Prometheus","version":"1.0.0"}
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    }
   ],
-  "annotations": {"list": []},
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "graphTooltip": 1,
   "id": null,
   "links": [],
   "panels": [
     {
-      "datasource": {"type":"prometheus","uid":"${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults":{"unit":"ops"},"overrides":[]},
-      "gridPos":{"h":8,"w":12,"x":0,"y":0},
-      "id":1,
-      "options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},
-      "targets":[{"expr":"sum(rate(nli_logs_received_total[5m]))","legendFormat":"received","refId":"A"},{"expr":"sum(rate(nli_logs_parsed_total[5m]))","legendFormat":"parsed","refId":"B"}],
-      "title":"Client log throughput",
-      "type":"timeseries"
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(nli_logs_received_total[5m]))",
+          "legendFormat": "received",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(nli_logs_parsed_total[5m]))",
+          "legendFormat": "parsed",
+          "refId": "B"
+        }
+      ],
+      "title": "Client log throughput",
+      "type": "timeseries"
     },
     {
-      "datasource": {"type":"prometheus","uid":"${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults":{"unit":"ops"},"overrides":[]},
-      "gridPos":{"h":8,"w":12,"x":12,"y":0},
-      "id":2,
-      "options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},
-      "targets":[{"expr":"sum(nli_stream_queue_depth)","legendFormat":"queued records","refId":"A"},{"expr":"sum(nli_stream_queue_capacity)","legendFormat":"queue capacity","refId":"B"}],
-      "title":"Observed source queue depth",
-      "type":"timeseries"
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(nli_stream_queue_depth)",
+          "legendFormat": "queued records",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(nli_stream_queue_capacity)",
+          "legendFormat": "queue capacity",
+          "refId": "B"
+        }
+      ],
+      "title": "Observed source queue depth",
+      "type": "timeseries"
     },
     {
-      "datasource": {"type":"prometheus","uid":"${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults":{"unit":"percent","min":0,"max":100},"overrides":[]},
-      "gridPos":{"h":8,"w":12,"x":0,"y":8},
-      "id":3,
-      "options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},
-      "targets":[{"expr":"nli_client_cpu_percent","legendFormat":"{{hostname}}","refId":"A"}],
-      "title":"Reported client CPU utilization",
-      "type":"timeseries"
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nli_client_cpu_percent",
+          "legendFormat": "{{hostname}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Reported client CPU utilization",
+      "type": "timeseries"
     },
     {
-      "datasource": {"type":"prometheus","uid":"${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults":{"unit":"bytes"},"overrides":[]},
-      "gridPos":{"h":8,"w":12,"x":12,"y":8},
-      "id":4,
-      "options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},
-      "targets":[{"expr":"nli_controller_memory_alloc_bytes","legendFormat":"Go heap allocated","refId":"A"},{"expr":"nli_controller_memory_sys_bytes","legendFormat":"Go runtime system memory","refId":"B"}],
-      "title":"Controller Go memory",
-      "type":"timeseries"
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nli_controller_memory_alloc_bytes",
+          "legendFormat": "Go heap allocated",
+          "refId": "A"
+        },
+        {
+          "expr": "nli_controller_memory_sys_bytes",
+          "legendFormat": "Go runtime system memory",
+          "refId": "B"
+        }
+      ],
+      "title": "Controller Go memory",
+      "type": "timeseries"
     },
     {
-      "datasource": {"type":"prometheus","uid":"${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults":{"unit":"records/s"},"overrides":[]},
-      "gridPos":{"h":8,"w":24,"x":0,"y":16},
-      "id":5,
-      "options":{"legend":{"displayMode":"table","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},
-      "targets":[{"expr":"sum by (node_id, source) (nli_stream_normalized_per_second)","legendFormat":"{{node_id}} / {{source}}","refId":"A"}],
-      "title":"Observed stream normalization rate",
-      "type":"timeseries"
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "records/s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (node_id, source) (nli_stream_normalized_per_second)",
+          "legendFormat": "{{node_id}} / {{source}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Observed stream normalization rate",
+      "type": "timeseries"
     },
     {
-      "datasource": {"type":"prometheus","uid":"${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults":{"unit":"ops"},"overrides":[]},
-      "gridPos":{"h":8,"w":24,"x":0,"y":24},
-      "id":6,
-      "options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},
-      "targets":[{"expr":"sum(nli_upes_discovery_pending)","legendFormat":"queued summaries now","refId":"A"},{"expr":"sum(increase(nli_upes_discovery_dropped_total[5m]))","legendFormat":"queue drops (5m)","refId":"B"},{"expr":"sum(rate(nli_upes_observed_failures_total[5m]))","legendFormat":"observed failures/s","refId":"C"}],
-      "title":"UPES bounded failure discovery",
-      "type":"timeseries"
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(nli_upes_discovery_pending)",
+          "legendFormat": "queued summaries now",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(nli_upes_discovery_dropped_total[5m]))",
+          "legendFormat": "queue drops (5m)",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(nli_upes_observed_failures_total[5m]))",
+          "legendFormat": "observed failures/s",
+          "refId": "C"
+        }
+      ],
+      "title": "UPES bounded failure discovery",
+      "type": "timeseries"
     },
     {
-      "datasource": {"type":"prometheus","uid":"${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults":{"unit":"records/s"},"overrides":[]},
-      "gridPos":{"h":8,"w":24,"x":0,"y":32},
-      "id":7,
-      "options":{"legend":{"displayMode":"table","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},
-      "targets":[{"expr":"sum(nli_stream_validation_attempts_per_second)","legendFormat":"attempted","refId":"A"},{"expr":"sum(nli_stream_validation_passed_per_second)","legendFormat":"passed","refId":"B"},{"expr":"sum(nli_stream_validation_failed_per_second)","legendFormat":"failed","refId":"C"}],
-      "title":"Parser validation outcomes",
-      "type":"timeseries"
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "records/s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(nli_stream_validation_attempts_per_second)",
+          "legendFormat": "attempted",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(nli_stream_validation_passed_per_second)",
+          "legendFormat": "passed",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(nli_stream_validation_failed_per_second)",
+          "legendFormat": "failed",
+          "refId": "C"
+        }
+      ],
+      "title": "Parser validation outcomes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(nli_logs_filtered_total[5m]))",
+          "legendFormat": "pre-parser exclusions/s (includes policy errors)",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(nli_input_policy_errors_total[5m]))",
+          "legendFormat": "blocked policy errors/s",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(nli_output_fields_removed_total[5m]))",
+          "legendFormat": "customer fields removed/s",
+          "refId": "C"
+        }
+      ],
+      "title": "Selective input and output policy counters",
+      "type": "timeseries"
     }
   ],
-  "refresh":"30s",
-  "schemaVersion":39,
-  "tags":["nli","metrics"],
-  "templating":{"list":[{"current":{},"hide":0,"includeAll":false,"label":"Prometheus","name":"DS_PROMETHEUS","options":[],"query":"prometheus","refresh":1,"regex":"","type":"datasource"}]},
-  "time":{"from":"now-1h","to":"now"},
-  "timepicker":{},
-  "timezone":"browser",
-  "title":"NLI Operations",
-  "uid":"nli-operations",
-  "version":1
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "nli",
+    "metrics"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Prometheus",
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "NLI Operations",
+  "uid": "nli-operations",
+  "version": 1
 }
