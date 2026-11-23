@@ -49,6 +49,7 @@ type terminalSession struct {
 	lastInputHash               [32]byte
 	lastInputSeq                uint64
 	closedAt                    time.Time
+	closeQueued                 bool
 }
 type terminalObservation struct {
 	status protocol.TerminalStatus
@@ -128,7 +129,7 @@ func (t *terminalRelay) run() {
 			t.mu.Lock()
 			ids := []string{}
 			for _, s := range t.sessions {
-				if s.NodeID == "@controller" {
+				if s.NodeID == "@controller" && terminalActive(s) {
 					ids = append(ids, s.ID)
 				}
 				t.closeLocked(s, "Controller stopped")
@@ -150,7 +151,8 @@ func (t *terminalRelay) run() {
 						t.closeLocked(s, "Session expired or authorization revoked")
 					}
 				}
-				if s.Status == "closed" && s.NodeID == "@controller" {
+				if s.Status == "closed" && s.NodeID == "@controller" && !s.closeQueued {
+					s.closeQueued = true
 					ids = append(ids, id)
 				}
 				if !s.closedAt.IsZero() && time.Since(s.closedAt) > time.Minute {
