@@ -126,6 +126,9 @@ type SecurityMiddleware struct {
 	MaxRequestBodySize int64
 	EnableCSRF         bool
 	EnableAuditLogging bool
+	// TerminalNodeIdentity returns a verified fleet identity, never a trusted
+	// header alone. It applies only to the terminal's high-frequency exchange.
+	TerminalNodeIdentity func(*http.Request) (string, bool) `json:"-"`
 }
 
 func NewSecurityMiddleware(store *auth.Store, logger AuditLogger) *SecurityMiddleware {
@@ -318,6 +321,12 @@ func (sm *SecurityMiddleware) Wrap(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			key := getRemoteIP(r)
 			budget := sm.RateLimit
+			if r.URL.Path == "/api/v1/node/terminal/exchange" && sm.TerminalNodeIdentity != nil {
+				if nodeID, ok := sm.TerminalNodeIdentity(r); ok && nodeID != "" {
+					key = "terminal-node:" + nodeID
+					budget = 600
+				}
+			}
 			// An authenticated interactive terminal has its own bounded budget.
 			// It must not exhaust the normal tab API budget while typing/polling.
 			if strings.HasPrefix(r.URL.Path, "/api/v1/terminal/") {

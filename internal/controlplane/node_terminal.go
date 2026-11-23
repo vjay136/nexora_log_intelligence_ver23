@@ -564,6 +564,10 @@ func (s *Server) handleTerminalExchange(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, "invalid node credentials or exchange", 401)
 		return
 	}
+	if headerID := r.Header.Get("X-NLI-Node-ID"); headerID != "" && headerID != in.NodeID {
+		jsonError(w, "node identity does not match terminal exchange", 401)
+		return
+	}
 	if len(in.Sessions) > 16 {
 		jsonError(w, "too many terminal updates", 400)
 		return

@@ -181,6 +181,7 @@ func (c *Client) exchangeTerminal(ctx context.Context, status terminalrpc.Status
 		return result, err
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-NLI-Node-ID", nodeID)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.http.Do(request)
 	if err != nil {

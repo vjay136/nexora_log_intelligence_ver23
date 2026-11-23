@@ -152,7 +152,7 @@ func TestTerminalRelayGenerationAndCursor(t *testing.T) {
 }
 func TestTerminalExchangeUsesAuthenticatedNodeAndBounds(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/node/terminal/exchange" || r.Header.Get("Authorization") != "Bearer secret-node-token" {
+		if r.URL.Path != "/api/v1/node/terminal/exchange" || r.Header.Get("Authorization") != "Bearer secret-node-token" || r.Header.Get("X-NLI-Node-ID") != "node-a" {
 			t.Error("node authentication missing")
 		}
 		w.Header().Set("Content-Type", "application/json")

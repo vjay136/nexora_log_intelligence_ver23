@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"nexora.local/nli-v20/internal/fleet"
 	"testing"
 	"time"
@@ -84,6 +85,29 @@ func terminalTestExchange(t *testing.T, f *apiFixture, node, token string, in pr
 func TestTerminalRemoteSessionLifecycleAndNodeIsolation(t *testing.T) {
 	f := newAPIFixture(t)
 	token := terminalTestEnroll(t, f, "terminal-node")
+	identityRequest := httptest.NewRequest(http.MethodPost, "/api/v1/node/terminal/exchange", nil)
+	identityRequest.Header.Set("X-NLI-Node-ID", "terminal-node")
+	identityRequest.Header.Set("Authorization", "Bearer "+token)
+	if id, ok := f.server.security.TerminalNodeIdentity(identityRequest); !ok || id != "terminal-node" {
+		t.Fatal("fleet terminal identity callback rejected valid token")
+	}
+	identityRequest.Header.Set("X-NLI-Node-ID", "other-node")
+	if _, ok := f.server.security.TerminalNodeIdentity(identityRequest); ok {
+		t.Fatal("fleet terminal identity callback accepted spoofed node")
+	}
+	mismatchBody, _ := json.Marshal(protocol.TerminalExchangeRequest{NodeID: "terminal-node"})
+	mismatch, _ := http.NewRequest(http.MethodPost, f.http.URL+"/api/v1/node/terminal/exchange", bytes.NewReader(mismatchBody))
+	mismatch.Header.Set("Content-Type", "application/json")
+	mismatch.Header.Set("Authorization", "Bearer "+token)
+	mismatch.Header.Set("X-NLI-Node-ID", "other-node")
+	mismatchResponse, err := http.DefaultClient.Do(mismatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatchResponse.Body.Close()
+	if mismatchResponse.StatusCode != 401 {
+		t.Fatal("header/body identity mismatch accepted", mismatchResponse.StatusCode)
+	}
 	status := protocol.TerminalStatus{Supported: true, Enabled: true, PrivilegeMode: "operator", Generation: "first-generation", MaxSessions: 4, IdleTimeoutSeconds: 300, LifetimeSeconds: 1800}
 	code, _ := terminalTestExchange(t, f, "terminal-node", token, protocol.TerminalExchangeRequest{Terminal: status})
 	if code != 200 {

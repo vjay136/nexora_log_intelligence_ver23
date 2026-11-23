@@ -260,6 +260,10 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("metric history: %w", err)
 	}
 	s := &Server{cfg: cfg, startedAt: time.Now().UTC(), auth: authStore, fleet: fleet.New(filepath.Join(cfg.StateDir, "fleet.json")), rollouts: newRolloutStateManager(filepath.Join(cfg.StateDir, "rollouts.json")), parsers: registryStore, events: events, telemetry: telemetryController, streamTelemetry: NewStreamHub(128), metadata: storage, artifactStorage: artifactStorage, storageWarning: warning, audit: auditLogger, security: security, assurance: vault, assuranceDeps: assuranceDeps, hub: wsrelay.NewHub(), enrollmentToken: enrollment, enrollmentConsumedPath: filepath.Join(cfg.StateDir, "consumed-enrollment-tokens.sha256"), aiMetrics: &aiUsageStore{}, metricHistory: history, quarantine: quarantine, nupire: persistentNUPIREController{store: nupireStore}, notificationQueue: make(chan notificationDeliveryJob, 128), notificationWorkerDone: make(chan struct{})}
+	security.TerminalNodeIdentity = func(r *http.Request) (string, bool) {
+		nodeID := r.Header.Get("X-NLI-Node-ID")
+		return nodeID, nodeID != "" && s.fleet.Authorize(nodeID, extractToken(r))
+	}
 	s.downloadKey = append([]byte(nil), csrfKey...)
 	s.artifactKeys = parsePublicKeys(cfg)
 	s.mux = http.NewServeMux()
