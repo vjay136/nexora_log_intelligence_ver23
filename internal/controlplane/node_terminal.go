@@ -321,7 +321,7 @@ func (s *Server) handleTerminalSessions(w http.ResponseWriter, r *http.Request) 
 	for _, v := range t.sessions {
 		if terminalActive(v) {
 			active++
-			if v.owner == owner {
+			if v.username == p.Username {
 				user++
 			}
 			if v.NodeID == in.NodeID {
@@ -592,7 +592,12 @@ func (s *Server) handleTerminalExchange(w http.ResponseWriter, r *http.Request) 
 		if active {
 			out.PollAfterMS = 350
 		}
-		out.Sessions = append(out.Sessions, protocol.TerminalSessionDirective{ID: v.ID, Cols: v.cols, Rows: v.rows, Close: !active, After: v.next, Inputs: append([]protocol.TerminalInput(nil), v.inputs...)})
+		inputs := v.inputs
+		// At most 16 sessions * 4 frames * 8 KiB fit the bounded node response.
+		if len(inputs) > 4 {
+			inputs = inputs[:4]
+		}
+		out.Sessions = append(out.Sessions, protocol.TerminalSessionDirective{ID: v.ID, Cols: v.cols, Rows: v.rows, Close: !active, After: v.next, Inputs: append([]protocol.TerminalInput(nil), inputs...)})
 	}
 	jsonOK(w, out)
 }

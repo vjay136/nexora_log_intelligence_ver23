@@ -999,6 +999,7 @@ func (c *Client) applyParsers(ctx context.Context, payload json.RawMessage) (str
 		return "", fmt.Errorf("new parser generation failed readiness; prior parser generation restored and verified: %w", err)
 	}
 	_ = os.RemoveAll(backup)
+	refreshTerminalReadAccess(ctx)
 	return fmt.Sprintf("%d parsers validated and synchronized", len(wrapper.Parsers)), nil
 }
 
@@ -1212,6 +1213,7 @@ func (c *Client) applyAssetBundle(ctx context.Context, data []byte) (string, err
 	}
 	_ = os.RemoveAll(backup)
 	_ = os.RemoveAll(parserBackup)
+	refreshTerminalReadAccess(ctx)
 	return fmt.Sprintf("%d revisioned parser assets validated and synchronized (bundle %s)", len(bundle.Assets), bundle.BundleHash), nil
 }
 

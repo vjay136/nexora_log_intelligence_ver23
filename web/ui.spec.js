@@ -1723,12 +1723,12 @@ test('NUPIRE candidate registry renders non-empty controller results', async ({ 
   await expect(page.locator('.error-state')).toHaveCount(0);
 });
 
-test('navigation leads with Command Center, Assurance Lab, approvals and notifications', async ({ page }) => {
+test('navigation leads with Command Center and Node Terminal, then Assurance Lab, approvals and notifications', async ({ page }) => {
   await mockController(page);
   await login(page);
   const ids=await page.locator('.nav-item').evaluateAll(items=>items.map(item=>item.dataset.page));
-  expect(ids.slice(0,26)).toEqual(['operations','monitoring','streams','assurance','quarantine-wizard','upes','rollouts','backup-restore','parser-sync','artifacts','parser-workspace','nupire','field-integrity','ai','ai-guidance','sample-history','header-templates','kv-templates','parsers','reference-ai','building-blocks','field-mapping','studio','regex','knownkeys','drift']);
-  expect(ids[26]).toBe('notifications');
+  expect(ids.slice(0,27)).toEqual(['operations','monitoring','streams','node-terminal','assurance','quarantine-wizard','upes','rollouts','backup-restore','parser-sync','artifacts','parser-workspace','nupire','field-integrity','ai','ai-guidance','sample-history','header-templates','kv-templates','parsers','reference-ai','building-blocks','field-mapping','studio','regex','knownkeys','drift']);
+  expect(ids[27]).toBe('notifications');
   const input=ids.indexOf('input-paths'),output=ids.indexOf('outputs'),parsing=ids.indexOf('kv');
   expect(ids.slice(input,input+4)).toEqual(['input-paths','selective-input','migration','outputs']);
   expect(ids.slice(output,output+5)).toEqual(['outputs','output-fields','metadata','unknowns','performance']);

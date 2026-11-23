@@ -23,6 +23,12 @@ type terminalBroker interface {
 	Close(context.Context, string, string) error
 }
 
+func refreshTerminalReadAccess(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_ = terminalrpc.NewClient("").RefreshReadAccess(ctx)
+}
+
 func terminalStatus(s terminalrpc.Status) protocol.TerminalStatus {
 	return protocol.TerminalStatus{Supported: s.Supported, Enabled: s.Enabled, PrivilegeMode: s.PrivilegeMode, Generation: s.Generation, Reason: s.Reason, MaxSessions: s.MaxSessions, IdleTimeoutSeconds: s.IdleTimeoutSeconds, LifetimeSeconds: s.LifetimeSeconds}
 }

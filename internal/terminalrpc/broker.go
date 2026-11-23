@@ -66,9 +66,9 @@ func NewServer(manager *nodeterminal.Manager, cfg HostConfig) (*Server, error) {
 	if manager == nil {
 		return nil, errors.New("terminal manager is required")
 	}
-	if cfg.Enabled && cfg.AllowInputWrite != nil && *cfg.AllowInputWrite {
+	if cfg.Enabled {
 		if _, err = exec.LookPath("/usr/bin/setfacl"); err != nil {
-			return nil, errors.New("terminal input write access requires the host ACL setup")
+			return nil, errors.New("terminal access requires the host ACL setup")
 		}
 	}
 	var random [16]byte
@@ -173,6 +173,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if r.URL.Path == "/v1/refresh-read-access" {
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		var empty struct{}
+		if decoder.Decode(&empty) != nil || decoder.Decode(new(any)) != io.EOF {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(response{Error: "read access refresh accepts no arguments"})
+			return
+		}
+		if !s.status.Enabled {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(response{Error: "node terminal is disabled by host policy"})
+			return
+		}
+		if err := refreshReadAccess(r.Context()); err != nil {
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(response{Error: "NLI read access refresh failed"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(response{})
+		return
+	}
 	var input request
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 96<<10))
 	decoder.DisallowUnknownFields()
@@ -185,6 +207,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch r.URL.Path {
 	case "/v1/open":
+		if s.status.Enabled {
+			if err = refreshReadAccess(r.Context()); err != nil {
+				break
+			}
+		}
 		if s.status.Enabled && s.allowInputWrite {
 			if err = refreshInputACL(r.Context()); err != nil {
 				break
@@ -259,6 +286,13 @@ func (s *Server) expireLeases(ctx context.Context) {
 }
 
 type Client struct{ http *http.Client }
+
+// RefreshReadAccess notifies the opt-in host broker after an atomic parser
+// generation swap. Failure cannot invalidate a successful parser rollout.
+func (c *Client) RefreshReadAccess(ctx context.Context) error {
+	_, err := c.call(ctx, "/v1/refresh-read-access", struct{}{})
+	return err
+}
 
 func NewClient(socket string) *Client {
 	if socket == "" {

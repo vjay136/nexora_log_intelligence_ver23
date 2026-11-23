@@ -20,7 +20,7 @@ if [[ $action == --disable ]]; then
  # ACLs use pinned inode descriptors: never follow a user-created link.
  python3 - <<'PY'
 import os,stat,subprocess
-roots=['/var/log/nli/input','/var/log/nli/output','/etc/nli/parsers','/var/lib/nli/parser-assets','/var/lib/nli-controller/parser-assets']
+roots=['/var/log/nli/input','/var/log/nli/output','/etc/nli/parsers','/var/lib/nli/parsers','/var/lib/nli/parser-assets','/var/lib/nli-controller/parser-assets']
 def clear(fd):
  st=os.fstat(fd)
  if stat.S_ISREG(st.st_mode) and st.st_nlink!=1:return
@@ -142,7 +142,7 @@ for path in ['/var/log/nli','/var/lib/nli','/var/lib/nli-controller','/etc/nli']
  except FileNotFoundError:continue
  try:acl(fd,'u:nli-terminal:--x')
  finally:os.close(fd)
-for path in ['/var/log/nli/input','/var/log/nli/output','/etc/nli/parsers','/var/lib/nli/parser-assets','/var/lib/nli-controller/parser-assets']:
+for path in ['/var/log/nli/input','/var/log/nli/output','/etc/nli/parsers','/var/lib/nli/parsers','/var/lib/nli/parser-assets','/var/lib/nli-controller/parser-assets']:
  try:fd=openroot(path)
  except FileNotFoundError:continue
  try:walk(fd,path.endswith('/input'))

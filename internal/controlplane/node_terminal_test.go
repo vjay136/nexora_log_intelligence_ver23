@@ -104,12 +104,14 @@ func TestTerminalRemoteSessionLifecycleAndNodeIsolation(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		copy := *f.server.terminal.sessions[id]
 		copy.ID = fmt.Sprintf("term-capacity-test-%d", i)
+		copy.NodeID = fmt.Sprintf("other-terminal-node-%d", i)
+		copy.owner[0] = byte(i + 1)
 		f.server.terminal.sessions[copy.ID] = &copy
 	}
 	f.server.terminal.mu.Unlock()
 	resp, _ = f.request("POST", "/api/v1/terminal/sessions", open)
 	if resp.StatusCode != 409 {
-		t.Fatal("per-login terminal capacity not enforced", resp.StatusCode)
+		t.Fatal("per-user capacity across nodes and separate login owners not enforced", resp.StatusCode)
 	}
 	f.server.terminal.mu.Lock()
 	for i := 0; i < 3; i++ {
@@ -136,6 +138,21 @@ func TestTerminalRemoteSessionLifecycleAndNodeIsolation(t *testing.T) {
 	if code != 200 || len(directives.Sessions[0].Inputs) != 1 {
 		t.Fatal("queued duplicate commands")
 	}
+
+	f.server.terminal.mu.Lock()
+	queued := f.server.terminal.sessions[id]
+	original := append([]protocol.TerminalInput(nil), queued.inputs...)
+	for i := 2; i <= 32; i++ {
+		queued.inputs = append(queued.inputs, protocol.TerminalInput{Sequence: uint64(i), Data: bytes.Repeat([]byte("x"), 8192)})
+	}
+	f.server.terminal.mu.Unlock()
+	code, bounded := terminalTestExchange(t, f, "terminal-node", token, protocol.TerminalExchangeRequest{Terminal: status})
+	if code != 200 || len(bounded.Sessions) != 1 || len(bounded.Sessions[0].Inputs) != 4 {
+		t.Fatal("queued terminal stdin exceeded a bounded response window")
+	}
+	f.server.terminal.mu.Lock()
+	queued.inputs = original
+	f.server.terminal.mu.Unlock()
 	frame := protocol.TerminalSessionUpdate{ID: id, Status: "running", Start: 0, Next: 4, Data: []byte("demo"), AckedInput: 1}
 	for i := 0; i < 2; i++ {
 		code, _ = terminalTestExchange(t, f, "terminal-node", token, protocol.TerminalExchangeRequest{Terminal: status, Sessions: []protocol.TerminalSessionUpdate{frame}})

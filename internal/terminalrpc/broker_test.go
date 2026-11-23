@@ -1,10 +1,28 @@
 package terminalrpc
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestReadAccessRefreshRequiresHostOptInAndNoArguments(t *testing.T) {
+	server := &Server{}
+	for _, item := range []struct {
+		body string
+		code int
+	}{{`{}`, http.StatusForbidden}, {`{"path":"/etc/nli"}`, http.StatusBadRequest}} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/refresh-read-access", strings.NewReader(item.body))
+		request = request.WithContext(context.WithValue(request.Context(), peerContextKey{}, true))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != item.code {
+			t.Fatalf("refresh body %s status=%d", item.body, response.Code)
+		}
+	}
+}
 
 func TestBrokerRejectsHTTPHeadersWithoutKernelPeer(t *testing.T) {
 	s := &Server{}

@@ -7,6 +7,7 @@ stored. Existing r9_live_sync_restore.py separately qualifies rollout/restore.
 import argparse
 import base64
 import json
+import shlex
 from pathlib import Path
 import secrets
 import subprocess
@@ -115,11 +116,75 @@ def runtime_signature(http):
     return (b.get('desired_hash'),b.get('controller_applied_hash'),[(c.get('node_id'),c.get('desired_hash'),c.get('applied_hash')) for c in r['clients']])
 
 
+
+def output_snapshot(client):
+    code = """import json,pathlib
+paths=list(pathlib.Path('/var/log/nli/output').glob('*.jsonl'))+[pathlib.Path('/var/log/nli/quarantine.jsonl')]
+result={}
+for p in paths:
+ if p.is_file():
+  s=p.stat();result[str(p)]={'inode':s.st_ino,'size':s.st_size}
+print(json.dumps(result))
+"""
+    return json.loads(docker('exec','-i',client,'python3','-',script=code))
+
+
+def output_delta(client, baseline, desired):
+    code = r"""import hashlib,json,pathlib,sys
+spec=json.load(sys.stdin);base=spec['baseline'];desired=spec['desired']
+paths=list(pathlib.Path('/var/log/nli/output').glob('*.jsonl'))+[pathlib.Path('/var/log/nli/quarantine.jsonl')]
+result={'exact':0,'different':0,'quarantined':0,'invalid':0,'partial':False,'bytes':0,'normalised_paths':[]}
+for p in paths:
+ if not p.is_file():continue
+ st=p.stat();prior=base.get(str(p),{});offset=prior.get('size',0) if prior.get('inode')==st.st_ino else 0
+ if st.st_size<offset:raise SystemExit('output truncated during proof')
+ with p.open('rb') as f:f.seek(offset);data=f.read(1048577)
+ if len(data)>1048576:raise SystemExit('output proof bound exceeded')
+ result['bytes']+=len(data)
+ if data and not data.endswith(b'\n'):result['partial']=True;data=data.rsplit(b'\n',1)[0] if b'\n' in data else b''
+ for line in data.splitlines():
+  if not line.strip():continue
+  if 'quarant' in p.name:result['quarantined']+=1;continue
+  try:value=json.loads(line)
+  except Exception:result['invalid']+=1;continue
+  if value==desired and 'kv_pair' not in value and all(not isinstance(v,(dict,list)) for v in value.values()):result['exact']+=1;result['normalised_paths'].append(str(p))
+  else:result['different']+=1
+result['desired_sha256']=hashlib.sha256(json.dumps(desired,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+print(json.dumps(result))
+"""
+    return json.loads(docker('exec','-i',client,'python3','-c',code,script=json.dumps({'baseline':baseline,'desired':desired})))
+
+
+def prove_watched_pipeline(t, client, sample):
+    require(isinstance(sample.get('raw'),str) and '\n' not in sample['raw'] and isinstance(sample.get('desired'),dict),'Invalid rollout sample fixture')
+    baseline=output_snapshot(client)
+    out=t.command("printf '%s\\n' "+shlex.quote(sample['raw'])+" >> /var/log/nli/input/auto.log; printf '\\nWATCHED_APPEND_RC_%s\\n' \"$?\"")
+    require('\nWATCHED_APPEND_RC_0\r\n' in out,'Terminal could not append the watched input')
+    end=time.monotonic()+60
+    while True:
+        proof=output_delta(client,baseline,sample['desired'])
+        require(proof['different']==0 and proof['quarantined']==0 and proof['invalid']==0 and proof['exact']<=1,'Watched input emitted duplicate, invalid, unexpected or quarantine JSON')
+        if proof['exact']==1 and not proof['partial']:break
+        require(time.monotonic()<end,'Watched sample did not reach exact normalised output')
+        t.read();time.sleep(.5)
+    time.sleep(2)
+    proof=output_delta(client,baseline,sample['desired'])
+    require(proof['exact']==1 and proof['different']==0 and proof['quarantined']==0 and proof['invalid']==0 and not proof['partial'],'Output changed after exact emission')
+    path=proof.pop('normalised_paths')[0]
+    out=t.command('cat '+shlex.quote(path)+" >/dev/null; printf '\\nOUTPUT_READ_RC_%s\\n' \"$?\"; test ! -w "+shlex.quote(path)+" && printf '\\nOUTPUT_READONLY\\n'")
+    require('\nOUTPUT_READ_RC_0\r\n' in out and '\nOUTPUT_READONLY\r\n' in out,'Generated normalised output is unreadable or writable by operator')
+    return proof
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--controller',required=True);parser.add_argument('--client',required=True)
     parser.add_argument('--result',type=Path,required=True)
-    a=parser.parse_args();checks=[];sessions=[];workers=[]
+    parser.add_argument('--rollout-proof',type=Path,help='Packaged two-node result containing exact deployed NAPI SMTP fixture')
+    a=parser.parse_args();checks=[];sessions=[];workers=[];pipeline_proof=None
+    sample=None
+    if a.rollout_proof:
+        sample=json.loads(a.rollout_proof.read_text())['live_approved_publication_and_restore']['napi_smtp_parse_sample']
     # Refuse production endpoints: only privileged local containers with systemd.
     for node in (a.controller,a.client):
         info=json.loads(docker('inspect',node))[0]
@@ -163,6 +228,12 @@ def main():
             t.http.call('POST',t.path+'/resize',{'cols':120,'rows':40})
             out=t.command('id -un; stty size; cd /var/log/nli/input; pwd; printf abc | tr a-z A-Z')
             require('nli-terminal' in out and '40 120' in out and 'ABC' in out,'Real shell UID, resize, cd or pipeline failed')
+            parser_path='/var/lib/nli-controller/parser-assets/bundle.json' if target=='@controller' else '/var/lib/nli/parser-assets/bundle.json'
+            out=t.command('cat '+parser_path+" >/dev/null; printf '\\nPARSER_READ_RC_%s\\n' \"$?\"; test ! -w "+parser_path+" && printf '\\nPARSER_READONLY\\n'")
+            require('\nPARSER_READ_RC_0\r\n' in out and '\nPARSER_READONLY\r\n' in out,'Published parser bundle unreadable or writable by operator')
+            if target==client and sample:
+                pipeline_proof=prove_watched_pipeline(t,a.client,sample)
+                checks.append('web_terminal_watched_smtp_exact_flat_normalised_json_once')
             name='r10-terminal-'+secrets.token_hex(6)+'.log'
             out=t.command("printf 'first\\n' >"+name+'; cat '+name)
             require('\r\nfirst\r\n' in out,'Input create/read failed')
@@ -200,6 +271,7 @@ def main():
         t.http.call('POST',t.path+'/input',{'sequence':1,'data':'echo forbidden-replay\n'},409)
         sessions.remove(t);checks.append('broker_restart_closes_old_generation_without_replay')
         result={'release':'v23.0.0-10','checks':checks,'status':'passed','production_nodes_modified':False,'ssh_used':False,'transcripts_persisted':False,'tls':'verified fixture CA and localhost hostname'}
+        if pipeline_proof is not None:result['watched_parser_pipeline']=pipeline_proof
         a.result.parent.mkdir(parents=True,exist_ok=True);a.result.write_text(json.dumps(result,indent=2)+'\n')
         print(json.dumps(result,indent=2))
     finally:

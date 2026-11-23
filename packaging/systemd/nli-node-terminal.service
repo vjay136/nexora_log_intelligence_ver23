@@ -14,7 +14,9 @@ Restart=on-failure
 RestartSec=5
 UMask=0077
 ProtectSystem=strict
-ReadWritePaths=-/var/log/nli/input -/var/lib/nli-terminal /run/nli-terminal
+# Parent mounts preserve visibility when a parser generation is atomically swapped.
+# RPC grants only fixed parser/output read ACLs; operator shells remain unprivileged.
+ReadWritePaths=-/etc/nli -/var/lib/nli -/var/lib/nli-controller -/var/log/nli -/var/lib/nli-terminal /run/nli-terminal
 ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
