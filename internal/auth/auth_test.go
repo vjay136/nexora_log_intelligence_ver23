@@ -128,3 +128,29 @@ func TestResetPasswordPreservesUsersAndReactivatesAccount(t *testing.T) {
 		t.Fatal("short recovery password was accepted")
 	}
 }
+
+func TestDistinctLoginsHaveDistinctTerminalOwnershipTokens(t *testing.T) {
+	s, err := auth.NewStoreWithBootstrap(tmpPath(t), "Test-admin-password-123!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, err := s.Authenticate("admin", "Test-admin-password-123!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := s.Authenticate("admin", "Test-admin-password-123!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("independent logins share an ownership token")
+	}
+	for _, token := range []string{first, second} {
+		if _, _, err := s.ValidateToken(token); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !s.VerifyCurrentPassword("admin", "Test-admin-password-123!") || s.VerifyCurrentPassword("admin", "wrong") {
+		t.Fatal("step-up credential verification failed")
+	}
+}

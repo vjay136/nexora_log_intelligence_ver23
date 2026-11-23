@@ -1,0 +1,28 @@
+[Unit]
+Description=NLI optional local node terminal broker
+After=local-fs.target
+ConditionPathExists=/etc/nli/node-terminal.json
+
+[Service]
+Type=simple
+User=root
+Group=root
+RuntimeDirectory=nli-terminal
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/nli-node-terminal --config /etc/nli/node-terminal.json --socket /run/nli-terminal/terminal.sock
+Restart=on-failure
+RestartSec=5
+UMask=0077
+ProtectSystem=strict
+ReadWritePaths=-/var/log/nli/input -/var/lib/nli-terminal /run/nli-terminal
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+# PTYs, uid switching and explicitly allowlisted operator sudo are required.
+# Host policy is root-owned mode 0600. This service never listens on TCP.
+
+[Install]
+WantedBy=multi-user.target

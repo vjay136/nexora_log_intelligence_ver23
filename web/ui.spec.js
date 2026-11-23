@@ -5,7 +5,7 @@ import { contrast as designContrast } from './design-engine.js';
 // These browser regressions verify frontend behavior independently of network
 // and database availability. e2e.spec.js separately exercises a real controller.
 const origin = 'http://127.0.0.1:4176';
-const tabs = ['sample-history', 'header-templates', 'kv-templates', 'operations', 'monitoring', 'streams', 'sync-fabric', 'nhle-monitor', 'napi-monitor', 'nal-monitor', 'assurance', 'quarantine-wizard', 'upes', 'parser-workspace', 'nupire', 'api-monitor', 'latency', 'field-integrity', 'fleet', 'parser-sync', 'clients', 'controller', 'controller-gateway', 'ai-privacy', 'parsers', 'reference-ai', 'building-blocks', 'field-mapping', 'migration', 'input-paths', 'selective-input', 'output-fields', 'kv', 'static', 'projection', 'studio', 'regex', 'knownkeys', 'semantic', 'engine-network', 'engine-url', 'engine-email', 'engine-subject', 'outputs', 'metadata', 'unknowns', 'drift', 'performance', 'rollouts', 'backup-restore', 'artifacts', 'security', 'system', 'communications', 'notifications', 'ai', 'ai-guidance'];
+const tabs = ['sample-history', 'header-templates', 'kv-templates', 'operations', 'monitoring', 'streams', 'node-terminal', 'sync-fabric', 'nhle-monitor', 'napi-monitor', 'nal-monitor', 'assurance', 'quarantine-wizard', 'upes', 'parser-workspace', 'nupire', 'api-monitor', 'latency', 'field-integrity', 'fleet', 'parser-sync', 'clients', 'controller', 'controller-gateway', 'ai-privacy', 'parsers', 'reference-ai', 'building-blocks', 'field-mapping', 'migration', 'input-paths', 'selective-input', 'output-fields', 'kv', 'static', 'projection', 'studio', 'regex', 'knownkeys', 'semantic', 'engine-network', 'engine-url', 'engine-email', 'engine-subject', 'outputs', 'metadata', 'unknowns', 'drift', 'performance', 'rollouts', 'backup-restore', 'artifacts', 'security', 'system', 'communications', 'notifications', 'ai', 'ai-guidance'];
 const assets = Object.fromEntries(await Promise.all(['index.html', 'app.js', 'styles.css', 'design-engine.js', 'design-engine.css', 'nli-mark.svg', 'nexora-logo-v21.png', 'login-banner-v22.jpg', 'nexora-poster-v21.png'].map(async name => [name, await readFile(new URL(name, import.meta.url))])));
 
 test('R9 selective input keeps the exact EHLO raw record before explicit parsing and saves only a reviewed draft',async({page})=>{
@@ -1152,6 +1152,7 @@ async function mockController(page, { role = 'admin', permissions = ['assurance:
     if (path === '/api/v1/parser-sync/runtime') return fulfill({controller:{status:'unavailable',parsers:[]},clients:[]});
     if (path === '/api/v1/bundle-backups') return fulfill({backups:[],limit:25,offset:0,has_more:false});
     if (path === '/api/v1/bundle-restores') return fulfill({restores:[],limit:25,offset:0,has_more:false});
+    if (path === '/api/v1/terminal/nodes') return fulfill({items:[],next_cursor:'',privilege_mode:'dedicated operator',limits:{}});
     if (path === '/api/v1/ai/guidance') return fulfill({catalog:[],revisions:[],evaluations:[]});
     if (path === '/api/v1/ai/capabilities') return fulfill({available:true,status:'configured_not_connection_verified',enabled_profiles:1,credential_ready_profiles:1});
     if (path === '/api/v1/auth/workspace-favorites') {
@@ -3795,4 +3796,72 @@ test('R8 subsystem selections survive canonical rerenders refreshes and independ
     await expect(page.locator(`[data-subsystem-panel=${key}]`)).toBeVisible();
     await expect(page.locator('[data-subsystem-tab][aria-selected=true]')).toHaveCount(1);
   }
+});
+
+
+// The R10 mock never opens a host shell; real PTY qualification is separate.
+async function mockTerminal(page,{output=[],failInput=false,gate=null}={}){
+ const calls=[],inputs=[],closed=[],reads=[];let offset=0,index=0;
+ const session={id:'terminal-test',node_id:'node-0',status:'running',expires_at:'2099-01-01T00:00:00Z',idle_timeout_seconds:300};
+ await page.route('**/api/v1/terminal/**',async route=>{
+  const r=route.request(),url=new URL(r.url()),path=url.pathname,body=r.postData()?r.postDataJSON():null;calls.push({method:r.method(),path,body});
+  if(path.endsWith('/nodes')){const q=url.searchParams.get('q'),start=Number(url.searchParams.get('cursor'))||0,items=q?[{id:'node-999',display_name:'IMAP 999',groups:['IMAP'],status:'online',terminal_enabled:true}]:Array.from({length:Math.min(100,1005-start)},(_,i)=>({id:`node-${start+i}`,display_name:`Demo ${start+i}`,role:i?'client':'controller',groups:['SMTP'],status:i===1?'offline':'online',terminal_enabled:i!==2}));return route.fulfill({json:{items,total:q?1:1005,next_cursor:!q&&start+100<1005?String(start+100):'',privilege_mode:'dedicated operator; canonical NLI input write; limited NLI sudo'}});}
+  if(path==='/api/v1/terminal/sessions'){if(gate)await gate;return route.fulfill({status:201,json:{session}});}
+  if(path.endsWith('/input')){inputs.push(body);return route.fulfill({status:failInput?503:200,json:failInput?{error:'input interrupted'}:{accepted:true}});}
+  if(path.endsWith('/close')){closed.push(path);return route.fulfill({json:{status:'closed'}});}
+  if(path.endsWith('/resize'))return route.fulfill({json:{accepted:true}});
+  reads.push(Number(url.searchParams.get('after')));const bytes=index<output.length?Buffer.from(output[index++]):Buffer.alloc(0),start=offset;offset+=bytes.length;
+  return route.fulfill({json:{session,data_b64:bytes.toString('base64'),start,next_sequence:offset,truncated:false}});
+ });return {calls,inputs,closed,reads};
+}
+async function prepareTerminal(page){
+ await page.getByTestId('nav-node-terminal').click();await page.getByRole('radio',{name:'Select Demo 0',exact:true}).check();await page.getByLabel('NLI login password',{exact:true}).fill('terminal-test-password');await page.getByLabel('Session reason',{exact:true}).fill('Manager demonstration');
+}
+async function connectTerminal(page){await prepareTerminal(page);await page.getByRole('button',{name:'Connect terminal',exact:true}).click();await expect(page.getByLabel('Terminal keyboard input',{exact:true})).toBeEnabled();}
+
+test('R10 terminal pages a 1005-node inventory without auto opening and disables offline or opted-out hosts',async({page})=>{
+ await mockController(page);const t=await mockTerminal(page);await login(page);await page.getByTestId('nav-node-terminal').click();await expect(page.locator('#terminal-node-list input')).toHaveCount(100);await expect(page.locator('#terminal-node-count')).toContainText('1,005');
+ await expect(page.getByRole('radio',{name:'Select Demo 1',exact:true})).toBeDisabled();await expect(page.getByRole('radio',{name:'Select Demo 2',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'Connect terminal',exact:true})).toBeDisabled();
+ await page.getByRole('button',{name:'Next nodes',exact:true}).click();await expect(page.getByRole('radio',{name:'Select Demo 100',exact:true})).toBeVisible();await page.getByRole('button',{name:'Previous nodes',exact:true}).click();await expect(page.getByRole('radio',{name:'Select Demo 0',exact:true})).toBeVisible();
+ await page.locator('#terminal-node-search').fill('IMAP');await expect(page.getByRole('radio',{name:'Select IMAP 999',exact:true})).toBeVisible();expect(t.calls.filter(c=>c.method==='POST')).toEqual([]);await expect(page.locator('[data-workspace-ai-form], [data-ai-mapping-host]')).toHaveCount(0);
+});
+test('R10 terminal reauthenticates and safely decodes split UTF8 and ANSI without persisting output',async({page})=>{
+ await mockController(page);const utf=Buffer.from('café'),t=await mockTerminal(page,{output:['wrong\r\x1b[2Kcorrect\r\n<img src=x onerror=window.injected=true>\r\n\x1b]52;c;DO-NOT-COPY\x07',utf.subarray(0,4),utf.subarray(4)]});await login(page);await connectTerminal(page);
+ await expect(page.locator('#terminal-screen')).toContainText('café');await expect(page.locator('#terminal-screen')).toContainText('correct');await expect(page.locator('#terminal-screen')).not.toContainText('wrong');await expect(page.locator('#terminal-screen')).not.toContainText('DO-NOT-COPY');await expect(page.locator('#terminal-screen img')).toHaveCount(0);expect(await page.evaluate(()=>window.injected)).toBeUndefined();
+ await expect(page.getByLabel('NLI login password',{exact:true})).toHaveValue('');await expect(page.getByRole('button',{name:'Connect terminal',exact:true})).toBeDisabled();const opens=t.calls.filter(c=>c.path==='/api/v1/terminal/sessions');expect(opens).toHaveLength(1);expect(opens[0].body).toMatchObject({node_id:'node-0',password:'terminal-test-password',reason:'Manager demonstration'});expect(t.reads[0]).toBe(0);
+ expect(await page.evaluate(()=>JSON.stringify([{...localStorage},{...sessionStorage}]))).not.toContain('terminal-test-password');await page.getByTestId('nav-operations').click();await expect.poll(()=>t.closed.length).toBe(1);
+});
+test('R10 terminal serializes keyboard input and prepares examples without automatic execution',async({page})=>{
+ await page.setViewportSize({width:1400,height:1000});await mockController(page);const t=await mockTerminal(page,{output:['operator$ ']});await login(page);await connectTerminal(page);await page.getByRole('button',{name:'Show working directory',exact:true}).click();expect(t.inputs).toHaveLength(0);await page.getByRole('button',{name:'Paste example · no Enter',exact:true}).click();await expect.poll(()=>t.inputs.map(c=>c.data).join('')).toBe('pwd');
+ const keyboard=page.getByLabel('Terminal keyboard input',{exact:true});await keyboard.press('Enter');await keyboard.press('ArrowUp');await keyboard.press('Control+c');await expect.poll(()=>t.inputs.map(c=>c.data).join('')).toBe('pwd\r\x1b[A\x03');expect(t.inputs.map(c=>c.sequence)).toEqual(t.inputs.map((_,i)=>i+1));await page.setViewportSize({width:900,height:700});await expect.poll(()=>t.calls.filter(c=>c.path.endsWith('/resize')).length).toBeGreaterThan(0);
+ await page.getByRole('button',{name:'Clear visible output',exact:true}).click();await expect(page.locator('#terminal-screen')).toHaveText('');await page.getByRole('button',{name:'Disconnect terminal',exact:true}).click();await expect(keyboard).toBeDisabled();await expect.poll(()=>t.closed.length).toBe(1);
+});
+test('R10 terminal never retries uncertain stdin',async({page})=>{
+ await mockController(page);const t=await mockTerminal(page,{failInput:true});await login(page);await connectTerminal(page);await page.getByLabel('Terminal keyboard input',{exact:true}).press('Enter');await expect(page.locator('#terminal-status')).toContainText('will not be retried');await expect(page.getByLabel('Terminal keyboard input',{exact:true})).toBeDisabled();await page.waitForTimeout(1200);expect(t.inputs).toHaveLength(1);
+});
+test('R10 terminal closes late opens after navigation',async({page})=>{
+ await mockController(page);let release;const gate=new Promise(resolve=>release=resolve),t=await mockTerminal(page,{gate});await login(page);await prepareTerminal(page);await page.getByRole('button',{name:'Connect terminal',exact:true}).click();await expect.poll(()=>t.calls.filter(c=>c.path==='/api/v1/terminal/sessions').length).toBe(1);await page.getByTestId('nav-operations').click();release();await expect.poll(()=>t.closed.length).toBe(1);expect(t.reads).toHaveLength(0);
+});
+test('R10 terminal denies non-admin access before node discovery',async({page})=>{
+ await mockController(page,{role:'viewer',permissions:['terminal:access','fleet:read']});const t=await mockTerminal(page);await login(page);await page.getByTestId('nav-node-terminal').click();await expect(page.locator('#page')).toContainText('Administrator access is required');expect(t.calls).toEqual([]);await expect(page.locator('#terminal-connect-form')).toHaveCount(0);
+});
+test('R10 terminal bounds stress output and disconnects on signout',async({page})=>{
+ await mockController(page);const t=await mockTerminal(page,{output:['shell$ \x1b[?1049h\x1b[2J\x1b[Hvi screen\x1b[?1049l\r\n',Array.from({length:3000},(_,i)=>`load-${i}\r\n`).join('')]});await login(page);await connectTerminal(page);await expect(page.locator('#terminal-screen')).toContainText('load-2999');await expect(page.locator('#terminal-screen')).not.toContainText('vi screen');await expect(page.locator('#terminal-output-notice')).toContainText('discarded');expect((await page.locator('#terminal-screen').textContent()).length).toBeLessThanOrEqual(262144);await page.getByRole('button',{name:'Sign out',exact:true}).click();await expect.poll(()=>t.closed.length).toBe(1);await expect(page.locator('#terminal-screen')).toHaveText('');
+});
+
+
+test('R10 terminal handles editor cursor scroll controls and ignores hostile control parameters',async({page})=>{
+ await mockController(page);let output='shell$ ',pending=Buffer.from(output),offset=0;const t=await mockTerminal(page);
+ // Override reads only; explicit writes and close still use the common mock.
+ await page.route('**/api/v1/terminal/sessions/terminal-test?*',route=>{const bytes=pending;pending=Buffer.alloc(0);const start=offset;offset+=bytes.length;return route.fulfill({json:{session:{id:'terminal-test',node_id:'node-0',status:'running'},data_b64:bytes.toString('base64'),start,next_sequence:offset}});});
+ await login(page);await connectTerminal(page);await expect(page.locator('#terminal-screen')).toContainText('shell$');
+ pending=Buffer.from('\x1b[?1049h\x1b[2J\x1b[Hfirst line\x1b[2;1Hsecond line\x1b[1;3r\x1b[1;1H\x1b[Linserted\x1b[2;1H\x1b[M\x1b[1;1H\x1b[999999999999999D\x1b[-999999999999Aedited');
+ await expect(page.locator('#terminal-screen')).toContainText('edited');await expect(page.locator('.node-terminal-cursor')).toHaveCount(1);expect((await page.locator('#terminal-screen').textContent()).length).toBeLessThan(10000);
+ pending=Buffer.from('\x1b[?1049l');await expect(page.locator('#terminal-screen')).toHaveText('shell$');await expect(page.locator('.node-terminal-cursor')).toHaveCount(0);
+});
+
+test('R10 terminal rejects oversized paste without partially delivering it and supports bracketed paste',async({page})=>{
+ await mockController(page);const t=await mockTerminal(page,{output:['\x1b[?2004hoperator$ ']});await login(page);await connectTerminal(page);
+ await page.locator('#terminal-keyboard').evaluate(node=>{const transfer=new DataTransfer();transfer.setData('text/plain','x'.repeat(9000));node.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,clipboardData:transfer}));});await expect(page.locator('#terminal-status')).toContainText('at most 8 KiB');expect(t.inputs).toHaveLength(0);
+ await page.locator('#terminal-keyboard').evaluate(node=>{const transfer=new DataTransfer();transfer.setData('text/plain','status\nnext');node.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,clipboardData:transfer}));});await expect.poll(()=>t.inputs.map(item=>item.data).join('')).toBe('\x1b[200~status\nnext\x1b[201~');
 });

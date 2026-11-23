@@ -25,7 +25,7 @@ func readAsset(t *testing.T, name string) string {
 func TestRequiredTabsAndAPIBackings(t *testing.T) {
 	app := readAsset(t, "app.js")
 	for _, marker := range []string{
-		"Command Center", "Assurance Lab", "Fleet Operations", "Parser Catalog & Priority", "Migration Center",
+		"Node Terminal", "/terminal/nodes", "/terminal/sessions", "terminal-connect-form", "terminal:access", "Command Center", "Assurance Lab", "Fleet Operations", "Parser Catalog & Priority", "Migration Center",
 		"KV Delimiter Config", "Static Positional Patterns", "Field Capture & Projection", "Regex, Templates & Studio",
 		"Live Metadata", "Rollouts", "Signed Artifacts & Upgrades", "Users, RBAC & Audit", "System Health & Storage",
 		"/overview", "/assurance/run", "/assurance/corpus", "/assurance/cases", "/fleet/sync", "/parser-packs",

@@ -81,11 +81,13 @@ type InputRuntimeFile struct {
 }
 
 type HeartbeatResponse struct {
+ TerminalSupported bool `json:"terminal_supported,omitempty"`
 	Status                   string `json:"status"`
 	DeliveryMetricsSupported bool   `json:"delivery_metrics_supported,omitempty"`
 }
 
 type HeartbeatRequest struct {
+ Terminal *TerminalStatus `json:"terminal,omitempty"`
 	InputInventory        *InputRuntimeInventory          `json:"input_inventory,omitempty"`
 	AgentStatus           string                          `json:"agent_status,omitempty"`
 	RuntimeInventory      *ParserRuntimeInventory         `json:"runtime_inventory,omitempty"`

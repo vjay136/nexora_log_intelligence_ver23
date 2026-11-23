@@ -40,7 +40,8 @@ install -m 0755 "$ROOT/scripts/uninstall-controller-ver23.sh" "$OUTPUT_DIR/unins
 install -m 0755 "$ROOT/scripts/uninstall-client-ver23.sh" "$OUTPUT_DIR/uninstall-client-ver23.sh"
 install -m 0644 "$ROOT/docs/INSTALLATION_AND_CONFIGURATION.md" "$OUTPUT_DIR/INSTALLATION_AND_CONFIGURATION.md"
 install -m 0644 "$ROOT/docs/WEBAPP_OPERATOR_AND_PARSER_GUIDE.md" "$OUTPUT_DIR/WEBAPP_OPERATOR_AND_PARSER_GUIDE.md"
-install -m 0644 "$ROOT/docs/V23_R9_RELEASE_NOTES.md" "$ROOT/docs/V22_19_1_RELEASE_NOTES.md" "$ROOT/docs/V22_RELEASE_NOTES.md" "$ROOT/docs/V22_FLEET_ENROLLMENT.md" "$OUTPUT_DIR/"
+install -m 0755 "$ROOT/scripts/enable-node-terminal-ver23.sh" "$OUTPUT_DIR/enable-node-terminal-ver23.sh"
+install -m 0644 "$ROOT/docs/V23_R10_RELEASE_NOTES.md" "$ROOT/docs/V22_19_1_RELEASE_NOTES.md" "$ROOT/docs/V22_RELEASE_NOTES.md" "$ROOT/docs/V22_FLEET_ENROLLMENT.md" "$OUTPUT_DIR/"
 install -m 0644 "$ROOT/docs/VERCEL_DEPLOYMENT.md" "$OUTPUT_DIR/VERCEL_DEPLOYMENT.md"
 install -m 0644 "$ROOT/docs/CLOUDFLARE_PAGES_DEPLOYMENT.md" "$OUTPUT_DIR/CLOUDFLARE_PAGES_DEPLOYMENT.md"
 install -m 0644 "$ROOT/docs/PARSER_CATALOG.md" "$OUTPUT_DIR/PARSER_CATALOG.md"
@@ -65,7 +66,7 @@ NLI_RELEASE=$NLI_RELEASE
 NLI_ARCH=$NLI_ARCH
 SOURCE_REVISION=$SOURCE_REVISION
 EOF
-normalize_lf "$OUTPUT_DIR/V23_R9_RELEASE_NOTES.md" "$OUTPUT_DIR/install-controller-ver23.sh" "$OUTPUT_DIR/install-client-ver23.sh" \
+normalize_lf "$OUTPUT_DIR/enable-node-terminal-ver23.sh" "$OUTPUT_DIR/V23_R10_RELEASE_NOTES.md" "$OUTPUT_DIR/install-controller-ver23.sh" "$OUTPUT_DIR/install-client-ver23.sh" \
   "$OUTPUT_DIR/uninstall-controller-ver23.sh" "$OUTPUT_DIR/uninstall-client-ver23.sh" \
   "$OUTPUT_DIR/install-controller-aws-ver23.sh" "$OUTPUT_DIR/install-client-aws-ver23.sh" \
   "$OUTPUT_DIR/install-controller-aws-cloudflare-ver23.sh" \
@@ -82,7 +83,7 @@ normalize_lf "$OUTPUT_DIR/V23_R9_RELEASE_NOTES.md" "$OUTPUT_DIR/install-controll
   "$OUTPUT_DIR/V21_R5_RELEASE_NOTES.md" "$OUTPUT_DIR/V21_R5_TEST_RESULTS.md" "$OUTPUT_DIR/V21_R6_RELEASE_NOTES.md" "$OUTPUT_DIR/V21_R6_TEST_RESULTS.md" "$OUTPUT_DIR/V21_R7_RELEASE_NOTES.md" "$OUTPUT_DIR/V21_R7_TEST_RESULTS.md" "$OUTPUT_DIR/V21_R7_MAPPING_DESIGN.md" "$OUTPUT_DIR/V21_R7_FIELD_MAPPING_GUIDE.md" "$OUTPUT_DIR/V21_R8_RELEASE_NOTES.md" "$OUTPUT_DIR/V21_R8_TEST_RESULTS.md" "$OUTPUT_DIR/V21_R8_DESIGN_ENGINE_DESIGN.md" "$OUTPUT_DIR/V21_R8_DESIGN_ENGINE_GUIDE.md" "$OUTPUT_DIR/V21_R8_OUTPUT_ACCOUNTING_GUIDE.md" "$OUTPUT_DIR/V21_R8_AI_PROVIDER_GUIDE.md" "$OUTPUT_DIR/V21_R9_RELEASE_NOTES.md" "$OUTPUT_DIR/V21_R9_TEST_RESULTS.md" "$OUTPUT_DIR/V21_R9_FIELD_MAPPING_GUIDE.md" "$OUTPUT_DIR/V21_R10_RELEASE_NOTES.md" "$OUTPUT_DIR/V21_R10_TEST_RESULTS.md" "$OUTPUT_DIR/V21_R10_MANAGER_DEMO.md" "$OUTPUT_DIR/VER21_IMPLEMENTATION_PLAN.md" "$OUTPUT_DIR/nli-output-audit.py" \
   "$OUTPUT_DIR/RELEASE_ID"
 
-for binary in nli nli-agent nli-client-control nli-bench nli-controller-agent; do
+for binary in nli nli-agent nli-client-control nli-bench nli-controller-agent nli-node-terminal; do
   [[ -x "$BIN_ROOT/bin/$binary" ]] || fail "missing binary: $binary"
   file "$BIN_ROOT/bin/$binary" | grep -Eq 'ELF 64-bit.*x86-64.*statically linked' || fail "invalid binary: $binary"
 done
@@ -94,11 +95,13 @@ mkdir -p "$TOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} "$STAGE"
 
 CLIENT="$STAGE/nli-client-$NLI_VERSION"
 mkdir -p "$CLIENT"/{bin,sbin,configs/parsers,systemd}
-install -m 0755 "$BIN_ROOT/bin/nli" "$BIN_ROOT/bin/nli-agent" "$BIN_ROOT/bin/nli-client-control" "$BIN_ROOT/bin/nli-bench" "$CLIENT/bin/"
+install -m 0755 "$BIN_ROOT/bin/nli-node-terminal" "$BIN_ROOT/bin/nli" "$BIN_ROOT/bin/nli-agent" "$BIN_ROOT/bin/nli-client-control" "$BIN_ROOT/bin/nli-bench" "$CLIENT/bin/"
 install -m 0755 "$ROOT/scripts/setup-client-rocky.sh" "$CLIENT/sbin/nli-client-setup"
 install -m 0644 "$ROOT/configs/nli.json" "$ROOT/configs/nli.env" "$ROOT/configs/client-control.json" "$ROOT/configs/client-control.env" "$ROOT/configs/outputs.example.json" "$CLIENT/configs/"
 find "$ROOT/configs/parsers" -maxdepth 1 -type f -name '*.json' -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' parser; do install -m 0644 "$parser" "$CLIENT/configs/parsers/"; done
 install -m 0644 "$ROOT/packaging/systemd/nli-agent.service" "$ROOT/packaging/systemd/nli-client-control.service" "$ROOT/packaging/systemd/nli-client-bootstrap.service" "$CLIENT/systemd/"
+install -m 0644 "$ROOT/packaging/systemd/nli-node-terminal.service" "$CLIENT/systemd/"
+install -m 0755 "$ROOT/scripts/enable-node-terminal-ver23.sh" "$CLIENT/sbin/nli-node-terminal-setup"
 install -m 0644 "$ROOT/README.md" "$CLIENT/README.md"
 install -m 0644 "$ROOT/scripts/nli-output-audit.py" "$CLIENT/nli-output-audit.py"
 install -m 0644 "$ROOT/docs/PARSER_CATALOG.md" "$CLIENT/PARSER_CATALOG.md"
@@ -108,8 +111,8 @@ install -m 0644 "$ROOT"/metrics/* "$CLIENT/metrics/"
 while IFS= read -r -d '' text_file; do normalize_lf "$text_file"; done < <(
   find "$CLIENT/sbin" "$CLIENT/configs" "$CLIENT/systemd" -type f -print0
 )
-install -m 0644 "$ROOT/docs/V23_R9_RELEASE_NOTES.md" "$ROOT/docs/V22_19_1_RELEASE_NOTES.md" "$CLIENT/"
-normalize_lf "$CLIENT/V23_R9_RELEASE_NOTES.md"
+install -m 0644 "$ROOT/docs/V23_R10_RELEASE_NOTES.md" "$ROOT/docs/V22_19_1_RELEASE_NOTES.md" "$CLIENT/"
+normalize_lf "$CLIENT/V23_R10_RELEASE_NOTES.md"
 normalize_lf "$CLIENT/V22_19_1_RELEASE_NOTES.md"
 normalize_lf "$CLIENT/README.md"
 normalize_lf "$CLIENT/PARSER_CATALOG.md"
@@ -147,7 +150,7 @@ python3 "$ROOT/scripts/release/build-webapp.py" --root "$ROOT" --output "$OUTPUT
 
 CONTROLLER="$STAGE/nli-controller-agent-$NLI_VERSION"
 mkdir -p "$CONTROLLER"/{bin,sbin,configs,systemd,web,supabase}
-install -m 0755 "$BIN_ROOT/bin/nli-controller-agent" "$BIN_ROOT/bin/nli" "$CONTROLLER/bin/"
+install -m 0755 "$BIN_ROOT/bin/nli-node-terminal" "$BIN_ROOT/bin/nli-controller-agent" "$BIN_ROOT/bin/nli" "$CONTROLLER/bin/"
 install -m 0755 "$ROOT/scripts/setup-controller-rocky.sh" "$CONTROLLER/sbin/nli-controller-setup"
 install -m 0755 "$ROOT/scripts/setup-supabase-rocky.sh" "$CONTROLLER/sbin/nli-supabase-setup"
 install -m 0755 "$ROOT/scripts/reset-admin-rocky.sh" "$CONTROLLER/sbin/nli-admin-reset"
@@ -157,6 +160,8 @@ install -m 0644 "$ROOT/configs/controller.env" "$CONTROLLER/configs/controller.e
 install -m 0644 "$ROOT/configs/geoip.env" "$CONTROLLER/configs/geoip.env"
 install -m 0644 "$ROOT/packaging/systemd/nli-controller-agent.service" "$ROOT/packaging/systemd/nli-controller-bootstrap.service" "$ROOT/packaging/systemd/nli-geoip-update.service" "$ROOT/packaging/systemd/nli-geoip-update.timer" "$CONTROLLER/systemd/"
 cp -a "$WEB_ROOT/." "$CONTROLLER/web/"
+install -m 0644 "$ROOT/packaging/systemd/nli-node-terminal.service" "$CONTROLLER/systemd/"
+install -m 0755 "$ROOT/scripts/enable-node-terminal-ver23.sh" "$CONTROLLER/sbin/nli-node-terminal-setup"
 install -m 0644 "$ROOT/README.md" "$CONTROLLER/README.md"
 install -m 0644 "$ROOT/scripts/nli-output-audit.py" "$CONTROLLER/nli-output-audit.py"
 install -m 0644 "$ROOT/All_NLI_features.md" "$ROOT/docs/V21_R1_RELEASE_NOTES.md" "$ROOT/docs/V21_R1_TEST_RESULTS.md" "$ROOT/docs/V21_R2_RELEASE_NOTES.md" "$ROOT/docs/V21_R2_TEST_RESULTS.md" "$ROOT/docs/V21_R3_RELEASE_NOTES.md" "$ROOT/docs/V21_R3_TEST_RESULTS.md" "$ROOT/docs/V21_R4_RELEASE_NOTES.md" "$ROOT/docs/V21_R4_TEST_RESULTS.md" "$ROOT/docs/V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md" "$ROOT/docs/V21_R5_RELEASE_NOTES.md" "$ROOT/docs/V21_R5_TEST_RESULTS.md" "$ROOT/docs/V21_R6_RELEASE_NOTES.md" "$ROOT/docs/V21_R6_TEST_RESULTS.md" "$ROOT/docs/V21_R7_RELEASE_NOTES.md" "$ROOT/docs/V21_R7_TEST_RESULTS.md" "$ROOT/docs/V21_R7_MAPPING_DESIGN.md" "$ROOT/docs/V21_R7_FIELD_MAPPING_GUIDE.md" "$ROOT/docs/V21_R8_RELEASE_NOTES.md" "$ROOT/docs/V21_R8_TEST_RESULTS.md" "$ROOT/docs/V21_R8_DESIGN_ENGINE_DESIGN.md" "$ROOT/docs/V21_R8_DESIGN_ENGINE_GUIDE.md" "$ROOT/docs/V21_R8_OUTPUT_ACCOUNTING_GUIDE.md" "$ROOT/docs/V21_R8_AI_PROVIDER_GUIDE.md" "$ROOT/docs/V21_R9_RELEASE_NOTES.md" "$ROOT/docs/V21_R9_TEST_RESULTS.md" "$ROOT/docs/V21_R9_FIELD_MAPPING_GUIDE.md" "$ROOT/docs/V21_R10_RELEASE_NOTES.md" "$ROOT/docs/V21_R10_TEST_RESULTS.md" "$ROOT/docs/V21_R10_MANAGER_DEMO.md" "$ROOT/docs/VER21_IMPLEMENTATION_PLAN.md" "$CONTROLLER/"
@@ -165,8 +170,8 @@ install -m 0644 "$ROOT"/metrics/* "$CONTROLLER/metrics/"
 while IFS= read -r -d '' text_file; do normalize_lf "$text_file"; done < <(
   find "$CONTROLLER/sbin" "$CONTROLLER/configs" "$CONTROLLER/systemd" "$CONTROLLER/supabase" -type f -print0
 )
-install -m 0644 "$ROOT/docs/V23_R9_RELEASE_NOTES.md" "$ROOT/docs/V22_19_1_RELEASE_NOTES.md" "$CONTROLLER/"
-normalize_lf "$CONTROLLER/V23_R9_RELEASE_NOTES.md"
+install -m 0644 "$ROOT/docs/V23_R10_RELEASE_NOTES.md" "$ROOT/docs/V22_19_1_RELEASE_NOTES.md" "$CONTROLLER/"
+normalize_lf "$CONTROLLER/V23_R10_RELEASE_NOTES.md"
 normalize_lf "$CONTROLLER/V22_19_1_RELEASE_NOTES.md"
 normalize_lf "$CONTROLLER/README.md"
 normalize_lf "$CONTROLLER/All_NLI_features.md" "$CONTROLLER/V21_R1_RELEASE_NOTES.md" "$CONTROLLER/V21_R1_TEST_RESULTS.md" "$CONTROLLER/V21_R2_RELEASE_NOTES.md" "$CONTROLLER/V21_R2_TEST_RESULTS.md" "$CONTROLLER/V21_R3_RELEASE_NOTES.md" "$CONTROLLER/V21_R3_TEST_RESULTS.md" "$CONTROLLER/V21_R4_RELEASE_NOTES.md" "$CONTROLLER/V21_R4_TEST_RESULTS.md" "$CONTROLLER/V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md" "$CONTROLLER/V21_R5_RELEASE_NOTES.md" "$CONTROLLER/V21_R5_TEST_RESULTS.md" "$CONTROLLER/V21_R6_RELEASE_NOTES.md" "$CONTROLLER/V21_R6_TEST_RESULTS.md" "$CONTROLLER/V21_R7_RELEASE_NOTES.md" "$CONTROLLER/V21_R7_TEST_RESULTS.md" "$CONTROLLER/V21_R7_MAPPING_DESIGN.md" "$CONTROLLER/V21_R7_FIELD_MAPPING_GUIDE.md" "$CONTROLLER/V21_R8_RELEASE_NOTES.md" "$CONTROLLER/V21_R8_TEST_RESULTS.md" "$CONTROLLER/V21_R8_DESIGN_ENGINE_DESIGN.md" "$CONTROLLER/V21_R8_DESIGN_ENGINE_GUIDE.md" "$CONTROLLER/V21_R8_OUTPUT_ACCOUNTING_GUIDE.md" "$CONTROLLER/V21_R8_AI_PROVIDER_GUIDE.md" "$CONTROLLER/V21_R9_RELEASE_NOTES.md" "$CONTROLLER/V21_R9_TEST_RESULTS.md" "$CONTROLLER/V21_R9_FIELD_MAPPING_GUIDE.md" "$CONTROLLER/V21_R10_RELEASE_NOTES.md" "$CONTROLLER/V21_R10_TEST_RESULTS.md" "$CONTROLLER/V21_R10_MANAGER_DEMO.md" "$CONTROLLER/VER21_IMPLEMENTATION_PLAN.md" "$CONTROLLER/nli-output-audit.py"
@@ -217,7 +222,7 @@ rpm -qpl "$OUTPUT_DIR/nli_controller_agent_ver23.rpm" >"$OUTPUT_DIR/nli_controll
 rpm -qp --qf '[%{FILENAMES} %{FILEMODES:perms} %{FILEUSERNAME} %{FILEGROUPNAME}\n]' "$OUTPUT_DIR/nli_client_ver23.rpm" >"$OUTPUT_DIR/nli_client_ver23.permissions.txt"
 rpm -qp --qf '[%{FILENAMES} %{FILEMODES:perms} %{FILEUSERNAME} %{FILEGROUPNAME}\n]' "$OUTPUT_DIR/nli_controller_agent_ver23.rpm" >"$OUTPUT_DIR/nli_controller_agent_ver23.permissions.txt"
 
-for required in /usr/bin/nli /usr/bin/nli-agent /usr/bin/nli-client-control /usr/bin/nli-bench /usr/sbin/nli-client-setup /etc/nli/nli.json /etc/nli/parsers /usr/share/doc/nli-client/PARSER_CATALOG.md /usr/share/doc/nli-client/V21_R1_RELEASE_NOTES.md /usr/share/doc/nli-client/V21_R1_TEST_RESULTS.md /usr/share/doc/nli-client/V21_R2_RELEASE_NOTES.md /usr/share/doc/nli-client/V21_R2_TEST_RESULTS.md /usr/share/doc/nli-client/V21_R3_RELEASE_NOTES.md /usr/share/doc/nli-client/V21_R3_TEST_RESULTS.md /usr/share/nli/metrics/README.md /usr/share/nli/metrics/metric-catalog.json /usr/share/nli/metrics/prometheus-scrape.yml /usr/share/nli/metrics/grafana-dashboard.json /usr/lib/systemd/system/nli-agent.service /usr/lib/systemd/system/nli-client-control.service /usr/lib/systemd/system/nli-client-bootstrap.service /var/lib/nli /var/lib/nli-control-client /var/log/nli/input /var/log/nli/output; do
+for required in /usr/bin/nli-node-terminal /usr/lib/systemd/system/nli-node-terminal.service /usr/bin/nli /usr/bin/nli-agent /usr/bin/nli-client-control /usr/bin/nli-bench /usr/sbin/nli-client-setup /etc/nli/nli.json /etc/nli/parsers /usr/share/doc/nli-client/PARSER_CATALOG.md /usr/share/doc/nli-client/V21_R1_RELEASE_NOTES.md /usr/share/doc/nli-client/V21_R1_TEST_RESULTS.md /usr/share/doc/nli-client/V21_R2_RELEASE_NOTES.md /usr/share/doc/nli-client/V21_R2_TEST_RESULTS.md /usr/share/doc/nli-client/V21_R3_RELEASE_NOTES.md /usr/share/doc/nli-client/V21_R3_TEST_RESULTS.md /usr/share/nli/metrics/README.md /usr/share/nli/metrics/metric-catalog.json /usr/share/nli/metrics/prometheus-scrape.yml /usr/share/nli/metrics/grafana-dashboard.json /usr/lib/systemd/system/nli-agent.service /usr/lib/systemd/system/nli-client-control.service /usr/lib/systemd/system/nli-client-bootstrap.service /var/lib/nli /var/lib/nli-control-client /var/log/nli/input /var/log/nli/output; do
   grep -Fxq "$required" "$OUTPUT_DIR/nli_client_ver23.files.txt" || fail "client payload missing $required"
 done
 for document in V22_19_1_RELEASE_NOTES.md V21_R4_RELEASE_NOTES.md V21_R4_TEST_RESULTS.md V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md V21_R5_RELEASE_NOTES.md V21_R5_TEST_RESULTS.md V21_R6_RELEASE_NOTES.md V21_R6_TEST_RESULTS.md V21_R7_RELEASE_NOTES.md V21_R7_TEST_RESULTS.md V21_R7_MAPPING_DESIGN.md V21_R7_FIELD_MAPPING_GUIDE.md V21_R8_RELEASE_NOTES.md V21_R8_TEST_RESULTS.md V21_R8_DESIGN_ENGINE_DESIGN.md V21_R8_DESIGN_ENGINE_GUIDE.md V21_R8_OUTPUT_ACCOUNTING_GUIDE.md V21_R8_AI_PROVIDER_GUIDE.md V21_R9_RELEASE_NOTES.md V21_R9_TEST_RESULTS.md V21_R9_FIELD_MAPPING_GUIDE.md V21_R10_RELEASE_NOTES.md V21_R10_TEST_RESULTS.md V21_R10_MANAGER_DEMO.md nli-output-audit.py; do
@@ -234,7 +239,7 @@ for asset in "${profile_assets[@]}"; do
   [[ -n $rpm_hash && $source_hash == "$rpm_hash" ]] || fail "reviewed profile differs in RPM: $asset"
 done
 [[ $(grep -Ec '^/etc/nli/parsers/[^/]+\.parserpack\.json$' "$OUTPUT_DIR/nli_client_ver23.files.txt") -eq ${#profile_assets[@]} ]] || fail "unexpected reviewed profile count in client RPM"
-for required in /usr/bin/nli-controller-agent /usr/bin/nli /usr/sbin/nli-controller-setup /usr/sbin/nli-supabase-setup /usr/sbin/nli-admin-reset /usr/share/doc/nli-controller-agent/V21_R1_RELEASE_NOTES.md /usr/share/doc/nli-controller-agent/V21_R1_TEST_RESULTS.md /usr/share/doc/nli-controller-agent/V21_R2_RELEASE_NOTES.md /usr/share/doc/nli-controller-agent/V21_R2_TEST_RESULTS.md /usr/share/doc/nli-controller-agent/V21_R3_RELEASE_NOTES.md /usr/share/doc/nli-controller-agent/V21_R3_TEST_RESULTS.md /usr/share/nli/supabase/nli_schema.sql /usr/share/nli/metrics/README.md /usr/share/nli/metrics/metric-catalog.json /usr/share/nli/metrics/prometheus-scrape.yml /usr/share/nli/metrics/grafana-dashboard.json /etc/nli/controller.json /etc/nli/geoip.env /usr/lib/systemd/system/nli-controller-agent.service /usr/lib/systemd/system/nli-controller-bootstrap.service /usr/lib/systemd/system/nli-geoip-update.service /usr/lib/systemd/system/nli-geoip-update.timer /usr/share/nli/webview_ver21/index.html /usr/share/nli/webview_ver21/styles.css /usr/share/nli/webview_ver21/app.js /usr/share/nli/webview_ver21/design-engine.js /usr/share/nli/webview_ver21/design-engine.css /usr/share/nli/webview_ver21/nli-mark.svg /usr/share/nli/webview_ver21/nexora-logo-v21.png /usr/share/nli/webview_ver21/login-banner-v22.jpg /usr/share/nli/webview_ver21/nexora-poster-v21.png /usr/share/nli/webview_ver21/README.txt /usr/share/nli/webview_ver21/Open-NLI-WebView.ps1 /var/lib/nli-controller; do
+for required in /usr/bin/nli-node-terminal /usr/lib/systemd/system/nli-node-terminal.service /usr/bin/nli-controller-agent /usr/bin/nli /usr/sbin/nli-controller-setup /usr/sbin/nli-supabase-setup /usr/sbin/nli-admin-reset /usr/share/doc/nli-controller-agent/V21_R1_RELEASE_NOTES.md /usr/share/doc/nli-controller-agent/V21_R1_TEST_RESULTS.md /usr/share/doc/nli-controller-agent/V21_R2_RELEASE_NOTES.md /usr/share/doc/nli-controller-agent/V21_R2_TEST_RESULTS.md /usr/share/doc/nli-controller-agent/V21_R3_RELEASE_NOTES.md /usr/share/doc/nli-controller-agent/V21_R3_TEST_RESULTS.md /usr/share/nli/supabase/nli_schema.sql /usr/share/nli/metrics/README.md /usr/share/nli/metrics/metric-catalog.json /usr/share/nli/metrics/prometheus-scrape.yml /usr/share/nli/metrics/grafana-dashboard.json /etc/nli/controller.json /etc/nli/geoip.env /usr/lib/systemd/system/nli-controller-agent.service /usr/lib/systemd/system/nli-controller-bootstrap.service /usr/lib/systemd/system/nli-geoip-update.service /usr/lib/systemd/system/nli-geoip-update.timer /usr/share/nli/webview_ver21/index.html /usr/share/nli/webview_ver21/styles.css /usr/share/nli/webview_ver21/app.js /usr/share/nli/webview_ver21/design-engine.js /usr/share/nli/webview_ver21/design-engine.css /usr/share/nli/webview_ver21/nli-mark.svg /usr/share/nli/webview_ver21/nexora-logo-v21.png /usr/share/nli/webview_ver21/login-banner-v22.jpg /usr/share/nli/webview_ver21/nexora-poster-v21.png /usr/share/nli/webview_ver21/README.txt /usr/share/nli/webview_ver21/Open-NLI-WebView.ps1 /var/lib/nli-controller; do
   grep -Fxq "$required" "$OUTPUT_DIR/nli_controller_agent_ver23.files.txt" || fail "controller payload missing $required"
 done
 for document in V22_19_1_RELEASE_NOTES.md V21_R4_RELEASE_NOTES.md V21_R4_TEST_RESULTS.md V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md V21_R5_RELEASE_NOTES.md V21_R5_TEST_RESULTS.md V21_R6_RELEASE_NOTES.md V21_R6_TEST_RESULTS.md V21_R7_RELEASE_NOTES.md V21_R7_TEST_RESULTS.md V21_R7_MAPPING_DESIGN.md V21_R7_FIELD_MAPPING_GUIDE.md V21_R8_RELEASE_NOTES.md V21_R8_TEST_RESULTS.md V21_R8_DESIGN_ENGINE_DESIGN.md V21_R8_DESIGN_ENGINE_GUIDE.md V21_R8_OUTPUT_ACCOUNTING_GUIDE.md V21_R8_AI_PROVIDER_GUIDE.md V21_R9_RELEASE_NOTES.md V21_R9_TEST_RESULTS.md V21_R9_FIELD_MAPPING_GUIDE.md V21_R10_RELEASE_NOTES.md V21_R10_TEST_RESULTS.md V21_R10_MANAGER_DEMO.md nli-output-audit.py; do

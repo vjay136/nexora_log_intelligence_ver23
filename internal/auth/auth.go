@@ -243,6 +243,20 @@ func (s *Store) CreateUser(callerRole, username, email, role, password string) (
 	return u, s.save()
 }
 
+// VerifyCurrentPassword performs step-up authentication without issuing a token.
+func (s *Store) VerifyCurrentPassword(username, password string) bool {
+	s.mu.RLock()
+	u, ok := s.users[username]
+	if !ok || !u.Active {
+		s.mu.RUnlock()
+		return false
+	}
+	salt, hash := u.Salt, u.PasswordHash
+	s.mu.RUnlock()
+	valid, _ := verifyPassword(password, salt, hash)
+	return valid
+}
+
 // Authenticate verifies credentials and returns a JWT token.
 func (s *Store) Authenticate(username, password string) (string, *User, error) {
 	s.mu.RLock()
@@ -353,8 +367,15 @@ func (s *Store) DeactivateUser(callerRole, username string) error {
 
 // issueToken generates a minimal JWT (header.payload.sig using HMAC-SHA256).
 func (s *Store) issueToken(u *User) (string, error) {
+	// Distinct logins must remain distinct owners even within the same second.
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	payload, err := json.Marshal(map[string]interface{}{
+		"jti":  hex.EncodeToString(nonce[:]),
 		"sub":  u.Username,
 		"role": u.Role,
 		"uid":  u.ID,

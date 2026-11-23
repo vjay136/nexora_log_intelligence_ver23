@@ -1,0 +1,58 @@
+{
+  "release": "v23.0.0-10",
+  "baseline": "published R9,90a0eedeae22332e9020c2529ae356a50b1cd493",
+  "privilege": "host-opt-in dedicated nli-terminal account, input-directory write and exact NLI service controls; no unrestricted root",
+  "phases": [
+    {
+      "id": 1,
+      "task": "Baseline protection, threat boundaries and protocol contracts",
+      "status": "implemented_targeted_tests_passed"
+    },
+    {
+      "id": 2,
+      "task": "Bounded real Linux PTY, fixed-account broker and process cleanup",
+      "status": "implemented_targeted_tests_passed"
+    },
+    {
+      "id": 3,
+      "task": "Session-owned controller relay, node transport, step-up and audit metadata",
+      "status": "in_progress"
+    },
+    {
+      "id": 4,
+      "task": "Browser terminal,1000-node search, normal keyboard/vi and safe rendering",
+      "status": "implemented_targeted_tests_passed"
+    },
+    {
+      "id": 5,
+      "task": "Opt-in installation, limited sudo and no-follow input/read ACLs",
+      "status": "in_progress"
+    },
+    {
+      "id": 6,
+      "task": "Linux PTY, restart/offline, permissions, transport, UI and stress qualification",
+      "status": "in_progress"
+    },
+    {
+      "id": 7,
+      "task": "Two reproducible local builds, actual RPM tests, GitHub digest verification and release",
+      "status": "planned"
+    }
+  ],
+  "gates": [
+    "No session automatically opens from navigation",
+    "Root host opt-in required; browser cannot enable or broaden permissions",
+    "Admin+terminal permission+current password+same browser-session ownership",
+    "No SSH keys, terminal input/output or passwords stored in Supabase/audits/AI",
+    "Input writes restricted by Unix permissions to /var/log/nli/input",
+    "Exact NLI systemctl controls only; no privileged pager/shell escapes",
+    "Cross-node/session/generation checks and duplicate-input protection",
+    "Bounded output, capacity, CPU/memory/tasks, idle/lifetime/disconnect leases",
+    "Old nodes/controller versions fail closed without new API spam",
+    "All existing parser/sync/output features stay independent of terminal execution"
+  ],
+  "limits": [
+    "1000+ enrolled nodes are an inventory/selection requirement, not1000 automatic simultaneous shells",
+    "Default4 PTYs/node and bounded controller-wide capacity; finite tests do not prove every possible command/network state"
+  ]
+}

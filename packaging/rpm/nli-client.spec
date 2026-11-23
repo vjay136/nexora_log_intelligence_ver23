@@ -1,5 +1,5 @@
 %{!?nli_version:%global nli_version 23.0.0}
-%{!?nli_release:%global nli_release 7}
+%{!?nli_release:%global nli_release 10}
 Name:           nli-client
 Version:        %{nli_version}
 Release:        %{nli_release}%{?dist}
@@ -14,6 +14,7 @@ Requires(pre):  shadow-utils
 Requires(post): systemd
 Requires(preun): systemd
 Requires(postun): systemd
+Requires:       sudo acl util-linux vim-minimal
 Requires:       python3 curl openssl
 AutoReqProv:    no
 %global debug_package %{nil}
@@ -21,6 +22,7 @@ AutoReqProv:    no
 %global __os_install_post %{nil}
 
 %description
+Ver23 R10 (23.0.0-10) adds an optional local operator PTY broker; disabled by default.
 NLI v21 client containing the source-derived static parser agent, CLI, benchmark
 utility, and restricted fleet-control sidecar. The stable nli-client package name
 provides in-place upgrade compatibility without legacy distribution aliases.
@@ -38,7 +40,8 @@ install -d %{buildroot}%{_datadir}/nli/metrics
 install -d %{buildroot}/var/lib/nli/parsers/quarantine %{buildroot}/var/lib/nli/parser-assets %{buildroot}/var/lib/nli/spool
 install -d %{buildroot}/var/lib/nli-control-client %{buildroot}/var/cache/nli/packages
 install -d %{buildroot}/var/log/nli/input %{buildroot}/var/log/nli/output
-install -m 0755 bin/nli bin/nli-agent bin/nli-client-control bin/nli-bench %{buildroot}%{_bindir}/
+install -m 0755 bin/nli-node-terminal bin/nli bin/nli-agent bin/nli-client-control bin/nli-bench %{buildroot}%{_bindir}/
+install -m 0755 sbin/nli-node-terminal-setup %{buildroot}%{_sbindir}/nli-node-terminal-setup
 install -m 0755 sbin/nli-client-setup %{buildroot}%{_sbindir}/nli-client-setup
 install -m 0640 configs/nli.json configs/nli.env configs/client-control.json configs/client-control.env %{buildroot}%{_sysconfdir}/nli/
 echo "%%dir %%attr(0750,root,nli) %{_sysconfdir}/nli/parsers" > parser-files.list
@@ -49,10 +52,11 @@ for parser in configs/parsers/*.json; do
   echo "%%config(noreplace) %%attr(0644,root,nli) %{_sysconfdir}/nli/parsers/$base" >> parser-files.list
 done
 install -m 0644 configs/outputs.example.json %{buildroot}%{_docdir}/%{name}/outputs.example.json
+install -m 0644 systemd/nli-node-terminal.service %{buildroot}/usr/lib/systemd/system/
 install -m 0644 systemd/nli-agent.service systemd/nli-client-control.service systemd/nli-client-bootstrap.service %{buildroot}/usr/lib/systemd/system/
 install -m 0644 README.md %{buildroot}%{_docdir}/%{name}/README.md
 install -m 0644 PARSER_CATALOG.md %{buildroot}%{_docdir}/%{name}/PARSER_CATALOG.md
-install -m 0644 V23_R9_RELEASE_NOTES.md V22_19_1_RELEASE_NOTES.md All_NLI_features.md V21_R1_RELEASE_NOTES.md V21_R1_TEST_RESULTS.md V21_R2_RELEASE_NOTES.md V21_R2_TEST_RESULTS.md V21_R3_RELEASE_NOTES.md V21_R3_TEST_RESULTS.md V21_R4_RELEASE_NOTES.md V21_R4_TEST_RESULTS.md V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md V21_R5_RELEASE_NOTES.md V21_R5_TEST_RESULTS.md V21_R6_RELEASE_NOTES.md V21_R6_TEST_RESULTS.md V21_R7_RELEASE_NOTES.md V21_R7_TEST_RESULTS.md V21_R7_MAPPING_DESIGN.md V21_R7_FIELD_MAPPING_GUIDE.md V21_R8_RELEASE_NOTES.md V21_R8_TEST_RESULTS.md V21_R8_DESIGN_ENGINE_DESIGN.md V21_R8_DESIGN_ENGINE_GUIDE.md V21_R8_OUTPUT_ACCOUNTING_GUIDE.md V21_R8_AI_PROVIDER_GUIDE.md V21_R9_RELEASE_NOTES.md V21_R9_TEST_RESULTS.md V21_R9_FIELD_MAPPING_GUIDE.md V21_R10_RELEASE_NOTES.md V21_R10_TEST_RESULTS.md V21_R10_MANAGER_DEMO.md nli-output-audit.py VER21_IMPLEMENTATION_PLAN.md %{buildroot}%{_docdir}/%{name}/
+install -m 0644 V23_R10_RELEASE_NOTES.md V22_19_1_RELEASE_NOTES.md All_NLI_features.md V21_R1_RELEASE_NOTES.md V21_R1_TEST_RESULTS.md V21_R2_RELEASE_NOTES.md V21_R2_TEST_RESULTS.md V21_R3_RELEASE_NOTES.md V21_R3_TEST_RESULTS.md V21_R4_RELEASE_NOTES.md V21_R4_TEST_RESULTS.md V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md V21_R5_RELEASE_NOTES.md V21_R5_TEST_RESULTS.md V21_R6_RELEASE_NOTES.md V21_R6_TEST_RESULTS.md V21_R7_RELEASE_NOTES.md V21_R7_TEST_RESULTS.md V21_R7_MAPPING_DESIGN.md V21_R7_FIELD_MAPPING_GUIDE.md V21_R8_RELEASE_NOTES.md V21_R8_TEST_RESULTS.md V21_R8_DESIGN_ENGINE_DESIGN.md V21_R8_DESIGN_ENGINE_GUIDE.md V21_R8_OUTPUT_ACCOUNTING_GUIDE.md V21_R8_AI_PROVIDER_GUIDE.md V21_R9_RELEASE_NOTES.md V21_R9_TEST_RESULTS.md V21_R9_FIELD_MAPPING_GUIDE.md V21_R10_RELEASE_NOTES.md V21_R10_TEST_RESULTS.md V21_R10_MANAGER_DEMO.md nli-output-audit.py VER21_IMPLEMENTATION_PLAN.md %{buildroot}%{_docdir}/%{name}/
 install -m 0644 metrics/README.md metrics/metric-catalog.json metrics/prometheus-scrape.yml metrics/grafana-dashboard.json %{buildroot}%{_datadir}/nli/metrics/
 
 %pre
@@ -73,6 +77,14 @@ if [ "$1" -eq 1 ] && [ -s /etc/nli/bootstrap.env ]; then systemctl start nli-cli
 
 %preun
 if [ "$1" -eq 0 ]; then
+  # Shared broker survives removal of one role, never the final role.
+  if ! rpm -q nli-controller-agent >/dev/null 2>&1; then
+    if [ -x /usr/sbin/nli-node-terminal-setup ]; then
+      /usr/sbin/nli-node-terminal-setup --disable || exit 1
+    else
+      systemctl disable --now nli-node-terminal.service >/dev/null 2>&1 || :
+    fi
+  fi
   systemctl disable --now nli-client-bootstrap.service nli-client-control.service nli-agent.service >/dev/null 2>&1 || :
 fi
 
@@ -80,6 +92,9 @@ fi
 systemctl daemon-reload >/dev/null 2>&1 || :
 
 %files -f parser-files.list
+%attr(0755,root,root) %{_bindir}/nli-node-terminal
+%attr(0755,root,root) %{_sbindir}/nli-node-terminal-setup
+%attr(0644,root,root) /usr/lib/systemd/system/nli-node-terminal.service
 %attr(0755,root,root) %{_bindir}/nli
 %attr(0755,root,root) %{_bindir}/nli-agent
 %attr(0755,root,root) %{_bindir}/nli-client-control
@@ -147,7 +162,7 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 %doc %{_docdir}/%{name}/V21_R10_MANAGER_DEMO.md
 %doc %{_docdir}/%{name}/nli-output-audit.py
 %doc %{_docdir}/%{name}/VER21_IMPLEMENTATION_PLAN.md
-%doc %{_docdir}/%{name}/V23_R9_RELEASE_NOTES.md
+%doc %{_docdir}/%{name}/V23_R10_RELEASE_NOTES.md
 %doc %{_docdir}/%{name}/V22_19_1_RELEASE_NOTES.md
 
 %changelog

@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Run the real R10 installers against systemd, including legacy-controller coexistence."""
+import argparse,json,os,pathlib,subprocess,time,uuid
+from concurrent.futures import ThreadPoolExecutor
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument('--release',type=pathlib.Path,required=True)
+    p.add_argument('--legacy',type=pathlib.Path,required=True);p.add_argument('--result',type=pathlib.Path,required=True)
+    p.add_argument('--reciprocal-only',action='store_true')
+    p.add_argument('--image',default='nli-rocky-test:rocky9')
+    a=p.parse_args();root=pathlib.Path(__file__).resolve().parents[2]
+    suffix=uuid.uuid4().hex[:10];network='nli-r10-net-'+suffix;volume='nli-r10-boot-'+suffix
+    controller='nli-r10-controller-'+suffix;client='nli-r10-client-'+suffix;nodes=[]
+    def call(args,input=None,ok=True):
+        r=subprocess.run(['docker']+args,input=input,text=True,capture_output=True)
+        if ok and r.returncode:raise RuntimeError('Docker test failed: '+str(args[:4])+'\n'+r.stdout[-2200:]+'\n'+r.stderr[-2200:])
+        return r
+    def execute(node,command,env=None,input=None,ok=True):
+        args=['exec']+(['-i'] if input is not None else [])
+        for key,value in (env or {}).items():args+=['-e',key+'='+value]
+        return call(args+[node,'bash','-lc','set -euo pipefail\n'+command],input=input,ok=ok)
+    def wait_for_bundle(node,path):
+        # Enrollment and command polling are asynchronous. Test the persisted
+        # result within a bound rather than assuming installation is an ACK.
+        for _ in range(90):
+            result=execute(node,'test -s '+path+' && sha256sum '+path,ok=False)
+            if result.returncode==0:return result.stdout.split()[0]
+            time.sleep(1)
+        status=execute(node,'systemctl is-active nli-controller-agent.service nli-agent.service nli-client-control.service',ok=False).stdout
+        raise RuntimeError('Parser bundle was not persisted within 90 seconds: '+path+'; '+status)
+    def start(name,hostname):
+        args=['run','-d','--name',name,'--hostname',hostname,'--network',network,'--network-alias',hostname,
+          '--privileged','--cgroupns=host','--tmpfs','/run','--tmpfs','/run/lock',
+          '--mount','type=bind,src='+a.release.resolve().as_posix()+',dst=/artifacts,readonly',
+          '--mount','type=bind,src='+a.legacy.resolve().as_posix()+',dst=/legacy,readonly',
+          '--mount','type=bind,src='+root.as_posix()+',dst=/src,readonly',
+          '--mount','type=volume,src='+volume+',dst=/bootstrap',a.image]
+        call(args);nodes.append(name)
+        for _ in range(60):
+            state=execute(name,'systemctl is-system-running',ok=False).stdout.strip()
+            if state in ('running','degraded'):break
+            time.sleep(1)
+        else:raise RuntimeError('systemd not ready in '+name)
+        execute(name,'dnf -y install iproute >/tmp/prerequisites.log 2>&1; mkdir /root/release; tar -xzf /artifacts/nli-v23.0.0-10-x86_64.tar.gz -C /root/release')
+    release='/root/release/nli-v23.0.0-10-x86_64'
+    try:
+        call(['network','create',network]);call(['volume','create',volume])
+        if a.reciprocal_only:
+            print('Testing the reciprocal legacy-client / new-controller installation',flush=True)
+            start(controller,'controller')
+            execute(controller,'dnf -y install /legacy/nli_client_ver22.rpm >/tmp/legacy-client.log 2>&1; systemctl disable --now nli-agent.service nli-client-control.service nli-client-bootstrap.service; printf "# preserved legacy client profile\\n" >/etc/nli/bootstrap.env; printf "\\n# preserve-client-env\\n" >>/etc/nli/client-control.env; sha256sum /etc/nli/client-control.env >/root/client-before.sha256; printf preserve >/var/lib/nli/r6-state.marker')
+            execute(controller,"umask 077; printf '%s\\n' 'R6-Local-Only-Admin-2026!' >/root/admin-password")
+            env={'NLI_SETUP_STORAGE_PROVIDER':'local','NLI_SETUP_QUARANTINE_RAW_RETENTION':'false',
+              'NLI_SETUP_MODE':'2','NLI_SETUP_ENDPOINT':'controller','NLI_SETUP_ADMIN_PASSWORD_FILE':'/root/admin-password',
+              'NLI_SETUP_TLS_IDENTITIES':'controller.internal.test','NLI_CLIENT_BOOTSTRAP_FILE':'/bootstrap/nli-client-bootstrap.env'}
+            execute(controller,'cd '+release+'; bash install-controller-ver23.sh --mode 2',env=env)
+            execute(controller,"test \"$(rpm -q --qf '%{VERSION}-%{RELEASE}' nli-client)\" = 23.0.0-10.el9; test \"$(rpm -q --qf '%{VERSION}-%{RELEASE}' nli-controller-agent)\" = 23.0.0-10.el9; sha256sum -c /root/client-before.sha256; test \"$(cat /var/lib/nli/r6-state.marker)\" = preserve; systemctl is-active --quiet nli-controller-agent.service")
+            for unit in ['nli-agent.service','nli-client-control.service','nli-client-bootstrap.service']:
+                assert execute(controller,'systemctl is-active --quiet '+unit,ok=False).returncode!=0
+                assert execute(controller,'systemctl is-enabled --quiet '+unit,ok=False).returncode!=0
+            result={'release':'v23.0.0-10','test_image':a.image,'actual_controller_installer_with_legacy_22_19_client':'passed',
+              'disabled_client_counterpart_remains_disabled_and_inactive':True,'client_config_and_state_preserved':True,
+              'controller_service':'active','production_nodes_modified':False}
+            a.result.write_bytes((json.dumps(result,indent=2)+'\n').encode('utf-8'));print(json.dumps(result,indent=2),flush=True)
+            return
+        print('Starting isolated controller and client systemd nodes',flush=True)
+        start(controller,'controller');start(client,'client')
+        execute(controller,"umask 077; printf '%s\\n' 'R6-Local-Only-Admin-2026!' >/root/admin-password")
+        env={'NLI_SETUP_STORAGE_PROVIDER':'local','NLI_SETUP_QUARANTINE_RAW_RETENTION':'false',
+          'NLI_SETUP_MODE':'2','NLI_SETUP_ENDPOINT':'controller','NLI_SETUP_ADMIN_PASSWORD_FILE':'/root/admin-password',
+          'NLI_SETUP_TLS_IDENTITIES':'controller.internal.test','NLI_CLIENT_BOOTSTRAP_FILE':'/bootstrap/nli-client-bootstrap.env'}
+        print('Running the actual fresh controller installer',flush=True)
+        execute(controller,'cd '+release+'; bash install-controller-ver23.sh --mode 2',env=env)
+        assert execute(controller,'rpm -q nli-client',ok=False).returncode!=0,'fresh controller unexpectedly installed client role'
+        execute(controller,'systemctl is-active --quiet nli-controller-agent.service; test -s /bootstrap/nli-client-bootstrap.env')
+        print('Installing the actual legacy 22.19 controller on the client fixture',flush=True)
+        execute(client,'dnf -y install /legacy/nli_controller_agent_ver22.rpm >/tmp/legacy-install.log 2>&1')
+        execute(client,'systemctl disable --now nli-controller-agent.service nli-controller-bootstrap.service; printf "# preserved inactive legacy profile\\n" >/etc/nli/controller-bootstrap.env; printf "\\n# R6 preserve-controller-config\\n" >>/etc/nli/controller.env; sha256sum /etc/nli/controller.env >/root/controller-before.sha256; printf preserve >/var/lib/nli-controller/r6-state.marker')
+        execute(client,'cp /bootstrap/nli-client-bootstrap.env /root/nli-client-bootstrap.env; chmod 0600 /root/nli-client-bootstrap.env')
+        print('Running the exact client installer --bootstrap command with the legacy opposite role present',flush=True)
+        execute(client,'cd '+release+'; bash install-client-ver23.sh --bootstrap /root/nli-client-bootstrap.env',input='production\nrocky9\noperations\n')
+        execute(client,"test \"$(rpm -q --qf '%{VERSION}-%{RELEASE}' nli-client)\" = 23.0.0-10.el9; test \"$(rpm -q --qf '%{VERSION}-%{RELEASE}' nli-controller-agent)\" = 23.0.0-10.el9; sha256sum -c /root/controller-before.sha256; test \"$(cat /var/lib/nli-controller/r6-state.marker)\" = preserve; test ! -e /root/nli-client-bootstrap.env; systemctl is-active --quiet nli-agent.service; systemctl is-active --quiet nli-client-control.service")
+        assert execute(client,'systemctl is-active --quiet nli-controller-agent.service',ok=False).returncode!=0
+        assert execute(client,'systemctl is-enabled --quiet nli-controller-bootstrap.service',ok=False).returncode!=0
+        assert execute(client,'systemctl is-enabled --quiet nli-controller-agent.service',ok=False).returncode!=0
+        execute(client,"/usr/bin/nli parse --service smtp --multiline=false - </src/tests/release/smtp_input.txt >/root/parsed.json; python3 -c 'import json; assert json.load(open(\"/root/parsed.json\"))==json.load(open(\"/src/tests/release/smtp_expected.json\"))'")
+        version=execute(client,'/usr/bin/nli --version').stdout.strip();assert '23.0.0' in version
+        print('Restarting controller and client services and verifying their persisted bundles',flush=True)
+        before_controller=wait_for_bundle(controller,'/var/lib/nli-controller/parser-assets/bundle.json')
+        before_client=wait_for_bundle(client,'/var/lib/nli/parser-assets/bundle.json')
+        print('Testing live approved publication and versioned restore across both nodes',flush=True)
+        # The controller helper pauses only after independent fleet approval
+        # and exact acknowledgement. The shared volume lets this driver prove
+        # current installed-client CLI parity before the next generation.
+        checkpoint='/bootstrap/r10-policy-proof-'+suffix
+        client_policy_script = r"""import json, os, pathlib, subprocess
+root=pathlib.Path(CHECKPOINT)
+phase=json.loads((root/'phase.json').read_text())
+bundle=json.loads(pathlib.Path('/var/lib/nli/parser-assets/bundle.json').read_text())
+assert bundle['bundle_hash']==phase['bundle_hash'], 'client disk differs from acknowledged policy generation'
+env=dict(os.environ)
+env.pop('NLI_PARSER_ASSET_DIR',None)
+env.pop('NLI_PARSER_PACK_DIR',None)
+def cli(command, raw, explicit=False):
+    args=['/usr/bin/nli',command,'--service','auto','--multiline=false']
+    if explicit:args+=['--asset-dir','/var/lib/nli/parser-assets']
+    result=subprocess.run(args+['-'],input=raw+'\n',text=True,capture_output=True,env=env)
+    assert result.returncode==0, result.stderr
+    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+for explicit in (False,True):
+    assert cli('parse',phase['json_raw'],explicit)==[phase['json_expected']], 'final customer JSON policy differs from exact expected root object'
+    detections=cli('detect','\n'.join(phase['raw_rows']),explicit)
+    assert len(detections)==3, 'detect did not account for all three source records'
+    excluded=[row for row in detections if row.get('route')=='filtered_out']
+    assert len(excluded)==(2 if phase['input_enabled'] else 0), 'wrong intentional exclusion count'
+    assert all(row.get('parser_invoked') is False for row in excluded), 'excluded input reached parser'
+    parsed=cli('parse','\n'.join(phase['raw_rows']),explicit)
+    assert len(parsed)==(1 if phase['input_enabled'] else 3), 'parse emitted excluded records or lost admitted ones'
+proof={'phase':phase['phase'],'bundle_hash':phase['bundle_hash'],'passed':True,'default_asset_directory':True,'explicit_asset_directory':True,'actual_client_cli':'passed'}
+temporary=root/(phase['phase']+'.tmp')
+temporary.write_text(json.dumps(proof))
+temporary.replace(root/(phase['phase']+'.done.json'))
+print(json.dumps(proof))
+"""
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending=pool.submit(execute,controller,'python3 /src/tests/release/r9_live_sync_restore.py --checkpoint-dir '+checkpoint)
+            completed=set();deadline=time.monotonic()+1200
+            while not pending.done():
+                if time.monotonic()>deadline:raise RuntimeError('Packaged policy lifecycle exceeded 1200 seconds')
+                phase_read=execute(client,'test ! -e '+checkpoint+'/phase.json || cat '+checkpoint+'/phase.json',ok=False)
+                if phase_read.returncode==0 and phase_read.stdout.strip():
+                    phase=json.loads(phase_read.stdout)
+                    if phase['phase'] not in completed:
+                        script='CHECKPOINT='+repr(checkpoint)+'\n'+client_policy_script
+                        proof=execute(client,"python3 - <<'R10_POLICY_CLI'\n"+script+'\nR10_POLICY_CLI').stdout
+                        print('Packaged policy CLI '+proof.strip(),flush=True)
+                        completed.add(phase['phase'])
+                time.sleep(1)
+            live_sync=pending.result().stdout
+        assert completed=={'enabled','disabled','restored','revoked'}, 'policy checkpoint proof was skipped'
+
+        print(live_sync,flush=True)
+        napi_sample=json.loads(live_sync)['napi_smtp_parse_sample']
+        parsed=execute(client,'/usr/bin/nli parse --parser-pack-dir /var/lib/nli/parsers --service smtp --multiline=false -',input=napi_sample['raw']+'\n').stdout
+        assert json.loads(parsed)==napi_sample['desired'], 'Deployed NAPI client output differs from the exact 15-field expected JSON'
+        before_controller=wait_for_bundle(controller,'/var/lib/nli-controller/parser-assets/bundle.json')
+        before_client=wait_for_bundle(client,'/var/lib/nli/parser-assets/bundle.json')
+        execute(controller,'systemctl restart nli-controller-agent.service; systemctl is-active --quiet nli-controller-agent.service; systemctl is-enabled --quiet nli-controller-agent.service')
+        execute(client,'systemctl restart nli-client-control.service nli-agent.service; systemctl is-active --quiet nli-client-control.service nli-agent.service; systemctl is-enabled --quiet nli-client-control.service nli-agent.service')
+        assert execute(controller,'sha256sum /var/lib/nli-controller/parser-assets/bundle.json').stdout.split()[0]==before_controller
+        assert execute(client,'sha256sum /var/lib/nli/parser-assets/bundle.json').stdout.split()[0]==before_client
+        result={'release':'v23.0.0-10','test_image':a.image,'fresh_controller_actual_installer':'passed','fresh_controller_does_not_add_client':True,
+          'client_actual_bootstrap_installer_with_legacy_22_19_controller':'passed','both_existing_roles_match_bundle':True,
+          'disabled_counterpart_remains_disabled_and_inactive':True,'controller_config_and_state_preserved':True,
+          'tls_enrollment_and_initial_heartbeat':'passed','client_parser_and_control_services':'active',
+          'original_smtp_parser_sample':'passed','service_restart_and_bundle_preservation':'passed','live_approved_publication_and_restore':json.loads(live_sync),'native_version':version,'production_nodes_modified':False}
+        result['deployed_napi_smtp_15_field_json']='passed'
+        a.result.write_bytes((json.dumps(result,indent=2)+'\n').encode('utf-8'));print(json.dumps(result,indent=2),flush=True)
+    finally:
+        if os.environ.get('NLI_TEST_KEEP_NODES')=='1':
+            print(json.dumps({'debug_fixture_nodes':nodes,'network':network,'bootstrap_volume':volume}),flush=True)
+        else:
+            for name in nodes:call(['rm','-f',name],ok=False)
+            call(['volume','rm',volume],ok=False);call(['network','rm',network],ok=False)
+
+if __name__=='__main__':main()

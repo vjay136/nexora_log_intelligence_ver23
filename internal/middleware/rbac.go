@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	PermissionTerminal       = "terminal:access"
 	PermissionReadLogs       = "logs:read"
 	PermissionWriteLogs      = "logs:write"
 	PermissionReadFleet      = "fleet:read"
@@ -81,7 +82,7 @@ var RolePermissions = map[string][]string{
 		PermissionWriteTelemetry, PermissionParsePreview, PermissionAssuranceSave,
 		PermissionMigration, PermissionReadArtifacts, PermissionUploadArtifact,
 		PermissionTriggerRollout, PermissionApproveRollout, PermissionCancelRollout, PermissionReadAudit,
-		PermissionEmergencyApprove,
+		PermissionEmergencyApprove, PermissionTerminal,
 		PermissionSystemHealth,
 	},
 }
@@ -316,7 +317,18 @@ func (sm *SecurityMiddleware) Wrap(next http.Handler) http.Handler {
 		// verification guard can run.
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			key := getRemoteIP(r)
-			if !sm.allow(key) {
+			budget := sm.RateLimit
+			// An authenticated interactive terminal has its own bounded budget.
+			// It must not exhaust the normal tab API budget while typing/polling.
+			if strings.HasPrefix(r.URL.Path, "/api/v1/terminal/") {
+				token := extractToken(r)
+				if _, role, err := sm.authStore.ValidateToken(token); err == nil && role == auth.RoleAdmin {
+					digest := sha256.Sum256([]byte(token))
+					key = "terminal:" + hex.EncodeToString(digest[:])
+					budget = 3000
+				}
+			}
+			if !sm.allowBudget(key, budget) {
 				w.Header().Set("Retry-After", "60")
 				sm.jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
 				return
@@ -339,7 +351,8 @@ func (sm *SecurityMiddleware) Wrap(next http.Handler) http.Handler {
 	})
 }
 
-func (sm *SecurityMiddleware) allow(key string) bool {
+func (sm *SecurityMiddleware) allow(key string) bool { return sm.allowBudget(key, sm.RateLimit) }
+func (sm *SecurityMiddleware) allowBudget(key string, budget int) bool {
 	sm.rateMu.Lock()
 	defer sm.rateMu.Unlock()
 	now := time.Now()
@@ -349,7 +362,7 @@ func (sm *SecurityMiddleware) allow(key string) bool {
 		return true
 	}
 	entry.Count++
-	return entry.Count <= sm.RateLimit
+	return entry.Count <= budget
 }
 func (sm *SecurityMiddleware) audit(ctx *SecurityContext, action, resource string, success bool, detail string) {
 	if !sm.EnableAuditLogging || sm.auditLogger == nil {

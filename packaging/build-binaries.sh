@@ -41,6 +41,7 @@ build nli-agent ./cmd/nli-agent
 build nli-client-control ./cmd/nli-client-control
 build nli-bench ./cmd/nli-bench
 build nli-controller-agent ./cmd/nli-control
+build nli-node-terminal ./cmd/nli-node-terminal
 
 : >"$OUTPUT_DIR/SOURCE_BINARY_PROVENANCE.txt"
 for binary in "$OUTPUT_DIR"/bin/*; do
@@ -63,5 +64,6 @@ done
 [[ $("$OUTPUT_DIR/bin/nli-agent" --version) == "nli-agent $NLI_VERSION" ]] || fail "agent version does not match release metadata"
 [[ $("$OUTPUT_DIR/bin/nli-client-control" --version) == "nli-client-control $NLI_VERSION" ]] || fail "client-control version does not match release metadata"
 [[ $("$OUTPUT_DIR/bin/nli-controller-agent" --version) == "nli-control $NLI_VERSION" ]] || fail "controller version does not match release metadata"
+[[ $("$OUTPUT_DIR/bin/nli-node-terminal" --version) == "nli-node-terminal v$NLI_VERSION-$NLI_RELEASE" ]] || fail "terminal release does not match metadata"
 (cd "$OUTPUT_DIR/bin" && sha256sum * | LC_ALL=C sort) >"$OUTPUT_DIR/BINARY_SHA256SUMS"
 echo "binary build: PASS"

@@ -458,3 +458,17 @@ button[data-ai-pending]::before {
 #page[data-page="output-fields"] .panel, #page[data-page="selective-input"] .panel { min-width: 0; }
 @media (max-width: 900px) { .policy-rule-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .policy-rule-row .field:nth-child(3) { grid-column: 1 / -1; } }
 @media (max-width: 520px) { .policy-rule-row { grid-template-columns: minmax(0, 1fr); } .policy-rule-row .field:nth-child(3) { grid-column: auto; } }
+
+/* Node Terminal is a bounded, text-only PTY surface independent of theme colors. */
+.node-terminal-frame{width:100%;max-width:100%;min-width:0;border:1px solid #40536e;border-radius:10px;overflow:hidden;background:#080d16;color:#e7edf7}
+.panel pre.node-terminal-screen{box-sizing:border-box;width:100%;height:440px;max-height:65vh;min-height:180px;margin:0;padding:12px;overflow:auto;white-space:pre;background:#080d16;color:#e7edf7;border:0;border-radius:0;font:14px/1.45 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-variant-ligatures:none;tab-size:8;overscroll-behavior:contain}
+.node-terminal-keyboard-label{display:block;padding:8px 12px;color:#bac8dc;border-top:1px solid #40536e;font-size:12px}
+textarea.node-terminal-keyboard{box-sizing:border-box;width:100%;min-width:0;min-height:38px;height:38px;max-height:80px;resize:none;padding:8px;background:#101c2e;color:#eff6ff;border:1px solid #506480;font:14px/1.4 ui-monospace,Consolas,monospace}
+textarea.node-terminal-keyboard:focus{outline:2px solid #38d4df;outline-offset:1px}
+textarea.node-terminal-keyboard:disabled{opacity:.6}
+#terminal-node-list small{display:block;overflow-wrap:anywhere}
+#terminal-selected-node,#terminal-session-detail,#terminal-status{overflow-wrap:anywhere}
+.terminal-examples{gap:8px;flex-wrap:wrap;margin-bottom:12px}
+@media(max-width:600px){.panel pre.node-terminal-screen{height:330px;font-size:12px}.terminal-examples button{max-width:100%;white-space:normal}}
+
+.node-terminal-cursor{background:#d2e8ff;color:#080d16}

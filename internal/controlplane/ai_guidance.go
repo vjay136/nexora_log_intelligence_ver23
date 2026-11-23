@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	aiGuidanceCatalogVersion  = 3
+	aiGuidanceCatalogVersion  = 4
 	aiGuidanceRevisionStore   = "ai-guidance-revisions"
 	aiGuidanceEvaluationStore = "ai-guidance-evaluations"
 	aiGuidanceProviderBudget  = 4 * time.Second
@@ -50,6 +50,7 @@ var aiGuidanceNavigation = []aiGuidanceWorkspace{
 	{ID: "operations", Label: "Command Center"},
 	{ID: "monitoring", Label: "Monitoring"},
 	{ID: "streams", Label: "Live Streams"},
+	{ID: "node-terminal", Label: "Node Terminal"},
 	{ID: "assurance", Label: "Assurance Lab"},
 	{ID: "quarantine-wizard", Label: "Quarantine Resolution Wizard"},
 	{ID: "upes", Label: "UPES · Parser Recovery"},
@@ -107,6 +108,13 @@ var aiGuidanceNavigation = []aiGuidanceWorkspace{
 }
 
 var aiGuidanceActions = map[string][]aiGuidanceAction{
+	"node-terminal": {
+		{"terminal-connect", "Connect terminal", "Select one online host with terminal access explicitly enabled, reauthenticate with the current NLI password, provide a reason and open the dedicated operator PTY."},
+		{"terminal-disconnect", "Disconnect terminal", "Close the selected terminal explicitly. Leaving the workspace or signing out also closes it; a node restart requires a new explicit connection."},
+		{"terminal-example", "Show working directory", "Prepare a command example locally; inspect it, use Paste example · no Enter, then press Enter only when ready. Examples never execute automatically."},
+		{"terminal-interrupt", "Interrupt · Ctrl+C", "Interrupt a foreground command, such as a following journal, without reopening or replaying commands."},
+		{"terminal-clear", "Clear visible output", "Clear the browser's transient output buffer. This does not clear node logs or execute a remote command."},
+	},
 	"selective-input": {
 		{"policy-run-filter", "Run Filter", "Preview matched and excluded raw records without parsing or publishing the draft."},
 		{"policy-parse-matched", "Parse matched records", "Run the approved parser only for records accepted by the current previewed policy."},
@@ -311,6 +319,8 @@ func guidanceQuestionScope(question string) aiGuidanceScope {
 		return false
 	}
 	switch {
+	case has("node terminal", "linux terminal", "shell", "ssh", "journalctl", "command line", "run commands", "vi auto.log"):
+		return aiGuidanceScope{Workspace: "node-terminal"}
 	case (has("remove", "drop", "omit", "exclude", "unwanted", "strip", "hide", "filter out") && has("json", "field", "key name", "keys", "pid", "thread_id")) || has("output field", "field removal"):
 		return aiGuidanceScope{Workspace: "output-fields"}
 	case has("selective", "only read", "only parse", "filter raw", "raw filter", "discard raw", "input filter", "smtpserverehlo", "grep", "filter logs", "select logs", "keep only", "read only", "filter event", "event filter"):
@@ -366,6 +376,17 @@ func guidanceInstructions(scope aiGuidanceScope, action aiGuidanceAction) aiGuid
 		}
 	}
 	switch {
+	case scope.Workspace == "node-terminal":
+		guide.PermissionNote = "Node Terminal is administrator-only and requires terminal access plus current-password reauthentication. Host opt-in is separate from NLI login. It runs a dedicated operator account, not a root shell; permitted input writes and exact NLI service controls are enforced by host policy."
+		guide.Steps = append(guide.Steps,
+			"Open COMMAND CENTER → Node Terminal. Search by immutable node ID, friendly name, hostname or group. Use Next nodes and Previous nodes for large inventories; discovery does not open shells.",
+			"If Terminal access is disabled, an authorized host administrator must explicitly enable the optional broker using the shipped nli-node-terminal-setup helper. Confirm the selected node is online and its terminal heartbeat is current. No incoming SSH port or SSH private key is required.",
+			"Select the intended node, enter NLI login password and Session reason, then press Connect terminal. The password is not retained in the browser; never include credentials or terminal output in an AI question.",
+			"Wait for running status. Type into Terminal keyboard input; Enter sends a command, arrows edit shell history and Ctrl+C interrupts a foreground program. Commands execute as the host operator account under its actual permissions.",
+			"Demo command examples only prepare text locally. Inspect Prepared example, select Paste example · no Enter, then press Enter only when ready. Input-file editing, truncating and deleting change data. Restarting the controller or client-control service may disconnect this session.",
+			"Check output, node identity, expiry and idle timeout directly in Node Terminal. Use Disconnect terminal when finished. Navigation and signout close the session; reconnect explicitly after a lost connection. Uncertain stdin is not automatically retried.",
+			"Clear visible output clears only the transient display. Copy visible output is an explicit clipboard action. Transcript data and command input are not AI context, parser metadata, durable backups or stored guidance revisions.")
+		guide.CompletionCheck = "The intended immutable node ID is selected, the PTY reports running, and actual command output is visible. An offline, opted-out, expired or disconnected host is not successful access. Never send a terminal transcript to the AI provider."
 	case scope.Workspace == "selective-input":
 		guide.PermissionNote = "Preview requires Assurance run permission. Saving a policy requires parser management, independent review requires review permission, and publication and fleet delivery require their existing authorized approval gates."
 		guide.Steps = append(guide.Steps,

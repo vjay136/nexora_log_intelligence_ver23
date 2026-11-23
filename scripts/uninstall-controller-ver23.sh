@@ -110,6 +110,17 @@ rm -f -- /etc/nli/cloudflare/tunnel-token
 systemctl daemon-reload
 restore_nli_selinux_boolean_on_purge
 
+# Shared terminal host policy belongs to the surviving role on mixed-role nodes.
+if ! rpm -q nli-client >/dev/null 2>&1; then
+  if [[ -x /usr/sbin/nli-node-terminal-setup ]]; then
+    terminal_cleanup=(--disable)
+    [[ $purge -eq 0 ]] || terminal_cleanup+=(--purge)
+    /usr/sbin/nli-node-terminal-setup "${terminal_cleanup[@]}"
+  else
+    systemctl disable --now nli-node-terminal.service >/dev/null 2>&1 || true
+  fi
+fi
+
 if rpm -q nli-controller-agent >/dev/null 2>&1; then
   dnf -y remove nli-controller-agent
 else

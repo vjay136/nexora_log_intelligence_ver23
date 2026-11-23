@@ -51,7 +51,7 @@ func TestR9PolicyGuidanceUsesRealControlsAndExplicitPreviewReviewSequence(t *tes
 			t.Fatal("output guide implies unsupported recursive removal")
 		}
 	}
-	if aiGuidanceCatalogVersion != 3 {
+	if aiGuidanceCatalogVersion != 4 {
 		t.Fatal("new policy guidance must have its own catalog revision")
 	}
 }
@@ -321,7 +321,33 @@ func TestAIGuidanceInstructionsNeverClaimApprovalOrLiveState(t *testing.T) {
 			}
 		}
 	}
-	if aiGuidanceIdentity.Version != 3 {
+	if aiGuidanceIdentity.Version != 4 {
 		t.Fatal("workflow instructions require a new catalog revision")
+	}
+}
+
+func TestR10TerminalGuidanceIsPreciseAndTranscriptFree(t *testing.T) {
+	for _, question := range []string{"How do I open a node terminal?", "I need Linux command line for my demo", "Can I read journalctl through webapp without SSH?"} {
+		scope := guidanceQuestionScope(question)
+		if scope.Workspace != "node-terminal" {
+			t.Fatalf("wrong workspace for %q: %+v", question, scope)
+		}
+		_, choices, err := scope.resolve()
+		if err != nil || len(choices) == 0 {
+			t.Fatalf("terminal guidance unavailable: %v", err)
+		}
+		guide := guidanceInstructions(scope, choices[0])
+		joined := strings.Join(guide.Steps, "\n")
+		for _, marker := range []string{"COMMAND CENTER → Node Terminal", "NLI login password", "Session reason", "Connect terminal", "Paste example · no Enter", "Disconnect terminal", "not automatically retried", "not AI context"} {
+			if !strings.Contains(joined, marker) {
+				t.Errorf("terminal guidance missing %q", marker)
+			}
+		}
+		if !strings.Contains(guide.PermissionNote, "not a root shell") {
+			t.Fatal("terminal guidance must explain operator privilege boundary")
+		}
+	}
+	if aiGuidanceCatalogVersion != 4 {
+		t.Fatal("R10 terminal guidance needs catalog revision 4")
 	}
 }

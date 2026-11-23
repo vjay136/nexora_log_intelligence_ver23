@@ -9,7 +9,7 @@ const app = fs.readFileSync(path.join(root, 'web', 'app.js'), 'utf8');
 const ui = fs.readFileSync(path.join(root, 'web', 'ui.spec.js'), 'utf8');
 
 const routes = [
-  'operations', 'monitoring', 'streams',
+  'operations', 'monitoring', 'streams', 'node-terminal',
   'assurance', 'quarantine-wizard', 'upes', 'rollouts', 'backup-restore', 'parser-sync',
   'artifacts', 'parser-workspace', 'nupire', 'field-integrity', 'ai', 'ai-guidance',
   'sample-history', 'header-templates', 'kv-templates', 'parsers', 'reference-ai', 'building-blocks', 'field-mapping', 'studio', 'regex', 'knownkeys', 'drift', 'notifications',
@@ -49,7 +49,7 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-test('Primary navigation includes all 57 workspaces in their declared order', () => {
+test('Primary navigation includes all 58 workspaces in their declared order', () => {
   const nav = app.slice(app.indexOf('const NAV = ['), app.indexOf('const TITLES'));
   const actual = [...nav.matchAll(/\[\s*'[^']+'\s*,\s*'([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(actual, routes);

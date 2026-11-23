@@ -251,3 +251,21 @@ must be upgraded to support policy bundles. **Backup & Restore** includes both
 policy classes and preserves prior revisions. Policy activation is prospective:
 already serialized queue/WAL records keep their original generation. Reset
 clears the local form/results and does not revoke a published policy.
+
+
+## R10 Node Terminal: controller and client demonstration
+
+1. Upgrade both roles using the matching local R10 release bundle and the existing installer modes 1–10. Leave the optional terminal disabled until the host owner approves it.
+2. On a controller host, run `sudo /usr/sbin/nli-node-terminal-setup --enable --role controller`. On a client host, use `--role client`. The helper installs a root-owned policy, dedicated operator, exact service-command wrappers and the local broker. It does not open an SSH or terminal TCP port. The controller service may restart to apply local socket access; reopen the Webapp after it is online.
+3. Sign in as an NLI administrator. Open **COMMAND CENTER → Node Terminal**. Search by node ID, friendly name, hostname or group. **Next nodes** and **Previous nodes** page the inventory; no shells are opened by navigation or search. Check the immutable ID, online status and enabled host policy before selecting a node.
+4. Enter **NLI login password** and **Session reason**, then **Connect terminal**. The password field clears immediately. Wait for `running` status; expiry and idle timeout appear beside the selected node.
+5. Click **Terminal keyboard input**. Try `pwd`, `ls -lah /var/log/nli/input /var/log/nli/output`, or `systemctl status nli-agent.service nli-client-control.service --no-pager` on a client. Use `systemctl status nli-controller-agent.service --no-pager` on the controller. The shell retains its working directory. Enter executes, arrows edit history, Tab completes and Ctrl+C interrupts a foreground command.
+6. Use **Demo command examples** to prepare text locally. Inspect **Prepared example**, press **Paste example · no Enter**, then press Enter deliberately. **Read client journal**, **Follow controller journal** and **Inspect parser paths** demonstrate services, log flow and bundle directories. Host permissions still apply; unavailable paths do not imply successful synchronization.
+7. To demonstrate input editing, prepare `cd /var/log/nli/input && vi auto.log`. The operator can create, modify, truncate or delete files only in the permitted canonical input area; these actions change real input data. Output/parser paths are readable and cannot be edited through these permissions. For vi, press Escape then type `:wq` and Enter to save/exit, or `:q!` and Enter to exit without saving.
+8. Exact NLI restart commands are available through the helper's limited sudo configuration. Restarting the controller or client-control service can disconnect the terminal. Wait for online status, then explicitly reconnect. A failed/uncertain input request is not automatically retried: inspect host state before re-entering a command.
+9. **Interrupt · Ctrl+C** stops a foreground command. **Clear visible output** clears only the local display. **Copy visible output** copies only when requested. **Disconnect terminal**, navigation and signout close the session; network/browser loss is additionally bounded by server and host leases.
+10. To stop optional access, run `sudo /usr/sbin/nli-node-terminal-setup --disable`. Add `--purge` only when you intend to remove its local optional configuration/account. Normal parser services and durable parser metadata remain separate.
+
+Only the dedicated operator's actual permissions are available; Node Terminal is not an unrestricted root shell. It does not bypass organization access policy. The broker has no public listener and reuses existing TLS-authenticated NLI transport. Large enrolled inventories are searched and paged; session capacity is bounded independently. Stale/offline/disabled nodes are never treated as connected.
+
+Do not paste credentials into guidance questions. Command input and output are not sent to AI, browser storage, parser bundles or Supabase backups. Audit metadata records access lifecycle, actor, target and reason. **AI Guidance & Revisions → Node Terminal** describes navigation and controls only; it cannot see the live terminal or execute its commands.

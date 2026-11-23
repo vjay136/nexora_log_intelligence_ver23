@@ -1,3 +1,7 @@
+# NLI Ver23 R10 — v23.0.0-10
+
+Optional authenticated Node Terminal for controller/client demonstrations over existing NLI HTTPS, with explicit host opt-in, dedicated operator permissions and ephemeral bounded sessions. See [R10 release notes](docs/V23_R10_RELEASE_NOTES.md). Existing installation modes 1–10 remain.
+
 # NLI Ver23 R9 — v23.0.0-9
 
 Optional selective-input filtering and customer JSON field removal on the published R8 baseline. See [R9 release notes](docs/V23_R9_RELEASE_NOTES.md).

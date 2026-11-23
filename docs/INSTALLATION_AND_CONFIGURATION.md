@@ -620,3 +620,8 @@ or Supabase data.
 ## R6 existing-role package compatibility
 
 The installer checks for an already-installed opposite NLI role. If its release differs, both matching RPMs from this complete bundle are installed in one DNF transaction because they share /usr/bin/nli. A clean single-role node does not acquire the opposite role. Existing configuration and state are retained. Upgrade scriptlets do not enable or start an inactive counterpart; previously active counterpart daemons are restarted after the transaction. No role is removed automatically. Manual RPM installs on mixed-role hosts must supply both matching RPMs together. The interactive installation and enrollment steps are unchanged.
+
+
+## Ver23 R10 optional node terminal
+
+The existing installer modes 1–10 are unchanged. After installing matching R10 RPMs, explicitly run `/usr/sbin/nli-node-terminal-setup --enable --role controller` or `--role client` only on hosts intended for terminal access. This optional step is not an installer mode. Use `--disable` to stop access, or explicit `--disable --purge` to remove its optional host setup. See WEBAPP_OPERATOR_AND_PARSER_GUIDE.md for host permissions, reauthentication, demo commands and disconnect behavior. Both RPMs ship the same root-owned broker binary/unit/helper; installation alone does not enable access.

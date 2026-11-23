@@ -5,6 +5,7 @@
     ['COMMAND CENTER', 'operations', 'Command Center', '◫'],
     ['COMMAND CENTER', 'monitoring', 'Monitoring', '◈'],
     ['COMMAND CENTER', 'streams', 'Live Streams', '⇶'],
+    ['COMMAND CENTER', 'node-terminal', 'Node Terminal', '>_'],
     ['ASSURANCE & RELEASE', 'assurance', 'Assurance Lab', '◇'],
     ['ASSURANCE & RELEASE', 'quarantine-wizard', 'Quarantine Resolution Wizard', '⌁'],
     ['ASSURANCE & RELEASE', 'upes', 'UPES · Parser Recovery', '⟳'],
@@ -100,6 +101,7 @@
     'migration-form': 'migration:manage',
     'config-form': 'parsers:manage',
     'policy-preview-form': 'assurance:run',
+    'terminal-connect-form': 'terminal:access',
     'known-key-quick-form': 'parsers:manage',
     'known-key-bulk-form': 'parsers:manage',
     'input-profile-form': 'parsers:manage',
@@ -160,6 +162,7 @@
   };
   const can = permission => !permission || state.user?.role === 'admin' || (state.user?.permissions || []).includes(permission);
   function actionPermission(button) {
+    if(button.dataset.action?.startsWith('terminal-'))return 'terminal:access';
     if(['policy-run-filter','policy-parse-matched','policy-run-output'].includes(button.dataset.action))return 'assurance:run';
     if(['policy-rule-add','policy-rule-remove','policy-new-draft','policy-enabled-draft'].includes(button.dataset.action))return 'parsers:manage';
     if(['policy-load-example','policy-reset-sample','policy-download-results','policy-copy-results'].includes(button.dataset.action))return 'assurance:run';
@@ -310,6 +313,7 @@
   }
   const table = (headers, rows, emptyMessage = 'No records have been created yet.') => rows.length ? `<div class="table-wrap"><table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>` : empty(emptyMessage);
   function addInputGuidance(root=page) {
+    if(state.page==='node-terminal')return;
     const guidance={
       raw:'Paste one line to test a single record, or several lines to test a multiline record. Remove credentials first.',
       desired:'Enter the exact expected JSON, for example {"status":"failed"} or {"retry_count":2}.',
@@ -934,7 +938,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     nav.addEventListener('click',event=>{const button=event.target.closest('[data-endpoint-tab]');if(button)activate(button.dataset.endpointTab);});activate('destinations');
   }
 
-  function renderPage(id, html) { if (state.user && state.page === id) { page.innerHTML = html; applyChartDimensions(page); page.dataset.page = id; page.dataset.dirty = 'false'; addInputGuidance();queueMicrotask(nfiDecorate);if(['assurance','quarantine-wizard'].includes(id))setupAssuranceTabs();if(id==='outputs')setupEndpointTabs();if(id==='ai')setupAITabs();if(id==='monitoring')setupMonitoringTabs();if(['sync-fabric','nhle-monitor','napi-monitor','nal-monitor','upes'].includes(id))setupSubsystemTabs();decorateWorkspaceAI();applyPermissions(); } }
+  function renderPage(id, html) { if (state.user && state.page === id) { page.innerHTML = html; applyChartDimensions(page); page.dataset.page = id; page.dataset.dirty = 'false'; addInputGuidance();queueMicrotask(nfiDecorate);if(['assurance','quarantine-wizard'].includes(id))setupAssuranceTabs();if(id==='outputs')setupEndpointTabs();if(id==='ai')setupAITabs();if(id==='monitoring')setupMonitoringTabs();if(['sync-fabric','nhle-monitor','napi-monitor','nal-monitor','upes'].includes(id))setupSubsystemTabs();if(id!=='node-terminal')decorateWorkspaceAI();applyPermissions(); } }
   function mappingSuggestionButton(tab='Field mapping'){
     return `<button type="button" class="secondary" data-action="workspace-ai-auto" data-artifact="mapping" data-tab="${esc(tab)}" data-suggest-mapping>Suggest Mappings with Nexora AI</button>`;
   }
@@ -1721,12 +1725,14 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     match?.click();
   }
   async function refreshWorkspace() {
+    if(state.page==='node-terminal'){await searchTerminalNodes(true);return;}
     const workspace=state.page,tab=selectedWorkspaceTab();
     await navigate(workspace);
     restoreWorkspaceTab(workspace,tab);
   }
   async function navigate(id) {
     if (!state.user) return;
+    if(state.page==='node-terminal')await stopNodeTerminal('navigation');
     state.page = TITLES[id] ? id : 'operations';
     const requestedPage = state.page;
     const navigation = Symbol(requestedPage);
@@ -2749,6 +2755,218 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     page.querySelectorAll('[data-policy-result-actions] button').forEach(button=>button.disabled=false);
     return input&&!parsed?raw:after.map(value=>JSON.stringify(value)).join('\n');
   }
+
+  // Terminal output is untrusted node data. Render only text, never HTML/OSC links.
+  class NodeTerminalScreen {
+    constructor(cols=100,rows=28){this.cols=cols;this.rows=rows;this.clear();}
+    clear(){this.lines=[[]];this.row=0;this.col=0;this.base=0;this.pending='';this.saved=[0,0];this.alternate=null;this.trimmed=false;this.bracketedPaste=false;this.scrollTop=0;this.scrollBottom=this.rows-1;}
+    resize(cols,rows){this.cols=Math.max(20,Math.min(300,cols));this.rows=Math.max(5,Math.min(100,rows));this.scrollBottom=this.rows-1;}
+    line(){while(this.lines.length<=this.row)this.lines.push([]);return this.lines[this.row];}
+    trim(){if(this.lines.length>2000){const cut=this.lines.length-2000;this.lines.splice(0,cut);this.row=Math.max(0,this.row-cut);this.base=Math.max(0,this.base-cut);this.trimmed=true;}}
+    scroll(amount=1){const top=this.base+this.scrollTop,bottom=this.base+this.scrollBottom;while(this.lines.length<=bottom)this.lines.push([]);if(amount>0){for(let i=0;i<Math.min(amount,this.rows);i++){this.lines.splice(top,1);this.lines.splice(bottom,0,[]);}}else{for(let i=0;i<Math.min(-amount,this.rows);i++){this.lines.splice(bottom,1);this.lines.splice(top,0,[]);}}}
+    newline(){if(this.alternate&&this.row===this.base+this.scrollBottom){this.scroll(1);this.col=0;return;}this.row++;this.col=0;if(this.row>=this.base+this.rows)this.base=this.row-this.rows+1;this.line();this.trim();}
+    csi(args,code){
+      const privateMode=args.startsWith('?'),numbers=args.replace(/^\?/,'').split(';').map(value=>Math.max(0,Math.min(10000,Number(value)||0))),n=numbers[0]||1;
+      if(privateMode){if(numbers[0]===2004){this.bracketedPaste=code==='h';return;}if(numbers[0]===1049){if(code==='h'&&!this.alternate){this.alternate={lines:this.lines,row:this.row,col:this.col,base:this.base};this.lines=[[]];this.row=0;this.col=0;this.base=0;}else if(code==='l'&&this.alternate){Object.assign(this,this.alternate);this.alternate=null;}}return;}
+      if(code==='A')this.row=Math.max(this.base,this.row-n);
+      else if(code==='B')this.row=Math.min(this.base+this.rows-1,this.row+n);
+      else if(code==='C')this.col=Math.min(this.cols-1,this.col+n);
+      else if(code==='D')this.col=Math.max(0,this.col-n);
+      else if(code==='G'||code==='`')this.col=Math.min(this.cols-1,Math.max(0,n-1));
+      else if(code==='d')this.row=this.base+Math.min(this.rows-1,Math.max(0,n-1));
+      else if(code==='H'||code==='f'){this.row=this.base+Math.min(this.rows-1,Math.max(0,(numbers[0]||1)-1));this.col=Math.min(this.cols-1,Math.max(0,(numbers[1]||1)-1));}
+      else if(code==='J'){
+        if(numbers[0]===3){this.lines=[[]];this.row=0;this.col=0;this.base=0;}
+        else if(numbers[0]===2){for(let i=this.base;i<this.base+this.rows;i++)this.lines[i]=[];}
+        else if(numbers[0]===1){for(let i=this.base;i<this.row;i++)this.lines[i]=[];this.line().fill(' ',0,this.col+1);}
+        else{this.line().splice(this.col);this.lines.splice(this.row+1);}
+      }else if(code==='K'){
+        if(numbers[0]===2)this.lines[this.row]=[];
+        else if(numbers[0]===1)this.line().fill(' ',0,this.col+1);
+        else this.line().splice(this.col);
+      }else if(code==='P')this.line().splice(this.col,n);
+      else if(code==='@')this.line().splice(this.col,0,...Array(Math.min(n,this.cols)).fill(' '));
+      else if(code==='X')for(let i=0;i<Math.min(n,this.cols-this.col);i++)this.line()[this.col+i]=' ';
+      else if(code==='r'){const top=Math.max(0,(numbers[0]||1)-1),bottom=Math.min(this.rows-1,(numbers[1]||this.rows)-1);if(top<bottom){this.scrollTop=top;this.scrollBottom=bottom;this.row=this.base;this.col=0;}}
+      else if(code==='L'||code==='M'){const bottom=this.base+this.scrollBottom;if(this.row<=bottom){while(this.lines.length<=bottom)this.lines.push([]);for(let i=0;i<Math.min(n,bottom-this.row+1);i++){if(code==='L'){this.lines.splice(this.row,0,[]);this.lines.splice(bottom+1,1);}else{this.lines.splice(this.row,1);this.lines.splice(bottom,0,[]);}}}}
+      else if(code==='S'||code==='T')this.scroll(code==='S'?n:-n);
+      else if(code==='s')this.saved=[this.row,this.col];
+      else if(code==='u')[this.row,this.col]=this.saved;
+      // SGR colors and unknown terminal extensions deliberately remain inert.
+    }
+    write(value){
+      const input=this.pending+value;this.pending='';
+      for(let i=0;i<input.length;){
+        const ch=input[i];
+        if(ch==='\x1b'){
+          if(i+1>=input.length){this.pending=input.slice(i);break;}
+          if(input[i+1]==='['){let end=i+2;while(end<input.length&&!/[\x40-\x7e]/.test(input[end]))end++;if(end>=input.length){this.pending=input.slice(i).slice(0,96);break;}if(end-i<96)this.csi(input.slice(i+2,end),input[end]);i=end+1;continue;}
+          if(input[i+1]===']'||input[i+1]==='P'||input[i+1]==='^'||input[i+1]==='_'){
+            let end=i+2;while(end<input.length&&input[end]!=='\x07'&&!(input[end]==='\x1b'&&input[end+1]==='\\'))end++;
+            if(end>=input.length){this.pending=input.slice(i).slice(0,8192);break;}i=end+(input[end]==='\x07'?1:2);continue;
+          }
+          if('()*+'.includes(input[i+1])){if(i+2>=input.length){this.pending=input.slice(i);break;}i+=3;continue;}
+          if(input[i+1]==='D'){const col=this.col;this.newline();this.col=col;}else if(input[i+1]==='E')this.newline();else if(input[i+1]==='M'){if(this.row===this.base+this.scrollTop)this.scroll(-1);else this.row=Math.max(this.base,this.row-1);}
+          else if(input[i+1]==='7')this.saved=[this.row,this.col];else if(input[i+1]==='8')[this.row,this.col]=this.saved;else if(input[i+1]==='c'){this.lines=[[]];this.row=0;this.col=0;this.base=0;}
+          i+=2;continue;
+        }
+        const point=input.codePointAt(i),symbol=String.fromCodePoint(point);i+=symbol.length;
+        if(ch==='\r'){this.col=0;continue;}if(ch==='\n'){this.newline();continue;}if(ch==='\b'){this.col=Math.max(0,this.col-1);continue;}if(ch==='\t'){this.col=Math.min(this.cols-1,(Math.floor(this.col/8)+1)*8);continue;}
+        if(point<32||point===127)continue;
+        if(this.col>=this.cols)this.newline();const line=this.line();while(line.length<this.col)line.push(' ');line[this.col++]=symbol;
+      }
+      this.trim();
+    }
+    text(){let text=this.lines.map(line=>(line||[]).join('').trimEnd()).join('\n').replace(/\n+$/,'');if(text.length>262144){text=text.slice(-262144);this.trimmed=true;}return text;}
+  }
+  let nodeTerminal=null,nodeTerminalGeneration=0,terminalSearchTimer=null;
+  const terminalAuthorized=()=>state.user?.role==='admin'&&can('terminal:access');
+  const terminalIsActive=session=>session&&['connecting','pending','opening','running','connected'].includes(session.status);
+  function terminalNodeID(node){return String(node?.id||node?.node_id||'');}
+  function terminalNodeName(node){return String(node?.display_name||node?.name||node?.hostname||terminalNodeID(node));}
+  function terminalNodeEligible(node){return node?.terminal_enabled===true&&(node.online===true||['online','ready'].includes(node.status));}
+  function terminalStatus(message){const host=el('terminal-status');if(host)host.textContent=message;}
+  function terminalSessionState(session){
+    const current=nodeTerminal;if(!current)return;current.session=session||current.session;
+    const live=terminalIsActive(current.session),running=['running','connected'].includes(current.session?.status);
+    const input=el('terminal-keyboard');if(input)input.disabled=!running||current.inputFailed;
+    const detail=el('terminal-session-detail');if(detail)detail.textContent=current.session?`${current.session.status} · ${current.selected?terminalNodeName(current.selected):current.session.node_id} · Expires ${current.session.expires_at?time(current.session.expires_at):'not reported'} · Idle timeout ${current.session.idle_timeout_seconds??'server controlled'}s${current.session.exit_code!=null?` · Exit ${current.session.exit_code}`:''}${current.session.reason?` · ${current.session.reason}`:''}`:'No terminal session is connected.';
+    const connect=el('terminal-connect-button');if(connect)connect.disabled=!!current.opening||live||!terminalNodeEligible(current.selected);
+    for(const action of ['terminal-disconnect','terminal-interrupt','terminal-paste-example']){const button=page.querySelector(`[data-action=${action}]`);if(button)button.disabled=action==='terminal-disconnect'?!(live||current.opening):!running||current.inputFailed;}
+    const next=el('terminal-next'),previous=el('terminal-previous');if(next)next.disabled=!current.nextCursor;if(previous)previous.disabled=current.cursors.length===0;
+    const nodes=el('terminal-node-list');if(nodes)nodes.querySelectorAll('input').forEach(control=>{const node=current.nodes.find(item=>terminalNodeID(item)===control.value);control.disabled=live||current.opening||!terminalNodeEligible(node);});
+  }
+  function renderTerminalNodes(){
+    const current=nodeTerminal,host=el('terminal-node-list');if(!current||!host)return;
+    const live=terminalIsActive(current.session),rows=current.nodes.map(node=>`<tr><td><input type="radio" name="terminal-node" aria-label="Select ${esc(terminalNodeName(node))}" value="${esc(terminalNodeID(node))}" ${terminalNodeID(current.selected)===terminalNodeID(node)?'checked':''} ${live||!terminalNodeEligible(node)?'disabled':''}></td><td>${esc(terminalNodeName(node))}<small class="mono">${esc(terminalNodeID(node))}</small></td><td>${esc(node.role||'client')}</td><td>${esc((Array.isArray(node.groups)?node.groups:[]).map(group=>typeof group==='string'?group:group?.name||group?.id||'').join(', ')||'—')}</td><td>${esc(node.status||'Not reported')}</td><td>${node.terminal_enabled===true?'Enabled on host':esc(node.reason||'Host access is disabled or agent upgrade is required')}</td></tr>`);
+    host.innerHTML=table(['Select','Node','Role','Groups','Connection','Terminal access'],rows,'No matching enrolled nodes. Try another name, tag, group or node ID.');
+    el('terminal-next').disabled=!current.nextCursor;el('terminal-previous').disabled=current.cursors.length===0;
+    el('terminal-node-count').textContent=`Showing ${current.nodes.length} node(s)${Number.isFinite(current.total)?` of ${number(current.total)}`:''}. Search or page through the inventory; this does not open terminal connections.`;
+    terminalSessionState();
+  }
+  async function searchTerminalNodes(refresh=false,cursor=''){
+    if(cursor===null)cursor='';
+    const current=nodeTerminal;if(!current||state.page!=='node-terminal'||!terminalAuthorized())return;
+    const request=++current.searchRequest,query=el('terminal-node-search')?.value||'';
+    if(refresh&&arguments.length<2){cursor=current.cursor||'';}else if(!refresh&&!cursor){current.cursors=[];}
+    el('terminal-search-status').textContent='Loading enrolled nodes…';
+    try{
+      const data=await api(`/terminal/nodes?q=${encodeURIComponent(query)}&cursor=${encodeURIComponent(cursor)}`,{timeoutMs:15000});
+      if(nodeTerminal!==current||request!==current.searchRequest||state.page!=='node-terminal')return;
+      current.nodes=(Array.isArray(data.items)?data.items:[]).filter(node=>node&&typeof node==='object').slice(0,100);current.nextCursor=String(data.next_cursor||'');current.cursor=cursor;current.total=Number.isFinite(data.total)?data.total:undefined;current.limits=data.limits||{};
+      el('terminal-search-status').textContent=data.message||'Select one online, enabled node. No SSH keys or additional browser ports are used.';
+      const mode=el('terminal-privilege-mode');if(mode)mode.textContent=data.privilege_mode?`Host privilege policy: ${data.privilege_mode}`:'The selected host controls the operating-system account and permitted privileges.';
+      renderTerminalNodes();
+    }catch(error){if(nodeTerminal===current&&request===current.searchRequest)el('terminal-search-status').textContent=requestFailure(error);}
+  }
+  function renderTerminalOutput(){
+    const current=nodeTerminal,host=el('terminal-screen');if(!current||!host)return;
+    const scroll=host.scrollHeight-host.scrollTop-host.clientHeight<48;host.textContent=current.screen.text();if(current.screen.alternate){const model=current.screen,lines=model.lines.map(line=>(line||[]).join(''));while(lines.length<=model.row)lines.push('');const line=lines[model.row]||'',before=lines.slice(0,model.row).join('\n')+(model.row?'\n':'')+line.padEnd(model.col,' ').slice(0,model.col),cursor=document.createElement('span');cursor.className='node-terminal-cursor';cursor.textContent=line[model.col]||' ';host.textContent=before;host.append(cursor,document.createTextNode(line.slice(model.col+1)+(model.row+1<lines.length?'\n'+lines.slice(model.row+1).join('\n'):'')));}if(scroll)host.scrollTop=host.scrollHeight;
+    const notice=el('terminal-output-notice');if(notice)notice.textContent=current.serverTruncated||current.screen.trimmed?'Older output was discarded to keep the terminal buffer bounded. Live output continues.':'';
+  }
+  async function pollNodeTerminal(generation){
+    const current=nodeTerminal;if(!current||current.generation!==generation||state.page!=='node-terminal'||!current.session||!terminalAuthorized())return;
+    try{
+      const update=await api(`/terminal/sessions/${encodeURIComponent(current.session.id)}?after=${current.outputSequence}`,{signal:current.abort.signal,timeoutMs:20000});
+      if(nodeTerminal!==current||current.generation!==generation)return;
+      const next=Number(update.next_sequence);if(!Number.isSafeInteger(next)||next<current.outputSequence)throw new Error('Terminal output sequence is invalid; reconnect to a new session.');
+      if(update.truncated===true){current.decoder=new TextDecoder('utf-8');current.screen.pending='';current.screen.write('\r\n[Earlier remote output was discarded]\r\n');}
+      if(update.data_b64){const binary=atob(update.data_b64);if(binary.length>262144)throw new Error('Terminal output exceeded the bounded response limit.');const bytes=Uint8Array.from(binary,value=>value.charCodeAt(0));current.screen.write(current.decoder.decode(bytes,{stream:true}));}
+      current.outputSequence=next;current.serverTruncated||=update.truncated===true;terminalSessionState(update.session);renderTerminalOutput();current.failures=0;
+      if(terminalIsActive(current.session)){if(!current.inputFailed)terminalStatus(current.session.status==='running'?'Connected. Click the terminal input to type.':'Waiting for the selected node to establish its PTY.');current.pollTimer=setTimeout(()=>pollNodeTerminal(generation),500);}else{current.screen.write(current.decoder.decode());renderTerminalOutput();terminalStatus(`Session ${current.session.status}. Open a new session to reconnect.`);}
+    }catch(error){
+      if(nodeTerminal!==current||current.abort.signal.aborted)return;
+      current.failures++;terminalStatus(`Terminal connection interrupted. ${requestFailure(error)}`);
+      if(current.failures>=3){await stopNodeTerminal('connection lost');terminalStatus('Connection lost. The session was closed; reconnect explicitly after checking the node.');}
+      else current.pollTimer=setTimeout(()=>pollNodeTerminal(generation),Math.min(5000,current.failures*1000));
+    }
+  }
+  async function connectNodeTerminal(){
+    const current=nodeTerminal;if(!current||!terminalAuthorized())throw new Error('Node Terminal requires administrator terminal access.');
+    if(current.opening||terminalIsActive(current.session))return;
+    if(!terminalNodeEligible(current.selected))throw new Error('Select an online node with host terminal access enabled.');
+    const form=el('terminal-connect-form');if(!form.reportValidity())return;
+    const body={node_id:terminalNodeID(current.selected),cols:current.screen.cols,rows:current.screen.rows,password:form.elements.password.value,reason:form.elements.reason.value.trim()};
+    form.elements.password.value='';current.opening=true;terminalSessionState();terminalStatus('Confirming access and opening the selected host…');
+    const generation=current.generation;
+    try{
+      const result=await api('/terminal/sessions',{method:'POST',body,timeoutMs:20000});
+      if(nodeTerminal!==current||generation!==nodeTerminalGeneration||state.page!=='node-terminal'){
+        if(result.session?.id)await api(`/terminal/sessions/${encodeURIComponent(result.session.id)}/close`,{method:'POST',body:{}}).catch(()=>{});return;
+      }
+      current.session=result.session;current.outputSequence=0;current.serverTruncated=false;current.inputSequence=0;current.inputFailed=false;current.screen.clear();current.decoder=new TextDecoder('utf-8');current.abort=new AbortController();renderTerminalOutput();terminalSessionState();
+      if(!current.session?.id)throw new Error('The controller did not return a terminal session.');
+      await pollNodeTerminal(generation);el('terminal-keyboard')?.focus();
+    }catch(error){if(nodeTerminal===current&&current.generation===generation)terminalStatus(`Terminal was not connected. ${requestFailure(error)}`);throw error;}
+    finally{body.password='';if(nodeTerminal===current&&current.generation===generation){current.opening=false;terminalSessionState();}}
+  }
+  function queueTerminalInput(text){
+    const current=nodeTerminal;if(!current||!['running','connected'].includes(current.session?.status)||current.inputFailed||!terminalAuthorized())return;
+    if(new TextEncoder().encode(text).length>8192||new TextEncoder().encode(current.pendingInput+text).length>32768){terminalStatus('Input was not sent: paste at most 8 KiB at a time and wait for pending input.');return;}
+    current.pendingInput+=text;if(!current.inputTimer)current.inputTimer=setTimeout(()=>flushTerminalInput(current),30);
+  }
+  async function flushTerminalInput(current){
+    clearTimeout(current.inputTimer);current.inputTimer=null;if(current.sending||nodeTerminal!==current||!current.pendingInput)return;
+    current.sending=true;
+    try{
+      while(current.pendingInput&&nodeTerminal===current&&terminalIsActive(current.session)){
+        let cut=Math.min(2048,current.pendingInput.length);const tail=current.pendingInput.charCodeAt(cut-1);if(tail>=0xd800&&tail<=0xdbff)cut--;let data=current.pendingInput.slice(0,cut);current.pendingInput=current.pendingInput.slice(cut);
+        const sequence=current.inputSequence+1;
+        await api(`/terminal/sessions/${encodeURIComponent(current.session.id)}/input`,{method:'POST',body:{data,sequence},timeoutMs:15000});data='';current.inputSequence=sequence;
+      }
+    }catch(error){current.pendingInput='';current.inputFailed=true;terminalSessionState();terminalStatus(`Input delivery is uncertain; it will not be retried. Disconnect and open a new session. ${requestFailure(error)}`);}
+    finally{current.sending=false;}
+  }
+  async function stopNodeTerminal(reason='disconnect'){
+    const current=nodeTerminal;nodeTerminalGeneration++;clearTimeout(terminalSearchTimer);if(!current)return;
+    clearTimeout(current.pollTimer);clearTimeout(current.inputTimer);current.abort?.abort();if(reason==='navigation'||reason==='signout')current.resizeObserver?.disconnect();clearTimeout(current.resizeTimer);current.pendingInput='';current.opening=false;current.generation=nodeTerminalGeneration;
+    const session=current.session;current.session=null;terminalSessionState();
+    if(session?.id&&state.user){try{await api(`/terminal/sessions/${encodeURIComponent(session.id)}/close`,{method:'POST',body:{},timeoutMs:5000});}catch{terminalStatus('The disconnect could not be confirmed. The server and host session limits still apply.');}}
+    if(reason==='navigation'||reason==='signout'){current.screen.clear();const output=el('terminal-screen');if(output)output.textContent='';const keyboard=el('terminal-keyboard');if(keyboard)keyboard.value='';nodeTerminal=null;}
+    else{terminalStatus('Disconnected. Select a node and confirm access to start a new session.');}
+  }
+  window.addEventListener('pagehide',()=>{const current=nodeTerminal;if(!current?.session?.id||!state.user||!state.csrf)return;current.abort?.abort();clearTimeout(current.pollTimer);clearTimeout(current.inputTimer);current.pendingInput='';fetch(`/api/v1/terminal/sessions/${encodeURIComponent(current.session.id)}/close`,{method:'POST',credentials:'same-origin',keepalive:true,headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf},body:'{}'}).catch(()=>{});});
+  async function nodeTerminalAction(button){
+    if(!terminalAuthorized())throw new Error('Node Terminal requires administrator terminal access.');const current=nodeTerminal;if(!current)return;
+    switch(button.dataset.action){
+      case 'terminal-connect':await connectNodeTerminal();break;
+      case 'terminal-disconnect':await stopNodeTerminal();break;
+      case 'terminal-interrupt':queueTerminalInput('\x03');break;
+      case 'terminal-clear':{const paste=current.screen.bracketedPaste;current.screen.clear();current.screen.bracketedPaste=paste;renderTerminalOutput();break;}
+      case 'terminal-copy':await navigator.clipboard.writeText(current.screen.text());toast('Visible terminal output copied.');break;
+      case 'terminal-example':el('terminal-prepared-command').value=button.dataset.command||'';terminalStatus('Example prepared locally. Paste it into an idle shell, then press Enter to execute.');break;
+      case 'terminal-paste-example':{const command=el('terminal-prepared-command').value;if(!command||/[\r\n]/.test(command))throw new Error('Prepare one command first.');queueTerminalInput(command);el('terminal-keyboard')?.focus();terminalStatus('Example pasted without Enter. Inspect the command and press Enter to execute.');break;}
+      case 'terminal-search':await searchTerminalNodes();break;
+      case 'terminal-next':if(current.nextCursor){current.cursors.push(current.cursor);await searchTerminalNodes(false,current.nextCursor);}break;
+      case 'terminal-previous':if(current.cursors.length){const cursor=current.cursors.pop();await searchTerminalNodes(true,cursor); }break;
+    }
+  }
+  async function loadNodeTerminal(){
+    if(!terminalAuthorized()){renderPage('node-terminal',panel('Node Terminal','Administrator access is required.','<p>Terminal access has not been granted to this account. No node connection has been opened.</p>'));return;}
+    if(nodeTerminal)await stopNodeTerminal('navigation');
+    const generation=++nodeTerminalGeneration;nodeTerminal={generation,screen:new NodeTerminalScreen(),nodes:[],selected:null,session:null,cursors:[],cursor:'',nextCursor:'',searchRequest:0,outputSequence:0,inputSequence:0,pendingInput:'',inputFailed:false,failures:0,abort:new AbortController()};
+    renderPage('node-terminal',panel('Node Terminal','An interactive Linux PTY over the existing authenticated NLI connection. No incoming SSH port or SSH key is required.',`<p>Connect only to a node you administer. Commands run under that host’s configured terminal account and can change anything that account is permitted to change.</p><p id="terminal-privilege-mode"></p><p>Session access is reauthenticated and audited. Terminal output is kept only in a bounded live buffer; it is not supplied to AI or saved in this browser. Leaving this workspace disconnects the session.</p><p>Use the dedicated operator account configured on the host. Input-file writes are limited to the canonical NLI input directory; service controls use only the explicitly allowed NLI sudo commands. Restarting a controller or client-control service may disconnect this terminal; reconnect after the node is online.</p><a href="#ai-guidance">Open AI Guidance &amp; Revisions</a>`)+panel('1 · Select an enrolled node','Search by node ID, friendly name, hostname or group. Only one selected node is connected.',`<label class="field">Find node<input id="terminal-node-search" type="search" maxlength="200" placeholder="e.g. IMAP, mail-node-1 or a node ID"></label><div class="actions"><button type="button" class="secondary" data-action="terminal-search">Search nodes</button><button id="terminal-previous" type="button" class="secondary" data-action="terminal-previous" disabled>Previous nodes</button><button id="terminal-next" type="button" class="secondary" data-action="terminal-next" disabled>Next nodes</button></div><p id="terminal-search-status" role="status"></p><p id="terminal-node-count" class="hint"></p><div id="terminal-node-list"></div>`)+panel('2 · Confirm and connect','Host access must be explicitly enabled and the node must support the R10 terminal protocol.',`<p id="terminal-selected-node">No node selected.</p><form id="terminal-connect-form" class="form-grid"><label class="field">NLI login password<input name="password" type="password" autocomplete="current-password" required maxlength="1024"></label><label class="field">Session reason<input name="reason" required minlength="3" maxlength="200" placeholder="e.g. Manager demonstration"></label><div class="actions wide"><button id="terminal-connect-button" type="submit" class="primary" data-action="terminal-connect" disabled>Connect terminal</button></div></form>`)+panel('3 · Linux terminal','The host shell handles command editing, working directories and pipelines. Ctrl+C interrupts a running foreground command.',`<p id="terminal-session-detail">No terminal session is connected.</p><p id="terminal-status" role="status">Select a node and confirm access to begin.</p><div class="node-terminal-frame"><pre id="terminal-screen" class="node-terminal-screen" aria-label="Node terminal output" tabindex="0"></pre><label class="node-terminal-keyboard-label">Terminal keyboard input<textarea id="terminal-keyboard" class="node-terminal-keyboard" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Terminal keyboard input" disabled placeholder="Connect, then type here. Input is sent to the remote shell."></textarea></label></div><p id="terminal-output-notice" role="status" class="hint"></p><div class="actions"><button type="button" class="secondary" data-action="terminal-interrupt" disabled>Interrupt · Ctrl+C</button><button type="button" class="danger" data-action="terminal-disconnect" disabled>Disconnect terminal</button><button type="button" class="secondary" data-action="terminal-clear">Clear visible output</button><button type="button" class="secondary" data-action="terminal-copy">Copy visible output</button></div><p class="hint">Use the keyboard input for Enter, arrows, Tab and control keys. Ctrl+C/Ctrl+V in the output area retain normal browser selection/copy behavior. ANSI control sequences are rendered as bounded plain text; OSC links and clipboard commands are ignored.</p>`)+panel('Demo command examples','Choosing an example only prepares text locally. Paste to an idle shell, inspect it, then press Enter to execute.',`<div class="actions terminal-examples"><button type="button" class="secondary small" data-action="terminal-example" data-command="pwd">Show working directory</button><button type="button" class="secondary small" data-action="terminal-example" data-command="ls -lah /var/log/nli/input /var/log/nli/output">List NLI log paths</button><button type="button" class="secondary small" data-action="terminal-example" data-command="systemctl status nli-agent.service nli-client-control.service --no-pager">Client service status</button><button type="button" class="secondary small" data-action="terminal-example" data-command="systemctl status nli-controller-agent.service --no-pager">Controller service status</button><button type="button" class="secondary small" data-action="terminal-example" data-command="journalctl -u nli-agent.service -n 50 --no-pager">Read client journal</button><button type="button" class="secondary small" data-action="terminal-example" data-command="journalctl -u nli-controller-agent.service -f">Follow controller journal</button><button type="button" class="secondary small" data-action="terminal-example" data-command="ls -lah /var/lib/nli/parser-assets /var/lib/nli-controller/parser-assets">Inspect parser paths</button><button type="button" class="secondary small" data-action="terminal-example" data-command="cd /var/log/nli/input &amp;&amp; vi auto.log">Edit an input file</button><button type="button" class="secondary small" data-action="terminal-example" data-command="wc -l /var/log/nli/input/auto.log">Count input lines</button><button type="button" class="secondary small" data-action="terminal-example" data-command="sudo systemctl restart nli-agent.service">Restart parsing agent</button><button type="button" class="secondary small" data-action="terminal-example" data-command="sudo systemctl restart nli-client-control.service">Restart client control</button><button type="button" class="secondary small" data-action="terminal-example" data-command="sudo systemctl restart nli-controller-agent.service">Restart controller</button><button type="button" class="secondary small" data-action="terminal-example" data-command="sudo systemctl daemon-reload">Reload service definitions</button></div><label class="field">Prepared example<input id="terminal-prepared-command" readonly></label><button type="button" class="secondary" data-action="terminal-paste-example" disabled>Paste example · no Enter</button><p class="hint">Permissions and paths depend on the selected host. Ctrl+C stops a following journal. Editing, truncating or deleting input files changes node data. No example is executed automatically.</p>`));
+    const current=nodeTerminal,form=el('terminal-connect-form'),keyboard=el('terminal-keyboard');
+    el('terminal-node-search').addEventListener('input',()=>{clearTimeout(terminalSearchTimer);terminalSearchTimer=setTimeout(()=>searchTerminalNodes(),300);});
+    el('terminal-node-list').addEventListener('change',event=>{if(event.target.name!=='terminal-node'||(terminalIsActive(current.session)||current.opening))return;current.selected=current.nodes.find(node=>terminalNodeID(node)===event.target.value);el('terminal-selected-node').textContent=current.selected?`${terminalNodeName(current.selected)} · ${terminalNodeID(current.selected)} · ${current.selected.role||'client'}`:'No node selected.';terminalSessionState();});
+    keyboard.addEventListener('beforeinput',event=>{if(event.isComposing)return;event.preventDefault();if(event.inputType==='insertText')queueTerminalInput(event.data||'');else if(event.inputType==='insertLineBreak')queueTerminalInput('\r');else if(event.inputType==='deleteContentBackward')queueTerminalInput('\x7f');keyboard.value='';});
+    keyboard.addEventListener('compositionend',event=>{queueTerminalInput(event.data||'');keyboard.value='';});
+    keyboard.addEventListener('paste',event=>{event.preventDefault();const text=event.clipboardData?.getData('text/plain')||'';queueTerminalInput(current.screen.bracketedPaste?'\x1b[200~'+text+'\x1b[201~':text);keyboard.value='';});
+    keyboard.addEventListener('keydown',event=>{
+      if(event.key==='Tab'&&event.shiftKey)return;
+      if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='v')return;
+      if(event.ctrlKey&&event.key.toLowerCase()==='c'&&(event.shiftKey||window.getSelection()?.toString()))return;
+      let data='';const codes={Enter:'\r',Backspace:'\x7f',Tab:'\t',Escape:'\x1b',ArrowUp:'\x1b[A',ArrowDown:'\x1b[B',ArrowRight:'\x1b[C',ArrowLeft:'\x1b[D',Home:'\x1b[H',End:'\x1b[F',Delete:'\x1b[3~',PageUp:'\x1b[5~',PageDown:'\x1b[6~'};
+      if(event.ctrlKey&&!event.altKey&&!event.metaKey&&event.key.length===1){const code=event.key.toUpperCase().charCodeAt(0);if(code>=64&&code<=95)data=String.fromCharCode(code-64);}
+      else if(event.altKey&&!event.ctrlKey&&!event.metaKey&&event.key.length===1)data='\x1b'+event.key;
+      else if(!event.metaKey&&!event.altKey)data=codes[event.key]||'';
+      if(data){event.preventDefault();queueTerminalInput(data);}
+    });
+    el('terminal-screen').addEventListener('click',()=>keyboard.focus());
+    current.resizeObserver=new ResizeObserver(entries=>{const box=entries[0]?.contentRect,width=box?.width||800,lineHeight=Number.parseFloat(getComputedStyle(el('terminal-screen')).lineHeight)||20.3,cols=Math.max(20,Math.min(300,Math.floor(width/8.4))),rows=Math.max(5,Math.min(100,Math.floor((box?.height||440)/lineHeight)));current.screen.resize(cols,rows);clearTimeout(current.resizeTimer);if(current.session&&terminalIsActive(current.session))current.resizeTimer=setTimeout(()=>api(`/terminal/sessions/${encodeURIComponent(current.session.id)}/resize`,{method:'POST',body:{cols,rows},timeoutMs:5000}).catch(error=>terminalStatus(requestFailure(error))),150);});
+    current.resizeObserver.observe(el('terminal-screen'));await searchTerminalNodes();
+  }
+
   async function loadLogPolicy(kind){
     const generation=++logPolicyLoadGeneration,[path,title,example]=CONFIG[kind],input=kind==='selective-input';
     const reads=await Promise.allSettled([api(path,{timeoutMs:10000}),api('/parser-sync/runtime',{timeoutMs:10000}),api('/parsers',{timeoutMs:10000}),can('fleet:read')?api('/fleet/sync',{timeoutMs:10000}):Promise.resolve({nodes:[]})]);
@@ -3692,7 +3910,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     for(const form of page.querySelectorAll('#parser-helper-form,#gprs-parser-helper-form,#parser-workspace-form'))if(!form.querySelector('[data-ai-mapping-host]'))form.insertAdjacentHTML('beforeend',mappingAIControls(false));
     if(['studio','regex'].includes(state.page)&&!page.querySelector('[data-ai-mapping-host]')){page.insertAdjacentHTML('beforeend',mappingAIControls(false));const host=page.querySelector('[data-ai-mapping-host]');host.insertAdjacentHTML('afterbegin','<label class="field">Exact raw log for optional AI mapping proposal<textarea data-ai-mapping-raw rows="3" placeholder="Paste an authorized raw record; existing regex/template settings are preserved."></textarea></label>');}
   }
-  function nfiDecorate(){setupMappingAIControls();if(!el('qrw-field-rows'))return;labelMappingControls(page);if(state.page==='field-mapping'){const count=page.querySelectorAll('.grid.cols-4 .metric-value')[1];if(count)count.textContent=number(state.qrwFields.length);}for(const control of page.querySelectorAll('.qrw-field-editor input,.qrw-field-editor select,.nfi-operation input,.nfi-operation select')){if(control.dataset.nfiHelp)continue;control.dataset.nfiHelp='true';const help=nfiHelpFor(control),button=document.createElement('button');button.type='button';button.className='nfi-info';button.dataset.action='nfi-help';button.dataset.helpKey=control.dataset.qrwKey||control.dataset.qrwOpKey||control.id;button.dataset.helpTitle=help.title;button.dataset.helpDescription=help.description;button.dataset.helpExample=help.example;button.title=`${help.title}: ${help.description} Example: ${help.example}`;button.setAttribute('aria-label',`Information: ${help.title}`);button.setAttribute('aria-description',button.title);button.dataset.tooltip=button.title;button.textContent='ⓘ';control.insertAdjacentElement('afterend',button);}nfiGuideRefresh();}
+  function nfiDecorate(){if(state.page==='node-terminal')return;setupMappingAIControls();if(!el('qrw-field-rows'))return;labelMappingControls(page);if(state.page==='field-mapping'){const count=page.querySelectorAll('.grid.cols-4 .metric-value')[1];if(count)count.textContent=number(state.qrwFields.length);}for(const control of page.querySelectorAll('.qrw-field-editor input,.qrw-field-editor select,.nfi-operation input,.nfi-operation select')){if(control.dataset.nfiHelp)continue;control.dataset.nfiHelp='true';const help=nfiHelpFor(control),button=document.createElement('button');button.type='button';button.className='nfi-info';button.dataset.action='nfi-help';button.dataset.helpKey=control.dataset.qrwKey||control.dataset.qrwOpKey||control.id;button.dataset.helpTitle=help.title;button.dataset.helpDescription=help.description;button.dataset.helpExample=help.example;button.title=`${help.title}: ${help.description} Example: ${help.example}`;button.setAttribute('aria-label',`Information: ${help.title}`);button.setAttribute('aria-description',button.title);button.dataset.tooltip=button.title;button.textContent='ⓘ';control.insertAdjacentElement('afterend',button);}nfiGuideRefresh();}
   let nfiLiveTimer;
   function nfiScheduleLive() {
     if(state.page==='quarantine-wizard'||state.page==='assurance')state.gprsPreview=null;
@@ -3760,7 +3978,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     page.insertAdjacentHTML('afterbegin','<div class="dashboard-intro"><div><p class="eyebrow">UPES recovery · governed parser lifecycle</p><h1>Quarantine Resolution Wizard</h1><p>Resolve retained parsing failures in one nine-stage workspace while the current production parser remains authoritative.</p></div></div>');
     page.dataset.page='quarantine-wizard';setupQRWStepPanels(gprs||page);
   }
-  const LOADERS = { 'selective-input':()=>loadLogPolicy('selective-input'), 'output-fields':()=>loadLogPolicy('output-fields'), 'sample-history':loadSampleHistory, 'header-templates':()=>loadConfig('header-templates'), 'kv-templates':()=>loadConfig('kv-templates'), 'reference-ai':loadReferenceAI, 'building-blocks':loadBuildingBlocks, 'field-mapping':loadFieldMapping, operations:loadOperations, monitoring:async()=>renderMonitoring(), 'sync-fabric':async()=>renderSyncFabric(), 'nhle-monitor':async()=>renderSubsystemPage('nhle-monitor'), 'napi-monitor':async()=>renderSubsystemPage('napi-monitor'), 'nal-monitor':async()=>renderSubsystemPage('nal-monitor'), upes:loadUPES, nupire:loadNupire, assurance:loadAssurance, 'quarantine-wizard':loadQuarantineWizard, 'parser-workspace':loadParserWorkspace, 'field-integrity':loadFieldIntegrity, fleet:loadFleet, 'parser-sync':loadParserSync, clients:loadClientManagement, controller:loadControllerManagement, parsers:loadParsers, migration:loadMigration, 'input-paths':loadInputPaths, kv:()=>loadConfig('kv'), static:()=>loadConfig('static'), projection:()=>loadConfig('projection'), studio:()=>loadConfig('studio'), regex:()=>loadConfig('regex'), knownkeys:()=>loadConfig('knownkeys'), semantic:()=>loadConfig('semantic'), 'engine-network':()=>loadDomainEngine('engine-network'), 'engine-url':()=>loadDomainEngine('engine-url'), 'engine-email':()=>loadDomainEngine('engine-email'), 'engine-subject':()=>loadDomainEngine('engine-subject'), outputs:loadOutputEngine, metadata:loadMetadata, streams:loadStreams, unknowns:loadUnknowns, 'controller-gateway':loadControllerGateway, 'ai-privacy':loadAIPrivacy, 'api-monitor':loadAPIMonitor, latency:loadLatency, drift:loadDrift, performance:loadPerformance, rollouts:loadRollouts, 'backup-restore':loadBackupRestore, artifacts:loadArtifacts, security:loadSecurity, system:loadSystem, communications:loadCommunicationStatus, notifications:loadNotifications, ai:loadAIProvider,
+  const LOADERS = { 'node-terminal':loadNodeTerminal, 'selective-input':()=>loadLogPolicy('selective-input'), 'output-fields':()=>loadLogPolicy('output-fields'), 'sample-history':loadSampleHistory, 'header-templates':()=>loadConfig('header-templates'), 'kv-templates':()=>loadConfig('kv-templates'), 'reference-ai':loadReferenceAI, 'building-blocks':loadBuildingBlocks, 'field-mapping':loadFieldMapping, operations:loadOperations, monitoring:async()=>renderMonitoring(), 'sync-fabric':async()=>renderSyncFabric(), 'nhle-monitor':async()=>renderSubsystemPage('nhle-monitor'), 'napi-monitor':async()=>renderSubsystemPage('napi-monitor'), 'nal-monitor':async()=>renderSubsystemPage('nal-monitor'), upes:loadUPES, nupire:loadNupire, assurance:loadAssurance, 'quarantine-wizard':loadQuarantineWizard, 'parser-workspace':loadParserWorkspace, 'field-integrity':loadFieldIntegrity, fleet:loadFleet, 'parser-sync':loadParserSync, clients:loadClientManagement, controller:loadControllerManagement, parsers:loadParsers, migration:loadMigration, 'input-paths':loadInputPaths, kv:()=>loadConfig('kv'), static:()=>loadConfig('static'), projection:()=>loadConfig('projection'), studio:()=>loadConfig('studio'), regex:()=>loadConfig('regex'), knownkeys:()=>loadConfig('knownkeys'), semantic:()=>loadConfig('semantic'), 'engine-network':()=>loadDomainEngine('engine-network'), 'engine-url':()=>loadDomainEngine('engine-url'), 'engine-email':()=>loadDomainEngine('engine-email'), 'engine-subject':()=>loadDomainEngine('engine-subject'), outputs:loadOutputEngine, metadata:loadMetadata, streams:loadStreams, unknowns:loadUnknowns, 'controller-gateway':loadControllerGateway, 'ai-privacy':loadAIPrivacy, 'api-monitor':loadAPIMonitor, latency:loadLatency, drift:loadDrift, performance:loadPerformance, rollouts:loadRollouts, 'backup-restore':loadBackupRestore, artifacts:loadArtifacts, security:loadSecurity, system:loadSystem, communications:loadCommunicationStatus, notifications:loadNotifications, ai:loadAIProvider,
     'ai-guidance':()=>window.NLIAIGuidance.render({page,api,esc,pretty,notify,can,isCurrent:()=>state.page==='ai-guidance'&&!!state.user}),
   };
 
@@ -3803,6 +4021,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     const data=formObject(form);
     if (!can(FORM_PERMISSIONS[form.id])) throw new Error('This action requires an authorized role.');
     switch(form.getAttribute('id')){
+      case 'terminal-connect-form': {await connectNodeTerminal();break;}
       case 'bundle-restore-form': {
         const recovery = state.recovery;
         const backup = recovery?.backups.find(item => item.id === data.backup_id);
@@ -3990,6 +4209,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
 
   async function action(button) {
     const id=button.dataset.id, value=button.dataset.value;
+    if(button.dataset.action?.startsWith('terminal-'))return nodeTerminalAction(button);
     if (/^(bundle-|parser-workspace-)/.test(button.dataset.action) && !can(actionPermission(button))) throw new Error('This action requires an authorized role.');
     if(button.hasAttribute?.('data-map-sample')&&!can('assurance:run'))throw new Error('Mapping requires Assurance run access.');
     if(button.dataset.action==='parser-helper-validate'){
@@ -5014,7 +5234,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
     source.onerror=()=>{if(!state.user)return;state.streamMode='reconnecting';el('stream-state').innerHTML='<i></i>Reconnecting · recovery active';state.streamFailures++;source.close();state.streamSource=null;pollCanonicalSnapshot('event stream interrupted');if(state.streamReconnectTimer)clearTimeout(state.streamReconnectTimer);const delay=Math.min(1000*(2**Math.min(state.streamFailures-1,5)),30000);state.streamReconnectTimer=setTimeout(()=>{state.streamReconnectTimer=null;if(state.user)connectStream();},delay);renderSyncSubscriber({force:true});};
   }
 
-  async function signOut(notify=true){logPolicyPreview=null;logPolicyLoadGeneration++;if(isLogPolicyKind(state.page))page.replaceChildren();clearClientDirectory();state.sampleHistoryEnabled=false;inFlightReads.clear();state.navigationHistory=[];if(state.socket){state.socket.onclose=null;state.socket.close();state.socket=null;}if(state.streamSource){state.streamSource.close();state.streamSource=null;}if(state.streamPollTimer){clearInterval(state.streamPollTimer);state.streamPollTimer=null;}if(state.streamReconnectTimer){clearTimeout(state.streamReconnectTimer);state.streamReconnectTimer=null;}state.sync.pollController?.abort();state.user=null;favoriteRequest++;favoriteSaving=false;if(notify){try{await api('/auth/logout',{method:'POST',body:{}});}catch{}}state.csrf='';state.lastAssurance=null;state.quarantineDiagnosis=null;state.gprsManual=null;state.blockBoard=null;state.blockSeed='';state.qrwReplayAcceptedIds=[];state.gprsSamples=[];state.gprsPreview=null;state.qrwFields=[];state.nfiRaw='';state.nfiCorpus='';state.nfiService='auto';state.nfiScopePattern='';state.nfiGlobalScope=false;state.nfiEditId='';state.nfiName='';state.nfiVersion='';state.nfiParser=null;state.nfiCases=[];state.nfiProfiles=[];state.nfiDesired=null;state.aiSelectedProviderId='';state.aiProviderTemplates=[];state.nfiMappingPriority=0;state.nfiSenseMode='';state.nfiExpert=false;state.nfiGuideStep=undefined;state.nfiCandidateValidated=null;state.nfiPreviewed=false;clearTimeout(nfiLiveTimer);nfiAnalysisController?.abort();qrwControllerPreview=null;state.controllerNotifications=[];state.notifications=[];renderNotificationBell();sessionStorage.removeItem('nli.qrw.mapping-draft');sessionStorage.removeItem('nli.qrw.selected-record');state.live=[];state.polling=false;state.sync={snapshot:null,history:[],browserAppliedAt:0,browserDelayMs:null,lastReceivedAt:0,pollInFlight:false,pollController:null,pollFailures:0,rejectedUpdates:0,connectionStartedAt:0,resyncing:false,renderedSignature:null,renderScheduled:false};el('login-form').querySelector('[name=password]').value='';el('app-view').hidden=true;el('auth-view').hidden=false;}
+  async function signOut(notify=true){await stopNodeTerminal('signout');logPolicyPreview=null;logPolicyLoadGeneration++;if(isLogPolicyKind(state.page))page.replaceChildren();clearClientDirectory();state.sampleHistoryEnabled=false;inFlightReads.clear();state.navigationHistory=[];if(state.socket){state.socket.onclose=null;state.socket.close();state.socket=null;}if(state.streamSource){state.streamSource.close();state.streamSource=null;}if(state.streamPollTimer){clearInterval(state.streamPollTimer);state.streamPollTimer=null;}if(state.streamReconnectTimer){clearTimeout(state.streamReconnectTimer);state.streamReconnectTimer=null;}state.sync.pollController?.abort();state.user=null;favoriteRequest++;favoriteSaving=false;if(notify){try{await api('/auth/logout',{method:'POST',body:{}});}catch{}}state.csrf='';state.lastAssurance=null;state.quarantineDiagnosis=null;state.gprsManual=null;state.blockBoard=null;state.blockSeed='';state.qrwReplayAcceptedIds=[];state.gprsSamples=[];state.gprsPreview=null;state.qrwFields=[];state.nfiRaw='';state.nfiCorpus='';state.nfiService='auto';state.nfiScopePattern='';state.nfiGlobalScope=false;state.nfiEditId='';state.nfiName='';state.nfiVersion='';state.nfiParser=null;state.nfiCases=[];state.nfiProfiles=[];state.nfiDesired=null;state.aiSelectedProviderId='';state.aiProviderTemplates=[];state.nfiMappingPriority=0;state.nfiSenseMode='';state.nfiExpert=false;state.nfiGuideStep=undefined;state.nfiCandidateValidated=null;state.nfiPreviewed=false;clearTimeout(nfiLiveTimer);nfiAnalysisController?.abort();qrwControllerPreview=null;state.controllerNotifications=[];state.notifications=[];renderNotificationBell();sessionStorage.removeItem('nli.qrw.mapping-draft');sessionStorage.removeItem('nli.qrw.selected-record');state.live=[];state.polling=false;state.sync={snapshot:null,history:[],browserAppliedAt:0,browserDelayMs:null,lastReceivedAt:0,pollInFlight:false,pollController:null,pollFailures:0,rejectedUpdates:0,connectionStartedAt:0,resyncing:false,renderedSignature:null,renderScheduled:false};el('login-form').querySelector('[name=password]').value='';el('app-view').hidden=true;el('auth-view').hidden=false;}
   let browserHeartbeatRetryAt = 0;
   let browserHeartbeatDelay = 5000;
   async function sendBrowserHeartbeat(){
@@ -5125,7 +5345,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       else if(inlineParser)setParserWorkspaceStatus(form,requestFailure(error),null,true);
       else progress.fail(requestFailure(error));
     }
-    finally{progress?.clear();if(button)button.disabled=false;}
+    finally{progress?.clear();if(button)button.disabled=false;if(form.id==='terminal-connect-form')terminalSessionState();}
   });
   page.addEventListener('input',()=>{for(const host of page.querySelectorAll('[data-ai-mapping-host]')){if(host.aiProposal&&mappingAIRaw(host)!==host.aiProposal.raw){host.querySelector('[data-ai-mapping-proposal]').hidden=true;host.querySelector('[data-ai-mapping-status]').textContent='Raw evidence changed; request a fresh AI proposal before import.';}}});
   page.addEventListener('reset',event=>{
@@ -5140,12 +5360,12 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   });
   const AI_REQUEST_ACTIONS=new Set(['workspace-ai-run','workspace-ai-auto','mapping-ai-suggest','mapping-ai-readiness','nfi-ai-status','request-ai-proposal','test-ai-provider']);
   page.addEventListener('click',async event=>{const button=event.target.closest('[data-action]');if(!button)return;
-    if(button.type==='submit'&&['client-directory-save-name','client-directory-save-group','client-action-request'].includes(button.dataset.action))return;
+    if(button.type==='submit'&&['client-directory-save-name','client-directory-save-group','client-action-request','terminal-connect'].includes(button.dataset.action))return;
     const aiPending=button.hasAttribute('data-map-sample')||AI_REQUEST_ACTIONS.has(button.dataset.action);
     if(aiPending){button.dataset.aiPending='true';button.setAttribute('aria-busy','true');}
     button.disabled=true;
     try{await action(button);}catch(error){const form=button.closest('#parser-workspace-form');if(form)setParserWorkspaceStatus(form,requestFailure(error),null,true);else toast(requestFailure(error),true);}finally{
-    button.disabled=false;
+    button.disabled=false;if(button.dataset.action?.startsWith('terminal-'))terminalSessionState();
     if(aiPending){delete button.dataset.aiPending;button.removeAttribute('aria-busy');}
     if(['qrw-token-field','qrw-selection-field','qrw-add-field','qrw-field-duplicate','qrw-field-delete','qrw-field-up','qrw-field-down','qrw-operation-add','qrw-operation-delete','qrw-operation-up','qrw-suggest-fields','qrw-import-plan'].includes(button.dataset.action))nfiScheduleLive();queueMicrotask(nfiDecorate);}});
   const updateChartReadout=event=>{const point=event.target.closest?.('[data-chart-category],[data-chart-summary]');if(!point)return;const chart=point.closest('.multi-chart,.stacked-volume'),target=chart?.querySelector('.chart-hover-readout');if(!target)return;target.textContent=point.dataset.chartSummary||`${point.dataset.chartCategory} · ${countText(point.dataset.chartValue)} ${point.dataset.chartUnit} · ${point.dataset.chartTime}`;};
@@ -5288,7 +5508,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   setInterval(()=>refreshDashboardHistoryInBackground(),5000);
   // Reconcile the current workspace while preserving any form the operator has started editing.
   setInterval(async()=>{
-    if(!state.user || state.loadingPage || document.hidden || page.dataset.dirty==='true' || !LOADERS[state.page] || SYNC_PAGES.has(state.page) || ['header-templates','kv-templates','parser-workspace','backup-restore','ai-guidance'].includes(state.page))return;
+    if(!state.user || state.loadingPage || document.hidden || page.dataset.dirty==='true' || !LOADERS[state.page] || SYNC_PAGES.has(state.page) || ['header-templates','kv-templates','parser-workspace','backup-restore','ai-guidance','node-terminal'].includes(state.page))return;
     const refreshAge=state.page==='ai'?5000:(state.page==='operations'?15000:30000);
     if(state.loadedAt && Date.now()-state.loadedAt<refreshAge)return;
     const current=state.page,tab=selectedWorkspaceTab();

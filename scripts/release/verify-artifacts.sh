@@ -12,6 +12,7 @@ controller="$ARTIFACT_DIR/nli_controller_agent_ver23.rpm"
 web="$ARTIFACT_DIR/webview_ver23.zip"
 webapp="$ARTIFACT_DIR/webapp_ver23.zip"
 operator_files=(
+  "$ARTIFACT_DIR/enable-node-terminal-ver23.sh"
   "$ARTIFACT_DIR/install-controller-ver23.sh"
   "$ARTIFACT_DIR/install-client-ver23.sh"
   "$ARTIFACT_DIR/uninstall-controller-ver23.sh"
@@ -181,7 +182,7 @@ assert_normalized_payload "$controller" /usr/sbin/nli-admin-reset "$ROOT/scripts
 assert_normalized_payload "$controller" /usr/lib/systemd/system/nli-controller-agent.service "$ROOT/packaging/systemd/nli-controller-agent.service"
 assert_normalized_payload "$controller" /usr/lib/systemd/system/nli-controller-bootstrap.service "$ROOT/packaging/systemd/nli-controller-bootstrap.service"
 
-for evidence in SHA256SUMS RELEASE_MANIFEST.json SBOM.spdx.json provenance.intoto.json SOURCE_BINARY_PROVENANCE.txt SOURCE_REVISION WEBVIEW_SHA256SUMS BENCHMARKS.txt INSTALLATION_AND_CONFIGURATION.md WEBAPP_OPERATOR_AND_PARSER_GUIDE.md PARSER_CATALOG.md V22_19_1_RELEASE_NOTES.md All_NLI_features.md V21_R1_RELEASE_NOTES.md V21_R1_TEST_RESULTS.md V21_R2_RELEASE_NOTES.md V21_R2_TEST_RESULTS.md V21_R3_RELEASE_NOTES.md V21_R3_TEST_RESULTS.md V21_R4_RELEASE_NOTES.md V21_R4_TEST_RESULTS.md V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md V21_R5_RELEASE_NOTES.md V21_R5_TEST_RESULTS.md V21_R6_RELEASE_NOTES.md V21_R6_TEST_RESULTS.md V21_R7_RELEASE_NOTES.md V21_R7_TEST_RESULTS.md V21_R7_MAPPING_DESIGN.md V21_R7_FIELD_MAPPING_GUIDE.md V21_R8_RELEASE_NOTES.md V21_R8_TEST_RESULTS.md V21_R8_DESIGN_ENGINE_DESIGN.md V21_R8_DESIGN_ENGINE_GUIDE.md V21_R8_OUTPUT_ACCOUNTING_GUIDE.md V21_R8_AI_PROVIDER_GUIDE.md V21_R9_RELEASE_NOTES.md V21_R9_TEST_RESULTS.md V21_R9_FIELD_MAPPING_GUIDE.md V21_R10_RELEASE_NOTES.md V21_R10_TEST_RESULTS.md V21_R10_MANAGER_DEMO.md nli-output-audit.py VER21_IMPLEMENTATION_PLAN.md SAMPLE_FIELD_ACCOUNTING.json RELEASE_ID; do
+for evidence in enable-node-terminal-ver23.sh V23_R10_RELEASE_NOTES.md SHA256SUMS RELEASE_MANIFEST.json SBOM.spdx.json provenance.intoto.json SOURCE_BINARY_PROVENANCE.txt SOURCE_REVISION WEBVIEW_SHA256SUMS BENCHMARKS.txt INSTALLATION_AND_CONFIGURATION.md WEBAPP_OPERATOR_AND_PARSER_GUIDE.md PARSER_CATALOG.md V22_19_1_RELEASE_NOTES.md All_NLI_features.md V21_R1_RELEASE_NOTES.md V21_R1_TEST_RESULTS.md V21_R2_RELEASE_NOTES.md V21_R2_TEST_RESULTS.md V21_R3_RELEASE_NOTES.md V21_R3_TEST_RESULTS.md V21_R4_RELEASE_NOTES.md V21_R4_TEST_RESULTS.md V21_R4_SURGICAL_DIAGNOSTICS_AND_VERIFICATION.md V21_R5_RELEASE_NOTES.md V21_R5_TEST_RESULTS.md V21_R6_RELEASE_NOTES.md V21_R6_TEST_RESULTS.md V21_R7_RELEASE_NOTES.md V21_R7_TEST_RESULTS.md V21_R7_MAPPING_DESIGN.md V21_R7_FIELD_MAPPING_GUIDE.md V21_R8_RELEASE_NOTES.md V21_R8_TEST_RESULTS.md V21_R8_DESIGN_ENGINE_DESIGN.md V21_R8_DESIGN_ENGINE_GUIDE.md V21_R8_OUTPUT_ACCOUNTING_GUIDE.md V21_R8_AI_PROVIDER_GUIDE.md V21_R9_RELEASE_NOTES.md V21_R9_TEST_RESULTS.md V21_R9_FIELD_MAPPING_GUIDE.md V21_R10_RELEASE_NOTES.md V21_R10_TEST_RESULTS.md V21_R10_MANAGER_DEMO.md nli-output-audit.py VER21_IMPLEMENTATION_PLAN.md SAMPLE_FIELD_ACCOUNTING.json RELEASE_ID; do
   [[ -s "$ARTIFACT_DIR/$evidence" ]] || fail "missing $evidence"
 done
 python3 - "$ARTIFACT_DIR/SAMPLE_FIELD_ACCOUNTING.json" <<'PY'
@@ -203,9 +204,9 @@ grep -q '^Benchmark' "$ARTIFACT_DIR/BENCHMARKS.txt" || fail "BENCHMARKS.txt cont
 (cd "$ARTIFACT_DIR" && sha256sum -c SHA256SUMS)
 revision=$(tr -d '\r\n' <"$ARTIFACT_DIR/SOURCE_REVISION")
 [[ $revision =~ ^[0-9a-f]{40}$ ]] || fail "invalid SOURCE_REVISION"
-[[ $(grep -c '^=== .* ===$' "$ARTIFACT_DIR/SOURCE_BINARY_PROVENANCE.txt") -eq 5 ]] || fail "expected five binary provenance records"
-[[ $(grep -Fc $'\tbuild\tvcs.revision='"$revision" "$ARTIFACT_DIR/SOURCE_BINARY_PROVENANCE.txt") -eq 5 ]] || fail "binary revisions do not match SOURCE_REVISION"
-[[ $(grep -Fc $'\tbuild\tvcs.modified=false' "$ARTIFACT_DIR/SOURCE_BINARY_PROVENANCE.txt") -eq 5 ]] || fail "dirty binary provenance found"
+[[ $(grep -c '^=== .* ===$' "$ARTIFACT_DIR/SOURCE_BINARY_PROVENANCE.txt") -eq 6 ]] || fail "expected six binary provenance records"
+[[ $(grep -Fc $'\tbuild\tvcs.revision='"$revision" "$ARTIFACT_DIR/SOURCE_BINARY_PROVENANCE.txt") -eq 6 ]] || fail "binary revisions do not match SOURCE_REVISION"
+[[ $(grep -Fc $'\tbuild\tvcs.modified=false' "$ARTIFACT_DIR/SOURCE_BINARY_PROVENANCE.txt") -eq 6 ]] || fail "dirty binary provenance found"
 grep -Fq $'\tmod\t'"$NLI_MODULE" "$ARTIFACT_DIR/SOURCE_BINARY_PROVENANCE.txt" || fail "binaries do not declare module $NLI_MODULE"
 if grep -Eq $'\tmod\tnexora\.local/nli\t' "$ARTIFACT_DIR/SOURCE_BINARY_PROVENANCE.txt"; then
   fail "v4 module provenance found"
@@ -214,4 +215,17 @@ for document in "$ARTIFACT_DIR/RELEASE_MANIFEST.json" "$ARTIFACT_DIR/SBOM.spdx.j
   grep -Eq '^(\{|\[)' "$document" || fail "invalid JSON document header: $(basename "$document")"
 done
 
+
+assert_entry "$client" /usr/bin/nli-node-terminal 0100755 root root
+assert_entry "$client" /usr/lib/systemd/system/nli-node-terminal.service 0100644 root root
+assert_normalized_payload "$client" /usr/lib/systemd/system/nli-node-terminal.service "$ROOT/packaging/systemd/nli-node-terminal.service"
+
+assert_entry "$controller" /usr/bin/nli-node-terminal 0100755 root root
+assert_entry "$controller" /usr/lib/systemd/system/nli-node-terminal.service 0100644 root root
+assert_normalized_payload "$controller" /usr/lib/systemd/system/nli-node-terminal.service "$ROOT/packaging/systemd/nli-node-terminal.service"
+
+assert_entry "$client" /usr/sbin/nli-node-terminal-setup 0100755 root root
+assert_normalized_payload "$client" /usr/sbin/nli-node-terminal-setup "$ROOT/scripts/enable-node-terminal-ver23.sh"
+assert_entry "$controller" /usr/sbin/nli-node-terminal-setup 0100755 root root
+assert_normalized_payload "$controller" /usr/sbin/nli-node-terminal-setup "$ROOT/scripts/enable-node-terminal-ver23.sh"
 echo 'artifact verification: PASS'

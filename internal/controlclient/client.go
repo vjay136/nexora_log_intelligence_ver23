@@ -277,6 +277,8 @@ type Client struct {
 	processGeneration        string
 	syncSequence             atomic.Uint64
 	deliveryMetricsSupported atomic.Bool
+	terminalSupported        atomic.Bool
+	terminalNegotiated       atomic.Bool
 	streamMu                 sync.Mutex
 	lastStreamDigest         [32]byte
 	lastStreamSent           time.Time
@@ -304,6 +306,7 @@ func New(cfg Config, executor Executor) (*Client, error) {
 }
 
 func (c *Client) Run(ctx context.Context) error {
+	go c.runTerminalWorker(ctx)
 	var streamReady atomic.Bool
 	go func() {
 		interval := c.cfg.telemetryInterval()
@@ -603,7 +606,15 @@ func (c *Client) heartbeat(ctx context.Context) error {
 		stripDeliveryMetrics()
 	}
 	var response protocol.HeartbeatResponse
+	if !c.terminalNegotiated.Load() || c.terminalSupported.Load() {
+		terminal := c.localTerminalStatus(ctx)
+		request.Terminal = &terminal
+	}
 	status, err := c.requestJSONStatus(ctx, http.MethodPost, "/api/v1/node/heartbeat", request, &response, nil)
+	if status == http.StatusBadRequest && request.Terminal != nil {
+		request.Terminal = nil
+		status, err = c.requestJSONStatus(ctx, http.MethodPost, "/api/v1/node/heartbeat", request, &response, nil)
+	}
 	if status == http.StatusBadRequest {
 		request.ReleaseID, request.FeatureCapabilities = "", nil
 		request.Metrics.Filtered, request.Metrics.OutputFieldsRemoved = 0, 0
@@ -617,6 +628,8 @@ func (c *Client) heartbeat(ctx context.Context) error {
 	}
 	if err == nil {
 		c.deliveryMetricsSupported.Store(response.DeliveryMetricsSupported)
+		c.terminalSupported.Store(response.TerminalSupported)
+		c.terminalNegotiated.Store(true)
 	}
 	return err
 }

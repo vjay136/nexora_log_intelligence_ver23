@@ -94,6 +94,7 @@ type Config struct {
 }
 
 type Server struct {
+	terminal                 *terminalRelay
 	cfg                      Config
 	startedAt                time.Time
 	auth                     *auth.Store
@@ -280,6 +281,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.terminal = newTerminalRelay(s)
 	s.startNotificationWorker()
 	return s, nil
 }
@@ -462,6 +464,9 @@ func openArtifactBlobStore(cfg Config) (metastore.BlobStore, error) {
 
 func (s *Server) Mux() http.Handler { return s.security.Wrap(s.mux) }
 func (s *Server) Close() error {
+	if s.terminal != nil {
+		s.terminal.shutdown()
+	}
 	var errs []string
 	s.metricIngestMu.Lock()
 	if err := s.metricHistory.flush(); err != nil {
@@ -515,6 +520,10 @@ func (s *Server) registerRoutes() {
 	guard := func(permission string, handler http.HandlerFunc) http.HandlerFunc {
 		return s.security.Require(permission, handler)
 	}
+	s.mux.HandleFunc("/api/v1/terminal/nodes", guard(middleware.PermissionTerminal, s.handleTerminalNodes))
+	s.mux.HandleFunc("/api/v1/terminal/sessions", guard(middleware.PermissionTerminal, s.handleTerminalSessions))
+	s.mux.HandleFunc("/api/v1/terminal/sessions/", guard(middleware.PermissionTerminal, s.handleTerminalSession))
+	s.mux.HandleFunc("/api/v1/node/terminal/exchange", s.handleTerminalExchange)
 	s.mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
 	s.mux.HandleFunc("/api/v1/auth/logout", guard(middleware.PermissionSystemHealth, s.handleLogout))
 	s.mux.HandleFunc("/api/v1/auth/me", guard(middleware.PermissionSystemHealth, s.handleMe))
@@ -726,6 +735,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"username": user.Username, "role": user.Role, "email": user.Email, "expires_in": 86400})
 }
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if s.terminal != nil {
+		s.terminal.logout(extractToken(r))
+	}
 	if r.Method != http.MethodPost {
 		jsonError(w, "POST required", http.StatusMethodNotAllowed)
 		return
@@ -911,7 +923,10 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 			s.queueNewPolicyCapableClient(r.Context(), request.NodeID)
 		}
 	}
-	jsonOK(w, protocol.HeartbeatResponse{Status: "ok", DeliveryMetricsSupported: true})
+	if s.terminal != nil && request.Terminal != nil {
+		s.terminal.observe(request.NodeID, *request.Terminal)
+	}
+	jsonOK(w, protocol.HeartbeatResponse{Status: "ok", DeliveryMetricsSupported: true, TerminalSupported: true})
 }
 
 func (s *Server) handleNodeStreamTelemetry(w http.ResponseWriter, r *http.Request) {

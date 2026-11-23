@@ -16,24 +16,26 @@ class EvidenceGeneratorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             artifacts = pathlib.Path(directory)
             names = (
-                "nli_client_ver22.rpm",
-                "nli_controller_agent_ver22.rpm",
-                "webview_ver22.zip",
-                "webapp_ver22.zip",
-                "install-controller-ver22.sh",
-                "install-client-ver22.sh",
-                "install-controller-aws-ver22.sh",
-                "install-client-aws-ver22.sh",
-                "install-controller-aws-cloudflare-ver22.sh",
-                "aws-rhel-preflight-ver22.sh",
-                "aws-security-group-plan-ver22.sh",
-                "setup-cloudflare-tunnel-v22.sh",
-                "verify-cloudflare-tunnel-v22.sh",
-                "uninstall-cloudflare-tunnel-v22.sh",
-                "cloudflare-quick-diagnosis-v22.sh",
+                "enable-node-terminal-ver23.sh",
+                "V23_R10_RELEASE_NOTES.md",
+                "nli_client_ver23.rpm",
+                "nli_controller_agent_ver23.rpm",
+                "webview_ver23.zip",
+                "webapp_ver23.zip",
+                "install-controller-ver23.sh",
+                "install-client-ver23.sh",
+                "install-controller-aws-ver23.sh",
+                "install-client-aws-ver23.sh",
+                "install-controller-aws-cloudflare-ver23.sh",
+                "aws-rhel-preflight-ver23.sh",
+                "aws-security-group-plan-ver23.sh",
+                "setup-cloudflare-tunnel-v23.sh",
+                "verify-cloudflare-tunnel-v23.sh",
+                "uninstall-cloudflare-tunnel-v23.sh",
+                "cloudflare-quick-diagnosis-v23.sh",
                 "vercel-preflight.mjs",
-                "uninstall-controller-ver22.sh",
-                "uninstall-client-ver22.sh",
+                "uninstall-controller-ver23.sh",
+                "uninstall-client-ver23.sh",
                 "INSTALLATION_AND_CONFIGURATION.md",
                 "VERCEL_DEPLOYMENT.md",
                 "CLOUDFLARE_PAGES_DEPLOYMENT.md",
@@ -62,6 +64,7 @@ class EvidenceGeneratorTest(unittest.TestCase):
                 "BENCHMARKS.txt",
                 "SAMPLE_FIELD_ACCOUNTING.json",
                 "RELEASE_ID",
+                "nli_schema.sql",
             )
             for index, name in enumerate(names):
                 if name == "BENCHMARKS.txt":
@@ -98,7 +101,9 @@ class EvidenceGeneratorTest(unittest.TestCase):
 
             checksums = (artifacts / "SHA256SUMS").read_text(encoding="ascii").splitlines()
             self.assertEqual(len(checksums), len(names))
-            for line, name in zip(checksums, names):
+            self.assertEqual({line.split("  ", 1)[1] for line in checksums}, set(names))
+            for line in checksums:
+                _, name = line.split("  ", 1)
                 expected = hashlib.sha256((artifacts / name).read_bytes()).hexdigest()
                 self.assertEqual(line, f"{expected}  {name}")
 

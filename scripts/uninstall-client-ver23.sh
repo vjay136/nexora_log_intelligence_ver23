@@ -39,7 +39,25 @@ if [[ $assume_yes -ne 1 ]]; then
   [[ ${answer,,} == y || ${answer,,} == yes ]] || { info 'cancelled'; exit 0; }
 fi
 
+if [[ $purge -eq 1 ]]; then
+  if [[ $assume_yes -ne 1 ]]; then
+    read -r -p 'Type PURGE-CLIENT to delete local identity, spool, cache, configuration, and logs: ' confirmation
+    [[ $confirmation == PURGE-CLIENT ]] || fail 'purge confirmation did not match; nothing was uninstalled'
+  fi
+fi
+
 systemctl disable --now nli-client-bootstrap.service nli-client-control.service nli-agent.service >/dev/null 2>&1 || true
+# Shared terminal host policy belongs to the surviving role on mixed-role nodes.
+if ! rpm -q nli-controller-agent >/dev/null 2>&1; then
+  if [[ -x /usr/sbin/nli-node-terminal-setup ]]; then
+    terminal_cleanup=(--disable)
+    [[ $purge -eq 0 ]] || terminal_cleanup+=(--purge)
+    /usr/sbin/nli-node-terminal-setup "${terminal_cleanup[@]}"
+  else
+    systemctl disable --now nli-node-terminal.service >/dev/null 2>&1 || true
+  fi
+fi
+
 if rpm -q nli-client >/dev/null 2>&1; then
   dnf -y remove nli-client
 else
@@ -49,10 +67,6 @@ systemctl daemon-reload
 systemctl reset-failed nli-client-bootstrap.service nli-client-control.service nli-agent.service >/dev/null 2>&1 || true
 
 if [[ $purge -eq 1 ]]; then
-  if [[ $assume_yes -ne 1 ]]; then
-    read -r -p 'Type PURGE-CLIENT to delete local identity, spool, cache, configuration, and logs: ' confirmation
-    [[ $confirmation == PURGE-CLIENT ]] || fail 'purge confirmation did not match; package is removed but data is preserved'
-  fi
   rm -f -- /etc/nli/nli.json /etc/nli/nli.json.rpmsave /etc/nli/nli.json.rpmnew
   rm -f -- /etc/nli/nli.env /etc/nli/nli.env.rpmsave /etc/nli/nli.env.rpmnew
   rm -f -- /etc/nli/client-control.json /etc/nli/client-control.json.rpmsave /etc/nli/client-control.json.rpmnew

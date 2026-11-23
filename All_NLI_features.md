@@ -228,3 +228,8 @@ Historical Ver20 documents remain as evidence only. Current public artifacts, he
 - Retain the previous verified release artifacts until upgrade validation and rollback rehearsal complete.
 - Performance numbers are host/workload evidence, not universal guarantees. Validate throughput, latency, memory, queue behavior, output durability, and replay safety on the target deployment.
 
+
+
+## Ver23 R10: optional Node Terminal
+
+COMMAND CENTER includes Node Terminal for administrator-reauthed access to one explicitly enabled controller/client host at a time. It uses a dedicated operator account and local Unix broker over existing NLI HTTPS. Large inventories support search/pagination; sessions and buffers are bounded. Commands/output are ephemeral and excluded from AI and parser backups. Host setup and limited permissions are documented in WEBAPP_OPERATOR_AND_PARSER_GUIDE.md. Installation modes 1–10 remain.
