@@ -186,7 +186,8 @@ def qualify(endpoint, config, password, timeout, checkpoint_dir=None):
         "20250812 130035121+0100 aaa-gmailrgo009 smtp 3609 0 140293780948736 Note;SmtpServerEHLO(2001/4) id=6864BD5E047384C4:domain=server035.mx.internal:host=11.22.33.44",
         "20250812 130035122+0100 aaa-gmailrgo009 smtp 3609 0 140293768701696 Note;SmtpServerSTARTTLSIn(2001/39) id=6864BD5E047384C3:tls=TLSv1.2:cipher=ECDHE-RSA-AES256-GCM-SHA384",
     ]
-    before_json = {"event": "r9-packaged-proof", "pid": "3609", "thread_id": "140293780948736", "keep": "exact retained value"}
+    # The baseline generic JSON parser uses numeric PID/thread fields.
+    before_json = {"event": "r9-packaged-proof", "pid": 3609, "thread_id": 140293780948736, "keep": "exact retained value"}
     after_json = {key: value for key, value in before_json.items() if key not in ("pid", "thread_id")}
     input_settings = {"enabled": True, "match_mode": "any", "rules": [
         {"field": "event", "operator": "equals", "values": ["SmtpServerEHLO"], "case_sensitive": True},
@@ -203,6 +204,7 @@ def qualify(endpoint, config, password, timeout, checkpoint_dir=None):
         payload = {"id": policy_ids[kind], "name": "R9 packaged " + kind, "config": settings}
         if modify:
             current = admin.call("GET", policy_route)
+            payload.pop("id")  # The exact PUT schema takes its identity from the URL.
             payload["expected_revision"] = current["revision"]
             admin.call("PUT", policy_route, payload)
         else:
