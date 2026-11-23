@@ -16,3 +16,5 @@ Supabase schema and parser behavior remain based on R10. Qualification proofs re
 
 
 A single transient local broker status/read timeout or an existing-session resize timeout no longer immediately destroys a healthy client session. The client retries only these idempotent probes for an already-owned shell within the existing ten-second transport grace, without opening a new shell, renewing unverified leases or replaying stdin. Explicit host disable and controller capability revocation still close sessions immediately; persistent failure still closes within the existing grace. An ambiguous open or stdin error still closes immediately without replay. Qualification pauses the fixture broker for three seconds and verifies the same shell survives after recovery.
+
+An unavailable heartbeat probe without a verified broker generation blocks new terminal connections but does not fabricate a restart or renew existing session leases. Verified host disable or a changed generation still closes the old terminal immediately. Browser, node-transport and host leases continue expiring independently.

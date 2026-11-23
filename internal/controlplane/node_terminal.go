@@ -102,10 +102,21 @@ func (t *terminalRelay) observe(node string, status protocol.TerminalStatus) {
 	if _, ok := t.s.fleet.Get(node); !ok {
 		return
 	}
+	// A failed read-only heartbeat probe has no verified broker generation.
+	// Record unavailability so new opens remain blocked, but let the existing
+	// browser, node and host leases expire independently. It is not proof of
+	// an explicit disable or restart and must not destroy an otherwise-live PTY.
+	verified := status.Generation != ""
+	if !verified {
+		status.Enabled = false
+	}
 	t.noteAccess(node, status)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.nodes[node] = terminalObservation{status, time.Now()}
+	if !verified {
+		return
+	}
 	for _, s := range t.sessions {
 		if s.NodeID == node && terminalActive(s) && (!status.Enabled || s.generation != status.Generation) {
 			t.closeLocked(s, "Node terminal restarted; connect a new session")
