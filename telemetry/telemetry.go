@@ -22,6 +22,9 @@ type StreamThresholds struct {
 
 // StreamFileTelemetry is a bounded live view of one source file; it contains no raw log data.
 type StreamFileTelemetry struct {
+	InputPolicyErrors           uint64            `json:"input_policy_errors,omitempty"`
+	FilteredRecords             uint64            `json:"filtered_records,omitempty"`
+	FilteredRecordsPerSecond    float64           `json:"filtered_records_per_second,omitempty"`
 	SchemaVersion               string            `json:"schema_version,omitempty"`
 	NodeID                      string            `json:"node_id"`
 	Source                      string            `json:"source"`

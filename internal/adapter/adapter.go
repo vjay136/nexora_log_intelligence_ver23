@@ -15,6 +15,7 @@ import (
 	"nexora.local/nli-v20/internal/engine"
 	"nexora.local/nli-v20/internal/familyprofile"
 	"nexora.local/nli-v20/internal/fieldmapping"
+	"nexora.local/nli-v20/internal/logpolicy"
 	parserpolicy "nexora.local/nli-v20/parser-policy"
 	"nexora.local/nli-v20/telemetry"
 )
@@ -39,6 +40,17 @@ type ParserPackAdapter struct {
 	smtpComplete      familyprofile.Profile
 	policyHash        string
 	templates         *runtimeTemplates
+	logPolicies       *logpolicy.Set
+}
+
+// PolicySnapshot belongs to this immutable adapter generation. Parse methods
+// intentionally do not apply admission or output mutation: callers apply these
+// at framing and final-output boundaries, and can still inspect a before view.
+func (adapter *ParserPackAdapter) PolicySnapshot() *logpolicy.Set {
+	if adapter == nil {
+		return nil
+	}
+	return adapter.logPolicies
 }
 
 // NewParserPackAdapter creates the default runtime from the embedded,

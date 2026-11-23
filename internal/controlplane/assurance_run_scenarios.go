@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -29,6 +30,25 @@ func supportedAssuranceRunScenario(scenario string) bool {
 // Evidence contains hashes, counts, timings and booleans only; customer fields
 // and raw fixture content remain in the encrypted fixture store.
 func (s *Server) executeAssuranceRunScenario(scenario string, request assuranceRequest) map[string]any {
+	// A policy exclusion is neither parser success nor a failed scenario. Keep
+	// it outside recovery/performance loops and do not manufacture validation.
+	if !request.BypassLogPolicies {
+		ctx, cancel := context.WithTimeout(context.Background(), s.fieldSenseAnalysis().timeout)
+		defer cancel()
+		snapshot, _ := s.automaticParserRuntime(ctx)
+		policies, err := s.controllerLogPolicies(ctx, snapshot)
+		if err != nil {
+			return baseRunEvidence(policyAssuranceSkipped(request, "blocked", "Published log policy state unavailable; no scenario parsing attempted."))
+		}
+		if decision := policies.MatchInput(request.Raw, request.Service, ""); !decision.Allowed {
+			if decision.PolicyError {
+				result := policyAssuranceSkipped(request, "blocked", decision.Reason)
+				result["policy_error"] = true
+				return baseRunEvidence(result)
+			}
+			return baseRunEvidence(policyAssuranceSkipped(request, "filtered_out", ""))
+		}
+	}
 	switch scenario {
 	case "failure-recovery":
 		return s.runFailureRecoveryScenario(request)
@@ -47,12 +67,15 @@ func (s *Server) executeAssuranceRunScenario(scenario string, request assuranceR
 
 func baseRunEvidence(result map[string]any) map[string]any {
 	return map[string]any{
-		"raw_sha256": result["raw_sha256"],
-		"passed":     result["passed"],
-		"score":      result["score"],
-		"counts":     result["counts"],
-		"route":      result["route"],
-		"latency_us": result["latency_us"],
+		"filtered_out":    result["filtered_out"],
+		"policy_error":    result["policy_error"],
+		"parse_attempted": result["parse_attempted"],
+		"raw_sha256":      result["raw_sha256"],
+		"passed":          result["passed"],
+		"score":           result["score"],
+		"counts":          result["counts"],
+		"route":           result["route"],
+		"latency_us":      result["latency_us"],
 	}
 }
 

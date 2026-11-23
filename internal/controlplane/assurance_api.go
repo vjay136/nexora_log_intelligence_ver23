@@ -624,6 +624,10 @@ func (s *Server) handleAssuranceAIProposal(w http.ResponseWriter, r *http.Reques
 	ctx, cancel := context.WithTimeout(r.Context(), aiRequestDeadline)
 	defer cancel()
 	result := s.runAssuranceContext(ctx, input)
+	if result["filtered_out"] == true {
+		jsonError(w, "Active selective-input policy excluded this sample before parsing. Review Selective Input Raw Log Filter; no AI repair is needed or requested.", http.StatusConflict)
+		return
+	}
 	if result["passed"] == true {
 		jsonError(w, "AI proposal is only available when deterministic assurance fails", 409)
 		return
@@ -909,6 +913,7 @@ func (s *Server) runParserCases(cases []assuranceRequest) map[string]any {
 			results = append(results, map[string]any{"index": index, "passed": false, "errors": []string{"validation input is empty"}})
 			continue
 		}
+		item.BypassLogPolicies = true
 		result := s.runAssurance(item)
 		if result["passed"] == true {
 			passed++
@@ -1373,8 +1378,14 @@ func (s *Server) recordAssuranceHistory(result map[string]any, actor string) {
 	id := fmt.Sprintf("run-%d", time.Now().UnixNano())
 	parser, _ := result["parser"].(map[string]any)
 	coverage, _ := result["coverage"].(map[string]any)
-	payload, _ := json.Marshal(map[string]any{"score": result["score"], "passed": result["passed"], "parser": parser, "coverage": coverage, "created_at": time.Now().UTC()})
-	_, _ = s.metadata.Put(context.Background(), metastore.Document{Collection: "assurance-history", ID: id, State: "completed", Payload: payload, CreatedBy: actor})
+	payload, _ := json.Marshal(map[string]any{"score": result["score"], "passed": result["passed"], "filtered_out": result["filtered_out"] == true, "policy_error": result["policy_error"] == true, "parse_attempted": result["parse_attempted"] != false, "parser": parser, "coverage": coverage, "created_at": time.Now().UTC()})
+	state := "completed"
+	if result["filtered_out"] == true {
+		state = "excluded"
+	} else if result["route"] == "blocked" {
+		state = "blocked"
+	}
+	_, _ = s.metadata.Put(context.Background(), metastore.Document{Collection: "assurance-history", ID: id, State: state, Payload: payload, CreatedBy: actor})
 }
 func (s *Server) handleAssuranceHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

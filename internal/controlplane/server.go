@@ -565,6 +565,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/stream", guard(middleware.PermissionReadTelemetry, s.handleStream))
 	s.mux.HandleFunc("/api/v1/overview", guard(middleware.PermissionSystemHealth, s.handleOverview))
 	s.mux.HandleFunc("/api/v1/fleet", guard(middleware.PermissionReadFleet, s.handleFleet))
+	s.mux.HandleFunc("/api/v1/policies/", s.handleLogPolicyPreview)
 	s.mux.HandleFunc(clientDirectoryRoute, s.handleClientDirectory)
 	s.mux.HandleFunc(clientDirectoryRoute+"/", s.handleClientDirectory)
 	s.mux.HandleFunc("/api/v1/fleet/stats", guard(middleware.PermissionReadFleet, s.handleFleetStats))
@@ -575,7 +576,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/parser-packs/", s.handleParserPack)
 	s.mux.HandleFunc("/api/v1/parser-packs/deleted", s.handleDeletedParsers)
 	s.mux.HandleFunc("/api/v1/parser-packs/deleted/", s.handleDeletedParsers)
-	for _, route := range []struct{ path, collection string }{{"/api/v1/config/kv", "kv-config"}, {"/api/v1/config/static-patterns", "static-patterns"}, {"/api/v1/config/projections", "projections"}, {"/api/v1/config/templates", "templates"}, {"/api/v1/config/regex", "regex-patterns"}, {"/api/v1/config/known-keys", "known-keys"}, {"/api/v1/config/semantic-extraction", "semantic-extraction"}, {"/api/v1/config/output-destinations", "output-destinations"}, {"/api/v1/config/input-paths", "input-paths"}} {
+	for _, route := range []struct{ path, collection string }{{"/api/v1/config/kv", "kv-config"}, {"/api/v1/config/static-patterns", "static-patterns"}, {"/api/v1/config/projections", "projections"}, {"/api/v1/config/templates", "templates"}, {"/api/v1/config/regex", "regex-patterns"}, {"/api/v1/config/known-keys", "known-keys"}, {"/api/v1/config/semantic-extraction", "semantic-extraction"}, {"/api/v1/config/selective-input", "selective-input"}, {"/api/v1/config/output-fields", "output-fields"}, {"/api/v1/config/output-destinations", "output-destinations"}, {"/api/v1/config/input-paths", "input-paths"}} {
 		collection := route.collection
 		s.mux.HandleFunc(route.path, func(w http.ResponseWriter, r *http.Request) { s.handleConfiguration(w, r, collection) })
 	}
@@ -786,13 +787,17 @@ func (s *Server) handleNodeRegister(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "valid node id, hostname and arch are required", http.StatusBadRequest)
 		return
 	}
+	if err := fleet.ValidateFeatureCapabilities(request.ReleaseID, request.FeatureCapabilities); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		jsonError(w, "credential generation failed", http.StatusInternalServerError)
 		return
 	}
 	enrollment := r.Header.Get("X-NLI-Enrollment")
-	node := &fleet.Node{ID: request.ID, Hostname: request.Hostname, IP: request.IP, OS: request.OS, Arch: request.Arch, Version: request.Version, ConfigHash: request.ConfigHash, MetricsURL: request.MetricsURL, Tags: request.Tags}
+	node := &fleet.Node{ID: request.ID, Hostname: request.Hostname, IP: request.IP, OS: request.OS, Arch: request.Arch, Version: request.Version, ReleaseID: request.ReleaseID, FeatureCapabilities: request.FeatureCapabilities, ConfigHash: request.ConfigHash, MetricsURL: request.MetricsURL, Tags: request.Tags}
 	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
 	_, existing := s.fleet.Get(request.ID)
 	initial := !existing
@@ -846,6 +851,11 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "unauthorized node", http.StatusUnauthorized)
 		return
 	}
+	if err := fleet.ValidateFeatureCapabilities(request.ReleaseID, request.FeatureCapabilities); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	previousNode, _ := s.fleet.Get(request.NodeID)
 	parsers := make([]fleet.ParserStatus, len(request.Parsers))
 	for index, item := range request.Parsers {
 		parsers[index] = fleet.ParserStatus{ID: item.ID, Version: item.Version, Description: item.Description, Source: item.Source, TestStatus: item.TestStatus}
@@ -866,14 +876,14 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range request.StreamFiles {
 		sample := &request.StreamFiles[i]
-		if sample.Source == "" || len(sample.Source) > 4096 || sample.Phase == "" || sample.ReadLinesPerSecond < 0 || sample.NormalizedPerSecond < 0 || sample.QuarantinedPerSecond < 0 || sample.ValidationAttemptsPerSecond < 0 || sample.ValidationPassedPerSecond < 0 || sample.ValidationFailedPerSecond < 0 || sample.BytesPerSecond < 0 || sample.QueueDepth < 0 || sample.QueueCapacity < 0 || sample.ReadDuration < 0 || sample.ParseDuration < 0 || sample.OutputDuration < 0 || sample.TotalDuration < 0 || sample.ReadLines > 1<<60 || sample.Normalized > 1<<60 || sample.Quarantined > 1<<60 || sample.ValidationAttempts > 1<<60 || sample.ValidationPassed > 1<<60 || sample.ValidationFailed > 1<<60 || sample.Bytes > 1<<60 || sample.Errors > 1<<60 || math.IsNaN(sample.ReadLinesPerSecond) || math.IsInf(sample.ReadLinesPerSecond, 0) || math.IsNaN(sample.ValidationAttemptsPerSecond) || math.IsInf(sample.ValidationAttemptsPerSecond, 0) || math.IsNaN(sample.ValidationPassedPerSecond) || math.IsInf(sample.ValidationPassedPerSecond, 0) || math.IsNaN(sample.ValidationFailedPerSecond) || math.IsInf(sample.ValidationFailedPerSecond, 0) || math.IsNaN(sample.BytesPerSecond) || math.IsInf(sample.BytesPerSecond, 0) {
+		if sample.Source == "" || len(sample.Source) > 4096 || sample.Phase == "" || sample.ReadLinesPerSecond < 0 || sample.NormalizedPerSecond < 0 || sample.QuarantinedPerSecond < 0 || sample.ValidationAttemptsPerSecond < 0 || sample.ValidationPassedPerSecond < 0 || sample.ValidationFailedPerSecond < 0 || sample.BytesPerSecond < 0 || sample.QueueDepth < 0 || sample.QueueCapacity < 0 || sample.ReadDuration < 0 || sample.ParseDuration < 0 || sample.OutputDuration < 0 || sample.TotalDuration < 0 || sample.InputPolicyErrors > 1<<60 || sample.FilteredRecords > 1<<60 || sample.FilteredRecordsPerSecond < 0 || math.IsNaN(sample.FilteredRecordsPerSecond) || math.IsInf(sample.FilteredRecordsPerSecond, 0) || sample.ReadLines > 1<<60 || sample.Normalized > 1<<60 || sample.Quarantined > 1<<60 || sample.ValidationAttempts > 1<<60 || sample.ValidationPassed > 1<<60 || sample.ValidationFailed > 1<<60 || sample.Bytes > 1<<60 || sample.Errors > 1<<60 || math.IsNaN(sample.ReadLinesPerSecond) || math.IsInf(sample.ReadLinesPerSecond, 0) || math.IsNaN(sample.ValidationAttemptsPerSecond) || math.IsInf(sample.ValidationAttemptsPerSecond, 0) || math.IsNaN(sample.ValidationPassedPerSecond) || math.IsInf(sample.ValidationPassedPerSecond, 0) || math.IsNaN(sample.ValidationFailedPerSecond) || math.IsInf(sample.ValidationFailedPerSecond, 0) || math.IsNaN(sample.BytesPerSecond) || math.IsInf(sample.BytesPerSecond, 0) {
 			jsonError(w, "invalid stream file sample", http.StatusBadRequest)
 			return
 		}
 		sample.NodeID = request.NodeID
 		s.streamTelemetry.Publish(*sample)
 	}
-	for _, value := range []uint64{request.Metrics.UPESUniqueFailureSignatures, request.Metrics.UPESObservedFailures, request.Metrics.UPESDiscoveryQueued, request.Metrics.UPESDiscoveryDropped, request.Metrics.UPESDiscoveryPending} {
+	for _, value := range []uint64{request.Metrics.InputPolicyErrors, request.Metrics.Filtered, request.Metrics.OutputFieldsRemoved, request.Metrics.UPESUniqueFailureSignatures, request.Metrics.UPESObservedFailures, request.Metrics.UPESDiscoveryQueued, request.Metrics.UPESDiscoveryDropped, request.Metrics.UPESDiscoveryPending} {
 		if value > 1<<60 {
 			jsonError(w, "heartbeat UPES metrics exceed supported bounds", http.StatusBadRequest)
 			return
@@ -885,12 +895,22 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	metrics := &fleet.NodeMetrics{LokiDelivery: request.Metrics.LokiDelivery, ClickHouseDelivery: request.Metrics.ClickHouseDelivery, Received: request.Metrics.Received, Parsed: request.Metrics.Parsed, Quarantined: request.Metrics.Quarantined, Errors: request.Metrics.Errors, ParseRate: request.Metrics.ParseRate, ParseLatencyMs: request.Metrics.ParseLatencyMs, CPUPercent: request.Metrics.CPUPercent, MemoryBytes: request.Metrics.MemoryBytes, MemoryPercent: request.Metrics.MemoryPercent, Load1: request.Metrics.Load1, Load5: request.Metrics.Load5, Load15: request.Metrics.Load15, HostMetricsAvailable: request.Metrics.HostMetricsAvailable, UPESMetricsAvailable: request.Metrics.UPESMetricsAvailable, UPESUniqueFailureSignatures: request.Metrics.UPESUniqueFailureSignatures, UPESObservedFailures: request.Metrics.UPESObservedFailures, UPESDiscoveryQueued: request.Metrics.UPESDiscoveryQueued, UPESDiscoveryDropped: request.Metrics.UPESDiscoveryDropped, UPESDiscoveryPending: request.Metrics.UPESDiscoveryPending}
+	metrics := &fleet.NodeMetrics{InputPolicyErrors: request.Metrics.InputPolicyErrors, Filtered: request.Metrics.Filtered, OutputFieldsRemoved: request.Metrics.OutputFieldsRemoved, LokiDelivery: request.Metrics.LokiDelivery, ClickHouseDelivery: request.Metrics.ClickHouseDelivery, Received: request.Metrics.Received, Parsed: request.Metrics.Parsed, Quarantined: request.Metrics.Quarantined, Errors: request.Metrics.Errors, ParseRate: request.Metrics.ParseRate, ParseLatencyMs: request.Metrics.ParseLatencyMs, CPUPercent: request.Metrics.CPUPercent, MemoryBytes: request.Metrics.MemoryBytes, MemoryPercent: request.Metrics.MemoryPercent, Load1: request.Metrics.Load1, Load5: request.Metrics.Load5, Load15: request.Metrics.Load15, HostMetricsAvailable: request.Metrics.HostMetricsAvailable, UPESMetricsAvailable: request.Metrics.UPESMetricsAvailable, UPESUniqueFailureSignatures: request.Metrics.UPESUniqueFailureSignatures, UPESObservedFailures: request.Metrics.UPESObservedFailures, UPESDiscoveryQueued: request.Metrics.UPESDiscoveryQueued, UPESDiscoveryDropped: request.Metrics.UPESDiscoveryDropped, UPESDiscoveryPending: request.Metrics.UPESDiscoveryPending}
 	if err := s.fleet.UpdateHeartbeat(request.NodeID, request.Version, request.ConfigHash, request.Health, request.Issues, parsers, metrics); err != nil {
 		jsonError(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	if err := s.fleet.UpdateFeatureCapabilities(request.NodeID, request.ReleaseID, request.FeatureCapabilities); err != nil {
+		jsonError(w, "node capability persistence failed", http.StatusInternalServerError)
+		return
+	}
 	s.updateSyncFromHeartbeat(request)
+	if !nodeSupportsLogPolicies(previousNode) {
+		current, _ := s.fleet.Get(request.NodeID)
+		if nodeSupportsLogPolicies(current) {
+			s.queueNewPolicyCapableClient(r.Context(), request.NodeID)
+		}
+	}
 	jsonOK(w, protocol.HeartbeatResponse{Status: "ok", DeliveryMetricsSupported: true})
 }
 
@@ -923,7 +943,7 @@ func (s *Server) handleNodeStreamTelemetry(w http.ResponseWriter, r *http.Reques
 	for i := range request.StreamFiles {
 		sample := &request.StreamFiles[i]
 		values := []float64{sample.ReadLinesPerSecond, sample.NormalizedPerSecond, sample.QuarantinedPerSecond, sample.ValidationAttemptsPerSecond, sample.ValidationPassedPerSecond, sample.ValidationFailedPerSecond, sample.BytesPerSecond}
-		invalid := sample.Source == "" || len(sample.Source) > 4096 || sample.Phase == "" || sample.QueueDepth < 0 || sample.QueueCapacity < 0 || sample.SourceWorkers < 0 || sample.ReadDuration < 0 || sample.ParseDuration < 0 || sample.OutputDuration < 0 || sample.TotalDuration < 0 || sample.ReadLines > 1<<60 || sample.Normalized > 1<<60 || sample.Quarantined > 1<<60 || sample.ValidationAttempts > 1<<60 || sample.ValidationPassed > 1<<60 || sample.ValidationFailed > 1<<60 || sample.Bytes > 1<<60 || sample.Errors > 1<<60
+		invalid := sample.Source == "" || len(sample.Source) > 4096 || sample.Phase == "" || sample.QueueDepth < 0 || sample.QueueCapacity < 0 || sample.SourceWorkers < 0 || sample.ReadDuration < 0 || sample.ParseDuration < 0 || sample.OutputDuration < 0 || sample.TotalDuration < 0 || sample.InputPolicyErrors > 1<<60 || sample.FilteredRecords > 1<<60 || sample.FilteredRecordsPerSecond < 0 || math.IsNaN(sample.FilteredRecordsPerSecond) || math.IsInf(sample.FilteredRecordsPerSecond, 0) || sample.ReadLines > 1<<60 || sample.Normalized > 1<<60 || sample.Quarantined > 1<<60 || sample.ValidationAttempts > 1<<60 || sample.ValidationPassed > 1<<60 || sample.ValidationFailed > 1<<60 || sample.Bytes > 1<<60 || sample.Errors > 1<<60
 		for _, value := range values {
 			if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
 				invalid = true

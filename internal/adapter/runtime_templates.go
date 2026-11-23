@@ -22,6 +22,7 @@ import (
 	parsercatalog "nexora.local/nli-v20/configs/catalog"
 	"nexora.local/nli-v20/internal/canonicaljson"
 	"nexora.local/nli-v20/internal/fieldmapping"
+	"nexora.local/nli-v20/internal/logpolicy"
 	"nexora.local/nli-v20/internal/mixedkv"
 	parserpolicy "nexora.local/nli-v20/parser-policy"
 	"nexora.local/nli-v20/telemetry"
@@ -119,8 +120,19 @@ func NewParserPackAdapterFromSynchronizedDirectories(ctx context.Context, parser
 	return adapter, err
 }
 
+// LoadLogPolicySnapshot supports explicitly configured legacy parsing without
+// requiring the v5 parser to run. Canonical bundle checks still apply.
+func LoadLogPolicySnapshot(assetDir string) (*logpolicy.Set, error) {
+	assets, err := TemplateAssetsFromBundleFile(filepath.Join(assetDir, "bundle.json"))
+	if err != nil {
+		return nil, err
+	}
+	set, _, err := compileLogPolicyAssets(assets)
+	return set, err
+}
+
 func parserTemplateClass(class string) bool {
-	return class == "templates" || class == "kv-config" || class == "known-keys"
+	return class == "templates" || class == "kv-config" || class == "known-keys" || class == "selective-input" || class == "output-fields"
 }
 
 // TemplateAssetsFromBundle verifies the exact same digest client control checks
@@ -133,6 +145,10 @@ func TemplateAssetsFromBundle(data []byte) ([]RuntimeTemplateAsset, error) {
 	if err := json.Unmarshal(data, &bundle); err != nil || bundle.SchemaVersion != 1 || len(bundle.Assets) > 10000 {
 		return nil, fmt.Errorf("invalid parser asset bundle schema")
 	}
+	// Match controller/client canonical identity for an empty generation: both
+	// normalize an empty asset slice to nil before hashing. The received JSON
+	// may still contain [] after an operator has offboarded the final asset.
+	bundle.Assets = append([]RuntimeTemplateAsset(nil), bundle.Assets...)
 	templates := []RuntimeTemplateAsset{}
 	for i := range bundle.Assets {
 		asset := &bundle.Assets[i]
@@ -168,6 +184,11 @@ func TemplateAssetsFromBundle(data []byte) ([]RuntimeTemplateAsset, error) {
 // isolated from execution when they cannot supply a complete parsing plan.
 func (adapter *ParserPackAdapter) WithRuntimeTemplates(ctx context.Context, assets []RuntimeTemplateAsset) (*ParserPackAdapter, []string, error) {
 	result := *adapter
+	policies, policyCount, err := compileLogPolicyAssets(assets)
+	if err != nil {
+		return nil, nil, err
+	}
+	result.logPolicies = policies
 	compiled := &runtimeTemplates{}
 	diagnostics := []string{}
 	diagnose := func(class, id string) {
@@ -244,6 +265,10 @@ func (adapter *ParserPackAdapter) WithRuntimeTemplates(ctx context.Context, asse
 	}
 	if len(compiled.headers) == 0 {
 		result.templates = nil
+		if policyCount > 0 {
+			digest := sha256.Sum256([]byte(strings.Join(material, "\x00")))
+			result.policyHash = hex.EncodeToString(digest[:])
+		}
 		return &result, diagnostics, nil
 	}
 	fallback, err := compileRuntimeKV(nil)
@@ -254,6 +279,46 @@ func (adapter *ParserPackAdapter) WithRuntimeTemplates(ctx context.Context, asse
 	digest := sha256.Sum256([]byte(strings.Join(material, "\x00")))
 	result.templates, result.policyHash = compiled, hex.EncodeToString(digest[:])
 	return &result, diagnostics, nil
+}
+
+func compileLogPolicyAssets(assets []RuntimeTemplateAsset) (*logpolicy.Set, int, error) {
+	var inputs []logpolicy.InputConfig
+	var outputs []logpolicy.OutputConfig
+	count := 0
+	for _, asset := range assets {
+		if asset.AssetClass != "selective-input" && asset.AssetClass != "output-fields" {
+			continue
+		}
+		count++
+		var envelope struct {
+			Config json.RawMessage `json:"config"`
+		}
+		if !runtimeTemplateID.MatchString(asset.AssetID) || asset.Revision < 1 || json.Unmarshal(asset.Payload, &envelope) != nil || len(envelope.Config) == 0 {
+			return nil, count, fmt.Errorf("invalid log policy asset %s/%s", asset.AssetClass, asset.AssetID)
+		}
+		decoder := json.NewDecoder(bytes.NewReader(envelope.Config))
+		decoder.DisallowUnknownFields()
+		if asset.AssetClass == "selective-input" {
+			var config logpolicy.InputConfig
+			if err := decoder.Decode(&config); err != nil {
+				return nil, count, fmt.Errorf("invalid selective policy %s: %w", asset.AssetID, err)
+			}
+			config.ID = asset.AssetID
+			inputs = append(inputs, config)
+		} else {
+			var config logpolicy.OutputConfig
+			if err := decoder.Decode(&config); err != nil {
+				return nil, count, fmt.Errorf("invalid output policy %s: %w", asset.AssetID, err)
+			}
+			config.ID = asset.AssetID
+			outputs = append(outputs, config)
+		}
+	}
+	policies, err := logpolicy.Compile(inputs, outputs)
+	if err != nil {
+		return nil, count, fmt.Errorf("log policy generation rejected: %w", err)
+	}
+	return policies, count, nil
 }
 
 func compileRuntimeHeader(asset RuntimeTemplateAsset, config json.RawMessage) (runtimeHeaderTemplate, error) {

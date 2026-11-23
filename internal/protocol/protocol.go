@@ -11,15 +11,17 @@ import (
 const APIVersion = "v1"
 
 type RegisterRequest struct {
-	ID         string            `json:"id"`
-	Hostname   string            `json:"hostname"`
-	IP         string            `json:"ip,omitempty"`
-	OS         string            `json:"os"`
-	Arch       string            `json:"arch"`
-	Version    string            `json:"version"`
-	ConfigHash string            `json:"config_hash"`
-	MetricsURL string            `json:"metrics_url,omitempty"`
-	Tags       map[string]string `json:"tags,omitempty"`
+	ID                  string            `json:"id"`
+	Hostname            string            `json:"hostname"`
+	IP                  string            `json:"ip,omitempty"`
+	OS                  string            `json:"os"`
+	Arch                string            `json:"arch"`
+	Version             string            `json:"version"`
+	ReleaseID           string            `json:"release_id,omitempty"`
+	FeatureCapabilities []string          `json:"feature_capabilities,omitempty"`
+	ConfigHash          string            `json:"config_hash"`
+	MetricsURL          string            `json:"metrics_url,omitempty"`
+	Tags                map[string]string `json:"tags,omitempty"`
 }
 
 type RegisterResponse struct {
@@ -37,6 +39,9 @@ type DeliveryMetrics struct {
 }
 
 type Metrics struct {
+	InputPolicyErrors           uint64           `json:"input_policy_errors,omitempty"`
+	Filtered                    uint64           `json:"logs_filtered,omitempty"`
+	OutputFieldsRemoved         uint64           `json:"output_fields_removed,omitempty"`
 	LokiDelivery                *DeliveryMetrics `json:"loki_delivery,omitempty"`
 	ClickHouseDelivery          *DeliveryMetrics `json:"clickhouse_delivery,omitempty"`
 	Received                    uint64           `json:"logs_received"`
@@ -86,6 +91,8 @@ type HeartbeatRequest struct {
 	RuntimeInventory      *ParserRuntimeInventory         `json:"runtime_inventory,omitempty"`
 	NodeID                string                          `json:"node_id"`
 	Version               string                          `json:"version"`
+	ReleaseID             string                          `json:"release_id,omitempty"`
+	FeatureCapabilities   []string                        `json:"feature_capabilities,omitempty"`
 	ConfigHash            string                          `json:"config_hash"`
 	Metrics               Metrics                         `json:"metrics"`
 	Health                string                          `json:"health"`

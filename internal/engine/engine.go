@@ -1,7 +1,7 @@
 // Package engine is the NLI parse pipeline orchestrator.
-// It composes all pipeline stages: multiline → detect → timestamp → mask →
-// tokenize → drain template mine → deterministic parse → type infer →
-// schema validate → confidence → output route.
+// It composes all pipeline stages: multiline â†’ detect â†’ timestamp â†’ mask â†’
+// tokenize â†’ drain template mine â†’ deterministic parse â†’ type infer â†’
+// schema validate â†’ confidence â†’ output route.
 package engine
 
 import (
@@ -30,7 +30,7 @@ const Version = "23.0.0"
 
 // ReleaseID identifies the exact qualified application release independently
 // of a parser definition's own semantic version or metadata revision.
-const ReleaseID = "v23.0.0-8"
+const ReleaseID = "v23.0.0-9"
 
 // MaxLine is the maximum line size processed (1 MiB).
 const MaxLine = 1024 * 1024

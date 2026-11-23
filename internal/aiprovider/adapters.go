@@ -277,16 +277,7 @@ func NewSafeHTTPClient(policy ValidationPolicy, timeout time.Duration) *http.Cli
 		if err != nil || len(ips) == 0 {
 			return nil, errors.New("provider DNS resolution failed")
 		}
-		var approved net.IP
-		for _, ip := range ips {
-			if err := ValidateResolvedIP(ip, policy); err != nil {
-				return nil, errors.New("provider endpoint resolved to a forbidden network")
-			}
-			if approved == nil {
-				approved = ip
-			}
-		}
-		return dialer.DialContext(ctx, network, net.JoinHostPort(approved.String(), port))
+		return dialValidatedIPs(ctx, network, port, ips, policy, dialer.DialContext)
 	}
 	return &http.Client{
 		Transport: transport,
@@ -295,6 +286,31 @@ func NewSafeHTTPClient(policy ValidationPolicy, timeout time.Duration) *http.Cli
 			return errors.New("provider redirects are disabled")
 		},
 	}
+}
+
+// Validate the complete DNS answer before attempting any connection. Dialing
+// numeric addresses prevents a second DNS lookup; a failed IPv6 route must not
+// hide a usable IPv4 address (or vice versa). The caller's deadline bounds all
+// attempts, and no redirect or forbidden-network exception is introduced.
+func dialValidatedIPs(ctx context.Context, network, port string, ips []net.IP, policy ValidationPolicy, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+	for _, ip := range ips {
+		if err := ValidateResolvedIP(ip, policy); err != nil {
+			return nil, errors.New("provider endpoint resolved to a forbidden network")
+		}
+	}
+	for _, ip := range ips {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		conn, err := dial(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, errors.New("provider connection failed for all approved addresses")
 }
 
 func minDuration(a, b time.Duration) time.Duration {

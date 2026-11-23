@@ -490,9 +490,13 @@ func parseCSVRecords(content []byte) ([]uploadRecord, error) {
 }
 
 func resultSummary(results []map[string]any) map[string]any {
-	parsed, quarantined, failures := 0, 0, 0
+	parsed, quarantined, failures, excluded := 0, 0, 0, 0
 	parserIDs := map[string]bool{}
 	for _, result := range results {
+		if result["filtered_out"] == true {
+			excluded++
+			continue
+		}
 		if result["route"] == "normal" {
 			parsed++
 		} else if result["route"] == "quarantine" || result["route"] == "unknown" {
@@ -510,7 +514,7 @@ func resultSummary(results []map[string]any) map[string]any {
 		parsers = append(parsers, id)
 	}
 	sort.Strings(parsers)
-	return map[string]any{"record_count": len(results), "parsed": parsed, "quarantined": quarantined, "errors": failures, "parsers": parsers}
+	return map[string]any{"record_count": len(results), "parsed": parsed, "quarantined": quarantined, "excluded": excluded, "errors": failures, "parsers": parsers}
 }
 
 func (s *Server) retainUploadedMember(ctx context.Context, principal *middleware.SecurityContext, member uploadedMember, mediaType, service, parserID string, summary map[string]any, digest []byte) (string, int, error) {

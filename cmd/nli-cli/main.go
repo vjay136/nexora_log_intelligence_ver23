@@ -73,6 +73,7 @@ Usage:
 	flags.SetOutput(io.Discard)
 	service := flags.String("service", "auto", "source service name (auto detects supported record headers)")
 	parserPackDir := flags.String("parser-pack-dir", os.Getenv("NLI_PARSER_PACK_DIR"), "approved/activated controller ParserPack directory")
+	assetDir := flags.String("asset-dir", os.Getenv("NLI_PARSER_ASSET_DIR"), "verified parser asset directory (defaults to the selected node generation)")
 	multilineEnabled := flags.Bool("multiline", true, "assemble Java, Python, Go, and indented multiline events")
 	fullEnvelope := flags.Bool("full-envelope", false, "WARNING: diagnostic mode includes raw log text and metadata (disabled by default)")
 	endpoint := flags.String("endpoint", "http://127.0.0.1:12380/health", "health URL")
@@ -113,7 +114,7 @@ Usage:
 		if flags.NArg() != 1 {
 			return fmt.Errorf("usage: nli %s [--service NAME] <file|->", command)
 		}
-		return parseCmd(command, flags.Arg(0), *service, *parserPackDir, *multilineEnabled, *fullEnvelope, out)
+		return parseCmdWithAssets(command, flags.Arg(0), *service, *parserPackDir, *assetDir, *multilineEnabled, *fullEnvelope, out)
 
 	default:
 		return fmt.Errorf("unsupported command %q; use nli help", command)
@@ -216,6 +217,10 @@ func geoIPActivationCmd(command string, args []string, out io.Writer) error {
 }
 
 func parseCmd(command, path, service, parserPackDir string, multilineEnabled bool, fullEnvelope bool, out io.Writer) error {
+	return parseCmdWithAssets(command, path, service, parserPackDir, "", multilineEnabled, fullEnvelope, out)
+}
+
+func parseCmdWithAssets(command, path, service, parserPackDir, assetDir string, multilineEnabled bool, fullEnvelope bool, out io.Writer) error {
 	input := os.Stdin
 	if path != "-" {
 		file, err := os.Open(path)
@@ -231,12 +236,25 @@ func parseCmd(command, path, service, parserPackDir string, multilineEnabled boo
 
 	// Embedded product profiles are always present. An optional managed directory
 	// may replace them only with strictly validated approved/activated packs.
-	v5Adapter, err := adapter.NewParserPackAdapterFromDirectory(parserPackDir)
+	if assetDir == "" {
+		if parserPackDir != "" {
+			assetDir = filepath.Join(filepath.Dir(parserPackDir), "parser-assets")
+		} else {
+			assetDir = "/var/lib/nli/parser-assets"
+			if info, statErr := os.Stat("/var/lib/nli/parsers"); statErr == nil && info.IsDir() {
+				parserPackDir = "/var/lib/nli/parsers"
+			}
+		}
+	}
+	v5Adapter, err := adapter.NewParserPackAdapterFromSynchronizedDirectories(context.Background(), parserPackDir, assetDir)
 	if err != nil {
 		return fmt.Errorf("v5 parser initialization: %w", err)
 	}
 
 	encoder := json.NewEncoder(out)
+	policies := v5Adapter.PolicySnapshot()
+	filtered := 0
+	policyErrors := 0
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 64*1024), engine.MaxLine)
 	assembler := multiline.New(multiline.Config{Enabled: multilineEnabled})
@@ -251,6 +269,21 @@ func parseCmd(command, path, service, parserPackDir string, multilineEnabled boo
 		}
 
 		source := engine.Source{Hostname: host, Service: service, File: path, LineNumber: firstLine}
+		decision := policies.MatchInputRecord(raw, service, host, truncated)
+		if !decision.Allowed {
+			if decision.PolicyError {
+				policyErrors++
+			} else {
+				filtered++
+			}
+			if command == "detect" {
+				if decision.PolicyError {
+					return encoder.Encode(map[string]any{"line_number": firstLine, "route": "policy_error", "policy_error": true, "parser_invoked": false})
+				}
+				return encoder.Encode(map[string]any{"line_number": firstLine, "route": "filtered_out", "parser_invoked": false})
+			}
+			return nil
+		}
 
 		// Try v5 parsing first if available and not in diagnostic mode.
 		if v5Adapter != nil && !fullEnvelope && !truncated {
@@ -261,7 +294,9 @@ func parseCmd(command, path, service, parserPackDir string, multilineEnabled boo
 				normal++
 				switch command {
 				case "parse":
-					return encoder.Encode(v5Result.EventPayload)
+					payload := *v5Result.EventPayload
+					payload.Fields = policies.FilterFields(payload.Fields)
+					return encoder.Encode(&payload)
 				case "detect":
 					return encoder.Encode(map[string]interface{}{
 						"line_number": firstLine, "format": "v5_parserpack",
@@ -306,10 +341,11 @@ func parseCmd(command, path, service, parserPackDir string, multilineEnabled boo
 			if fullEnvelope {
 				// Diagnostic mode - emit full envelope with warning
 				fmt.Fprintf(os.Stderr, "WARNING: Full envelope mode includes raw log text and metadata\n")
+				envelope.Data = policies.FilterFields(envelope.Data)
 				return encoder.Encode(envelope)
 			} else {
 				// Default mode emits customer fields only, including on legacy fallback.
-				eventPayload := telemetry.EventPayload{Fields: sanitizePayload(envelope.Data, envelope.Meta.Route)}
+				eventPayload := telemetry.EventPayload{Fields: policies.FilterFields(sanitizePayload(envelope.Data, envelope.Meta.Route))}
 				return encoder.Encode(eventPayload)
 			}
 		case "detect":
@@ -358,16 +394,27 @@ func parseCmd(command, path, service, parserPackDir string, multilineEnabled boo
 		if total > 0 {
 			average = totalConfidence / float64(total)
 		}
-		return encoder.Encode(map[string]interface{}{
+		summary := map[string]interface{}{
 			"events": total, "normal": normal, "warning": warning,
 			"quarantine": quarantined, "unknown": unknown,
 			"average_confidence": average, "engine_version": engine.Version,
-		})
+		}
+		if filtered > 0 {
+			summary["filtered_out"] = filtered
+		}
+		if policyErrors > 0 {
+			summary["policy_errors"] = policyErrors
+		}
+		return encoder.Encode(summary)
 	}
 	return nil
 }
 
 func replayCmd(path string, out io.Writer) error {
+	policies, policyErr := adapter.LoadLogPolicySnapshot("/var/lib/nli/parser-assets")
+	if policyErr != nil {
+		return fmt.Errorf("load active log policies: %w", policyErr)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -397,11 +444,15 @@ func replayCmd(path string, out io.Writer) error {
 		if raw == "" {
 			continue
 		}
+		if !policies.MatchInput(raw, "replay", host).Allowed {
+			continue
+		}
 
 		e := engine.Parse(raw, engine.Source{Hostname: host, Service: "replay", File: path}, deps)
 		replayed++
 		if e.NLI.Parser != "unknown" {
 			improved++
+			e.Data = policies.FilterFields(e.Data)
 			enc.Encode(e)
 		}
 	}
@@ -425,6 +476,9 @@ type quarantineHistoryEntry struct {
 }
 
 type replaySummary struct {
+	PolicyErrorIDs     []string `json:"policy_error_ids,omitempty"`
+	PolicyErrors       int      `json:"policy_errors,omitempty"`
+	FilteredIDs        []string `json:"filtered_ids,omitempty"`
 	Replayed           int      `json:"replayed"`
 	Resolved           int      `json:"resolved"`
 	Waiting            int      `json:"waiting"`
@@ -467,6 +521,7 @@ func replayQueue(path, configPath, parserPackDir string, selectedIDs []string, o
 	if err != nil {
 		return fmt.Errorf("initialize configured outputs: %w", err)
 	}
+	router.SetOutputPolicy(parser.PolicySnapshot())
 	defer router.Close()
 	releaseSnapshot, err := output.LockLocalDelivery(queueConfig, path)
 	if err != nil {
@@ -535,6 +590,19 @@ func replayQueue(path, configPath, parserPackDir string, selectedIDs []string, o
 			continue
 		}
 		seen[record.ID] = true
+		decision := parser.PolicySnapshot().MatchInput(record.Raw, record.Service, host)
+		if !decision.Allowed {
+			// Existing quarantine is retained for an operator to revisit after
+			// changing the policy. No parser attempt or false resolution occurs.
+			unresolved = append(unresolved, record)
+			if decision.PolicyError {
+				summary.PolicyErrorIDs = append(summary.PolicyErrorIDs, record.ID)
+				summary.PolicyErrors++
+			} else {
+				summary.FilteredIDs = append(summary.FilteredIDs, record.ID)
+			}
+			continue
+		}
 		replayed++
 		attemptedIDs = append(attemptedIDs, record.ID)
 		attemptedAt := time.Now().UTC()

@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	aiGuidanceCatalogVersion  = 2
+	aiGuidanceCatalogVersion  = 3
 	aiGuidanceRevisionStore   = "ai-guidance-revisions"
 	aiGuidanceEvaluationStore = "ai-guidance-evaluations"
 	aiGuidanceProviderBudget  = 4 * time.Second
@@ -79,8 +79,10 @@ var aiGuidanceNavigation = []aiGuidanceWorkspace{
 	{ID: "napi-monitor", Label: "NAPI Live"},
 	{ID: "nal-monitor", Label: "NAL Live"},
 	{ID: "input-paths", Label: "Input Log Paths"},
+	{ID: "selective-input", Label: "Selective Input Raw Log filter"},
 	{ID: "migration", Label: "Migration Center"},
 	{ID: "outputs", Label: "Endpoint Configuration"},
+	{ID: "output-fields", Label: "Remove Unwanted key names & its values in the JSON outputs"},
 	{ID: "metadata", Label: "Live Metadata"},
 	{ID: "unknowns", Label: "Unknown & Quarantine"},
 	{ID: "performance", Label: "Performance & Backpressure"},
@@ -105,6 +107,13 @@ var aiGuidanceNavigation = []aiGuidanceWorkspace{
 }
 
 var aiGuidanceActions = map[string][]aiGuidanceAction{
+	"selective-input": {
+		{"policy-run-filter", "Run Filter", "Preview matched and excluded raw records without parsing or publishing the draft."},
+		{"policy-parse-matched", "Parse matched records", "Run the approved parser only for records accepted by the current previewed policy."},
+	},
+	"output-fields": {
+		{"policy-run-output", "Parse and preview field removal", "Compare original parsed customer JSON with final JSON after exact root-field removal; preview does not activate changes."},
+	},
 	"assurance": {
 		{"save-assurance", "Encrypt and retain in Supabase", "Run the exact sample and compare the actual fields and route before retaining a reviewed fixture."},
 		{"assurance-parser-action", "Approve", "Open the review queue and inspect the retained cases, exact parser revision and checksum before approving."},
@@ -302,6 +311,10 @@ func guidanceQuestionScope(question string) aiGuidanceScope {
 		return false
 	}
 	switch {
+	case (has("remove", "drop", "omit", "exclude", "unwanted", "strip", "hide", "filter out") && has("json", "field", "key name", "keys", "pid", "thread_id")) || has("output field", "field removal"):
+		return aiGuidanceScope{Workspace: "output-fields"}
+	case has("selective", "only read", "only parse", "filter raw", "raw filter", "discard raw", "input filter", "smtpserverehlo", "grep", "filter logs", "select logs", "keep only", "read only", "filter event", "event filter"):
+		return aiGuidanceScope{Workspace: "selective-input"}
 	case has("group", "rename client", "call my client", "client name", "display name", "friendly name", "name my client"):
 		return aiGuidanceScope{Workspace: "clients"}
 	case has("known key", "knownkey", "bulk key", "1000 key", "1000+ key", "key name", "keyname", "many keys", "keys at once", "keys in one"):
@@ -353,6 +366,27 @@ func guidanceInstructions(scope aiGuidanceScope, action aiGuidanceAction) aiGuid
 		}
 	}
 	switch {
+	case scope.Workspace == "selective-input":
+		guide.PermissionNote = "Preview requires Assurance run permission. Saving a policy requires parser management, independent review requires review permission, and publication and fleet delivery require their existing authorized approval gates."
+		guide.Steps = append(guide.Steps,
+			"In Create or revise optional policy, enter Policy ID and Policy name. The policy starts disabled. Use Enable policy after review and publication only when the intended selection is ready.",
+			"Choose Combine rules, then Add filter rule. Choose Match field (keyword, year, hostname, service, event_type, loglevel or event), Operator, and literal Values one per line. Values within one rule are OR; Combine rules chooses AND or OR across rules. Enabled published profiles are OR together.",
+			"Load Raw log samples or Load raw sample file in the workbench. For the supplied three-line SMTP example, use event equals SmtpServerEHLO: Run Filter must show one accepted raw record and two intentional exclusions. This first action does not parse JSON.",
+			"Inspect Accepted raw records and the excluded count. Only then select Parse matched records to inspect final JSON from the existing approved parser. Correct a draft or sample and run a fresh filter if anything differs.",
+			"Select Save draft revision, then Submit for review. Have an authorized reviewer Approve, then Publish + request fleet rollout. An enabled checkbox in a draft is not a live change.",
+			"Review the exact bundle and intended clients in Approvals & Rollouts. In Parser Fleet Sync, verify R9-capable clients acknowledge the desired hash. Unsupported, pending or offline clients are not assumed synchronized.",
+			"To disable an active policy, use Prepare disable revision and repeat save, review and publication. Revoke published policy requests removal through the same delivery gates. Reset sample/results clears the test, not a saved publication.")
+		guide.CompletionCheck = "The tested accepted raw lines are exact, only accepted records are parsed, the intended policy is published and intended R9-capable clients acknowledge its exact bundle. Excluded records are not parse failures, and their source cursor advances; disabling later does not replay them."
+	case scope.Workspace == "output-fields":
+		guide.PermissionNote = "Preview requires Assurance run permission. Changes to published output fields use parser management, review, publication and exact client-delivery approvals."
+		guide.Steps = append(guide.Steps,
+			"In Create or revise optional policy, enter Policy ID and Policy name. In Field names to remove, enter one exact, case-sensitive root JSON key per line, such as pid and thread_id. A dot means a literal key, not a nested path.",
+			"Select Enable policy after review and publication for the draft preview when needed. With no enabled policies, existing output remains unchanged.",
+			"Load Raw log samples or Load raw sample file and choose the approved runtime parser. Select Parse and preview field removal. Compare Parsed JSON before field removal with Final JSON after field removal, including every retained value.",
+			"Inspect Removed fields and per-record parse evidence. Removing all customer fields may intentionally produce an empty object; it does not repair a failed parser. The preview never sends data to Loki, ClickHouse or another endpoint.",
+			"Save draft revision, Submit for review, obtain authorized Approve, and Publish + request fleet rollout. Review delivery in Approvals & Rollouts and verify each intended client's exact applied bundle in Parser Fleet Sync.",
+			"Use Prepare disable revision or Revoke published policy to stop field removal through the same reviewed delivery workflow. Reset sample/results only clears the transient test.")
+		guide.CompletionCheck = "Every named root key and its value is absent from final customer JSON, all other intended fields retain their values, and intended R9-capable clients acknowledge the published policy. Internal audit and health metadata are not customer JSON."
 	case scope.Workspace == "clients":
 		guide.PermissionNote = "Viewing the directory requires fleet read access. Saving names or groups requires fleet management access; requesting client actions requires rollout permission and the existing approval workflow."
 		switch action.ID {

@@ -38,7 +38,7 @@ const (
 )
 
 var (
-	bundleBackupSettings         = []string{"known-keys", "kv-config", "projections", "regex-patterns", "semantic-extraction", "static-patterns", "templates"}
+	bundleBackupSettings         = []string{"known-keys", "kv-config", "projections", "regex-patterns", "semantic-extraction", "static-patterns", "templates", "selective-input", "output-fields"}
 	errBundleBackupSize          = errors.New("parser backup exceeds the 3 MiB or 10,000-asset limit")
 	errBundleBackupUnsafe        = errors.New("published parser settings contain an unsupported credential or source-data field")
 	errBundleBackupEmbedded      = errors.New("backup references a different embedded parser inventory; obtain its matching controller release before restoring")
@@ -263,7 +263,7 @@ func (s *Server) readBundleBackup(ctx context.Context, id string) (bundleBackupR
 func verifyBundleBackupSnapshot(snapshot bundleBackupSnapshot) ([]byte, error) {
 	bundle := snapshot.Bundle
 	if snapshot.SchemaVersion != bundleBackupSchema || bundle.SchemaVersion != 1 || snapshot.Release == "" || len(snapshot.Release) > 128 ||
-		!slices.Equal(snapshot.SettingsScope, bundleBackupSettings) || !snapshot.Scope.IncludesEmbeddedValidationExamples || !validBundleRecoverySHA(bundle.BundleHash) {
+		!validBundleSettingsScope(snapshot.SettingsScope) || !snapshot.Scope.IncludesEmbeddedValidationExamples || !validBundleRecoverySHA(bundle.BundleHash) {
 		return nil, errBundleRecoveryIntegrity
 	}
 	if len(bundle.Assets) > bundleRestoreMaxAssets {
@@ -281,7 +281,7 @@ func verifyBundleBackupSnapshot(snapshot bundleBackupSnapshot) ([]byte, error) {
 	previous := ""
 	for _, asset := range bundle.Assets {
 		key := asset.AssetClass + "/" + asset.AssetID
-		if key <= previous || !isParserAssetCollection(asset.AssetClass) || !validRuntimeParserID(asset.AssetID) || asset.Revision <= 0 {
+		if key <= previous || !isParserAssetCollection(asset.AssetClass) || !validRuntimeParserID(asset.AssetID) || asset.Revision <= 0 || (asset.AssetClass != "parser-packs" && !slices.Contains(snapshot.SettingsScope, asset.AssetClass)) {
 			return nil, errBundleRecoveryIntegrity
 		}
 		previous = key
@@ -317,6 +317,9 @@ func verifyBundleBackupSnapshot(snapshot bundleBackupSnapshot) ([]byte, error) {
 		if unsupportedBundleBackupMap(envelope, "config") || unsupportedBundleBackupMap(config, bundleBackupSymbolicSetting(asset.AssetClass, config)) {
 			return nil, fmt.Errorf("%w in %s", errBundleBackupUnsafe, key)
 		}
+	}
+	if _, err := logPoliciesFromBundle(bundle); err != nil {
+		return nil, fmt.Errorf("%w: invalid log policy configuration", errBundleRecoveryIntegrity)
 	}
 	digest, _, err := bundleDigest(bundle)
 	if err != nil || digest != bundle.BundleHash {
@@ -441,4 +444,10 @@ func (s *Server) putBundleRecoveryDocument(ctx context.Context, collection, id, 
 		return metastore.Document{}, err
 	}
 	return s.metadata.Put(ctx, metastore.Document{Collection: collection, ID: id, State: state, Payload: payload, CreatedBy: actor})
+}
+
+// R8 snapshots remain byte-for-byte verifiable; the R9 scope only adds optional
+// policy classes and does not rewrite historical content-addressed snapshots.
+func validBundleSettingsScope(scope []string) bool {
+	return slices.Equal(scope, bundleBackupSettings) || slices.Equal(scope, []string{"known-keys", "kv-config", "projections", "regex-patterns", "semantic-extraction", "static-patterns", "templates"})
 }

@@ -464,7 +464,7 @@ func classifyNotificationEvent(event auditlog.Event) (string, string, bool) {
 	if isExpectedAnonymousSessionProbe(event) {
 		return "", "", false
 	}
-	if status, ok := authoringFailureStatus(event); ok && oneOf(status, "400", "408", "409", "422", "429") {
+	if status, ok := authoringFailureStatus(event); ok && (oneOf(status, "400", "408", "409", "422", "429") || status == "413" && isLogPolicyAuthoringPath(event.Resource)) {
 		// The editor reports validation, conflicts and throttling inline.
 		return "", "", false
 	}
@@ -500,6 +500,7 @@ func authoringFailureStatus(event auditlog.Event) (string, bool) {
 	}
 	inlineAuthoring := oneOf(event.Resource, "/api/v1/assurance/mapping-preview", "/api/v1/assurance/parser-preview",
 		"/api/v1/assurance/parsers", "/api/v1/assurance/ai-proposal", "/api/v1/field-mapping/ai-suggest", "/api/v1/ai/workspace")
+	inlineAuthoring = inlineAuthoring || isLogPolicyAuthoringPath(event.Resource)
 	// A submit rejected for missing validation evidence is a lifecycle guard,
 	// not a controller outage. Keep the request in the audit chain and show
 	// its precise error in the editor; operational and authorization failures
@@ -516,6 +517,25 @@ func authoringFailureStatus(event auditlog.Event) (string, bool) {
 	detail, _, _ := strings.Cut(event.Details["detail"], " ")
 	status, ok := strings.CutPrefix(detail, "status=")
 	return status, ok && len(status) == 3
+}
+
+func isLogPolicyAuthoringPath(path string) bool {
+	if oneOf(path, "/api/v1/policies/input/preview", "/api/v1/policies/output/preview") {
+		return true
+	}
+	for _, kind := range []string{"selective-input", "output-fields"} {
+		prefix := "/api/v1/config/" + kind
+		if path == prefix {
+			return true
+		}
+		if rest, ok := strings.CutPrefix(path, prefix+"/"); ok {
+			parts := strings.Split(rest, "/")
+			if len(parts) == 1 && parts[0] != "" || len(parts) == 2 && parts[0] != "" && oneOf(parts[1], "submit", "approve", "publish", "reject", "revoke") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isExpectedAnonymousSessionProbe(event auditlog.Event) bool {

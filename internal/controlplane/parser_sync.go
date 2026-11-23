@@ -25,7 +25,7 @@ import (
 	metastore "nexora.local/nli-v20/internal/store"
 )
 
-var parserAssetCollections = []string{"kv-config", "static-patterns", "projections", "templates", "regex-patterns", "known-keys", "semantic-extraction", "parser-packs"}
+var parserAssetCollections = []string{"kv-config", "static-patterns", "projections", "templates", "regex-patterns", "known-keys", "semantic-extraction", "selective-input", "output-fields", "parser-packs"}
 
 const (
 	parserSyncPageSize    = 1000
@@ -422,6 +422,9 @@ func (s *Server) buildPublishedParserBundle(ctx context.Context) (parserAssetBun
 		}
 		return bundle.Assets[i].AssetClass < bundle.Assets[j].AssetClass
 	})
+	if _, err := logPoliciesFromBundle(bundle); err != nil {
+		return bundle, err
+	}
 	hash, _, err := bundleDigest(bundle)
 	bundle.BundleHash = hash
 	return bundle, err
@@ -605,6 +608,18 @@ func (s *Server) queueEnrollmentParserSync(ctx context.Context, nodeID string) {
 	targets := []string{nodeID}
 	bundle, err := s.buildActiveParserBundle(ctx)
 	if err == nil {
+		if bundleRequiresLogPolicies(bundle) {
+			node, _ := s.fleet.Get(nodeID)
+			if !nodeSupportsLogPolicies(node) {
+				return
+			}
+			if doc, stateErr := s.metadata.Get(ctx, "fleet-sync", safeID(nodeID), 0); stateErr == nil {
+				var state map[string]any
+				if json.Unmarshal(doc.Payload, &state) == nil && parserBundleAcknowledged(state, bundle.BundleHash) {
+					return
+				}
+			}
+		}
 		if isBuiltinEnrollmentBundle(bundle) {
 			_, err = s.startParserBundleRollout(ctx, actor, name, bundle, targets)
 		} else {
@@ -617,9 +632,16 @@ func (s *Server) queueEnrollmentParserSync(ctx context.Context, nodeID string) {
 }
 
 func (s *Server) startParserBundleRollout(ctx context.Context, actor, name string, bundle parserAssetBundle, targetIDs []string) (*rolloutRecord, error) {
+	if bundleRequiresLogPolicies(bundle) {
+		for _, id := range targetIDs {
+			if node, ok := s.fleet.Get(id); !ok || !parserClientSupportsLogPolicies(node, bundle) {
+				return nil, errors.New("target client does not support this policy bundle; upgrade before approval")
+			}
+		}
+	}
 	if len(targetIDs) == 0 {
 		for _, node := range s.fleet.All() {
-			if node.Status != fleet.StatusOffline {
+			if node.Status != fleet.StatusOffline && parserClientSupportsLogPolicies(node, bundle) {
 				targetIDs = append(targetIDs, node.ID)
 			}
 		}
@@ -697,7 +719,7 @@ func (s *Server) proposeParserBundleRolloutWithID(ctx context.Context, proposalI
 	eligible := map[string]bool{}
 	minimum := parserBundleMinimumKVRelease(bundle)
 	for _, node := range s.fleet.All() {
-		if node.Status != fleet.StatusOffline && parserClientSupportsKVRelease(node.Version, minimum) {
+		if node.Status != fleet.StatusOffline && parserClientSupportsKVRelease(node.Version, minimum) && parserClientSupportsLogPolicies(node, bundle) {
 			eligible[node.ID] = true
 		}
 	}
@@ -713,6 +735,9 @@ func (s *Server) proposeParserBundleRolloutWithID(ctx context.Context, proposalI
 	seen := map[string]bool{}
 	for _, id := range targetIDs {
 		if !eligible[id] || seen[id] {
+			if node, ok := s.fleet.Get(id); ok && node != nil && !parserClientSupportsLogPolicies(node, bundle) {
+				return metastore.Document{}, fmt.Errorf("parser sync target %q requires an upgraded client advertising log-policies-v1", id)
+			}
 			if node, ok := s.fleet.Get(id); ok && node != nil && !parserClientSupportsKVRelease(node.Version, minimum) {
 				return metastore.Document{}, fmt.Errorf("parser sync target %q must be upgraded to v%s for this bundle's parsing assets", id, minimum)
 			}
@@ -751,7 +776,7 @@ func (s *Server) proposeParserBundleRolloutWithID(ctx context.Context, proposalI
 			if proposalID == "" && existingMode == targetMode && equalStringSlices(existingTargets, targetIDs) {
 				return existing, nil
 			}
-			// A targeted repair must not withdraw another clientâ€™s current approval.
+			// A targeted repair must not withdraw another clientÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢s current approval.
 			continue
 		}
 		superseded = append(superseded, existing)
@@ -932,7 +957,12 @@ func (s *Server) recordParserSyncRolloutResult(ctx context.Context, rolloutID st
 		state["asset_sync_status"] = "failed"
 		state["asset_drifted"] = true
 		state["asset_sync_error"] = strings.TrimSpace(result.Message)
-	} else if expected == "" || result.ActiveAssetBundleHash != expected || !runtimeInventoryMatchesBundle(result.RuntimeInventory, payload.Bundle) {
+	} else if node, _ := s.fleet.Get(result.NodeID); !parserClientSupportsLogPolicies(node, payload.Bundle) {
+		state["desired_asset_bundle_hash"] = desiredHash
+		state["asset_sync_status"] = "upgrade_required"
+		state["asset_drifted"] = true
+		state["asset_sync_error"] = "The actual parsing agent has not advertised log-policies-v1; this policy bundle cannot be acknowledged."
+	} else if expected == "" || result.ActiveAssetBundleHash != expected || bundleRequiresLogPolicies(payload.Bundle) && result.RuntimeInventory == nil || !runtimeInventoryMatchesBundle(result.RuntimeInventory, payload.Bundle) {
 		state["desired_asset_bundle_hash"] = desiredHash
 		state["asset_sync_status"] = "drifted"
 		state["asset_drifted"] = true
@@ -1077,14 +1107,16 @@ func (s *Server) handleParserSync(w http.ResponseWriter, r *http.Request) {
 			state := byNode[safeID(node.ID)]
 			active := fmt.Sprint(state["active_asset_bundle_hash"])
 			desired := fmt.Sprint(state["desired_asset_bundle_hash"])
-			acknowledged := parserBundleAcknowledged(state, bundle.BundleHash)
+			acknowledged := parserBundleAcknowledged(state, bundle.BundleHash) && parserClientSupportsLogPolicies(node, bundle)
 			status := "pending"
 			if acknowledged {
 				status = "applied"
+			} else if !parserClientSupportsLogPolicies(node, bundle) {
+				status = "upgrade_required"
 			} else if active != "<nil>" && active != "" {
 				status = "drifted"
 			}
-			code, next := parserSyncClientBlocker(node, minimumKVRelease, acknowledged, state)
+			code, next := parserSyncPolicyClientBlocker(node, bundle, minimumKVRelease, acknowledged, state)
 			clients = append(clients, map[string]any{"node_id": node.ID, "expected_hash": bundle.BundleHash, "desired_hash": desired, "acknowledged_hash": active, "applied_hash": active, "status": status, "exact_acknowledgement": acknowledged, "blocking_code": code, "next_action": next, "runtime_inventory": state["runtime_inventory"], "error": state["asset_sync_error"]})
 		}
 		jsonOK(w, map[string]any{"desired_hash": bundle.BundleHash, "controller_applied_hash": controllerHash, "controller_status": controllerStatus, "client_acknowledgements": clients, "verified_at": time.Now().UTC(), "assets": bundle.Assets})
@@ -1141,6 +1173,17 @@ func (s *Server) handleParserAssetTransition(w http.ResponseWriter, r *http.Requ
 	}
 	state, payload := doc.State, map[string]any{}
 	_ = json.Unmarshal(doc.Payload, &payload)
+	if isLogPolicyCollection(collection) && action != "revoke" {
+		config, _ := payload["config"].(map[string]any)
+		if err := validateCatalogConfig(collection, config); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := s.validateProjectedLogPolicies(r.Context(), collection, id, payload); err != nil {
+			jsonError(w, "prospective policy bundle is invalid: "+err.Error(), http.StatusConflict)
+			return
+		}
+	}
 	switch action {
 	case "submit":
 		if state != "draft" && state != "rejected" {
@@ -1176,8 +1219,8 @@ func (s *Server) handleParserAssetTransition(w http.ResponseWriter, r *http.Requ
 		payload["published_by"] = principal.Username
 		payload["published_at"] = time.Now().UTC()
 	case "revoke":
-		if collection != "known-keys" || (state != "active" && state != "revoked" && state != "discarded") {
-			jsonError(w, "only active known-key assets can be revoked", http.StatusConflict)
+		if (collection != "known-keys" && !isLogPolicyCollection(collection)) || (state != "active" && state != "revoked" && state != "discarded") {
+			jsonError(w, "only active known-key or log-policy assets can be revoked", http.StatusConflict)
 			return
 		}
 		if state != "revoked" {
@@ -1204,15 +1247,37 @@ func (s *Server) handleParserAssetTransition(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	}
+	compensatePolicy := func() {
+		if isLogPolicyCollection(collection) {
+			if rollbackErr := s.restoreParserDocument(r.Context(), doc); rollbackErr != nil {
+				s.auditAction(principal, "log_policy.publication.rollback", collection+"/"+id, "failure", map[string]string{"error": "previous publication recovery requires attention"})
+				return
+			}
+			previous, rollbackErr := s.buildActiveParserBundle(r.Context())
+			if rollbackErr == nil {
+				var previousHash string
+				previousHash, rollbackErr = s.materializeParserBundle(previous)
+				if rollbackErr == nil {
+					stateBytes, _ := json.Marshal(map[string]any{"desired_hash": previous.BundleHash, "applied_hash": previousHash, "status": "publication_rolled_back", "assets": bundleRevisionMap(previous), "applied_at": time.Now().UTC()})
+					_, rollbackErr = s.metadata.Put(r.Context(), metastore.Document{Collection: "parser-sync-state", ID: "controller", State: "applied", Payload: stateBytes, CreatedBy: principal.Username})
+				}
+			}
+			if rollbackErr != nil {
+				s.auditAction(principal, "log_policy.publication.rollback", collection+"/"+id, "failure", map[string]string{"error": "previous materialized publication recovery requires attention"})
+			}
+		}
+	}
 	response := map[string]any{"asset": documentView(saved), "state": state}
 	if (action == "publish" || action == "revoke") && isParserAssetCollection(collection) {
 		bundle, buildErr := s.buildActiveParserBundle(r.Context())
 		if buildErr != nil {
+			compensatePolicy()
 			jsonError(w, "published asset bundle could not be built", http.StatusServiceUnavailable)
 			return
 		}
 		appliedHash, materializeErr := s.materializeParserBundle(bundle)
 		if materializeErr != nil {
+			compensatePolicy()
 			jsonError(w, "published asset bundle could not be applied on controller", http.StatusServiceUnavailable)
 			return
 		}
@@ -1222,6 +1287,7 @@ func (s *Server) handleParserAssetTransition(w http.ResponseWriter, r *http.Requ
 		_, _ = s.metadata.Put(r.Context(), metastore.Document{Collection: "parser-sync-state", ID: "controller", State: "applied", Payload: stateBytes, CreatedBy: principal.Username})
 		proposal, proposalErr := s.proposeParserBundleRollout(r.Context(), principal.Username, "Synchronize parser asset bundle", "Parser asset changes require fleet rollout approval.", "all_eligible", bundle, nil)
 		if proposalErr != nil {
+			compensatePolicy()
 			jsonError(w, "asset changed and controller applied, but rollout proposal could not be created: "+proposalErr.Error(), http.StatusServiceUnavailable)
 			return
 		}
@@ -1295,10 +1361,13 @@ func (s *Server) listParserSync(w http.ResponseWriter, r *http.Request) {
 		applied := fmt.Sprint(state["active_asset_bundle_hash"])
 		desired := bundle.BundleHash
 		drift := applied != desired
-		acknowledged := parserBundleAcknowledged(state, desired)
+		acknowledged := parserBundleAcknowledged(state, desired) && parserClientSupportsLogPolicies(node, bundle)
 		status := strings.TrimSpace(fmt.Sprint(state["asset_sync_status"]))
 		if status == "" || status == "<nil>" {
 			status = "pending"
+		}
+		if !parserClientSupportsLogPolicies(node, bundle) {
+			status = "upgrade_required"
 		}
 		totalClients++
 		if node.Status == fleet.StatusOffline {
@@ -1315,7 +1384,7 @@ func (s *Server) listParserSync(w http.ResponseWriter, r *http.Request) {
 		} else {
 			pendingClients++
 		}
-		code, next := parserSyncClientBlocker(node, minimumKVRelease, acknowledged, state)
+		code, next := parserSyncPolicyClientBlocker(node, bundle, minimumKVRelease, acknowledged, state)
 		clients = append(clients, map[string]any{"blocking_code": code, "next_action": next, "runtime_inventory": state["runtime_inventory"], "node_id": node.ID, "hostname": node.Hostname, "desired_revision": revisions, "desired_hash": desired, "applied_revision": state["active_asset_revisions"], "applied_hash": applied, "acknowledged_bundle_hash": applied, "exact_acknowledgement": acknowledged, "last_seen": state["last_seen"], "status": status, "drifted": drift, "error": state["asset_sync_error"]})
 	}
 	sort.Slice(clients, func(i, j int) bool { return fmt.Sprint(clients[i]["node_id"]) < fmt.Sprint(clients[j]["node_id"]) })

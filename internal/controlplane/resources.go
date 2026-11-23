@@ -574,7 +574,7 @@ func (s *Server) handleConfigurationResource(w http.ResponseWriter, r *http.Requ
 	}
 	collection, ok := map[string]string{
 		"kv": "kv-config", "static-patterns": "static-patterns", "projections": "projections",
-		"templates": "templates", "regex": "regex-patterns", "known-keys": "known-keys", "semantic-extraction": "semantic-extraction",
+		"templates": "templates", "regex": "regex-patterns", "known-keys": "known-keys", "semantic-extraction": "semantic-extraction", "selective-input": "selective-input", "output-fields": "output-fields",
 		"output-destinations": "output-destinations", "input-paths": "input-paths",
 	}[parts[0]]
 	if !ok {
@@ -590,7 +590,7 @@ func (s *Server) handleConfigurationResource(w http.ResponseWriter, r *http.Requ
 	if len(parts) > 2 {
 		action = parts[2]
 	}
-	if len(parts) > 3 || (action != "" && action != "download" && action != "submit" && action != "approve" && action != "publish" && action != "rollout" && !(action == "revoke" && collection == "known-keys")) {
+	if len(parts) > 3 || (action != "" && action != "download" && action != "submit" && action != "approve" && action != "publish" && action != "rollout" && !(action == "revoke" && (collection == "known-keys" || isLogPolicyCollection(collection)))) {
 		jsonError(w, "unknown configuration asset action", http.StatusNotFound)
 		return
 	}
@@ -694,8 +694,8 @@ func (s *Server) handleConfigurationResource(w http.ResponseWriter, r *http.Requ
 		s.auditAction(principal, "config.update", collection+"/"+id, "success", map[string]string{"revision": fmt.Sprint(saved.Revision)})
 		jsonOK(w, documentView(saved))
 	case http.MethodDelete:
-		if doc.State != "draft" && doc.State != "rejected" {
-			jsonError(w, "only draft or rejected assets may be deleted", http.StatusConflict)
+		if doc.State != "draft" && doc.State != "rejected" && !(isLogPolicyCollection(collection) && doc.State == "revoked") {
+			jsonError(w, "only draft, rejected or revoked policy assets may be deleted", http.StatusConflict)
 			return
 		}
 		revision := priorActiveAssetRevision(doc)
@@ -731,6 +731,9 @@ func (s *Server) handleConfigurationResource(w http.ResponseWriter, r *http.Requ
 }
 
 func validateCatalogConfig(collection string, config map[string]any) error {
+	if isLogPolicyCollection(collection) {
+		return validateLogPolicyConfig(collection, config)
+	}
 	if len(config) == 0 {
 		return errors.New("config must be a non-empty object")
 	}
@@ -1575,7 +1578,7 @@ func (s *Server) createRolloutProposal(w http.ResponseWriter, r *http.Request, p
 		var action protocol.ManagedInputFileRequest
 		targets := interfaceStrings(proposal["target_nodes"])
 		if json.Unmarshal(mustJSON(proposal["payload"]), &action) != nil || len(targets) == 0 || len(targets) > maxInputPathRolloutTargets {
-			jsonError(w, "managed file operation requires an action and 1–4096 explicit target clients", http.StatusBadRequest)
+			jsonError(w, "managed file operation requires an action and 1Ã¢â‚¬â€œ4096 explicit target clients", http.StatusBadRequest)
 			return
 		}
 		if err := action.Validate(); err != nil {
@@ -1692,6 +1695,13 @@ func (s *Server) approveRollout(w http.ResponseWriter, r *http.Request, id strin
 		if verifyErr != nil {
 			jsonError(w, verifyErr.Error(), http.StatusConflict)
 			return
+		}
+		for _, target := range interfaceStrings(proposal["target_nodes"]) {
+			node, ok := s.fleet.Get(target)
+			if !ok || !parserClientSupportsLogPolicies(node, verified.Bundle) {
+				jsonError(w, "target client must advertise log-policies-v1 before this policy rollout can be approved", http.StatusConflict)
+				return
+			}
 		}
 		parserBundle = &verified.Bundle
 		proposalBundleHash = verified.CanonicalHash
@@ -1888,6 +1898,17 @@ func (s *Server) updateSyncFromHeartbeat(request protocol.HeartbeatRequest) {
 				state["asset_drifted"] = false
 				state["asset_sync_error"] = ""
 			}
+		}
+	}
+	if current, err := s.buildActiveParserBundle(context.Background()); err == nil {
+		if node, _ := s.fleet.Get(request.NodeID); !parserClientSupportsLogPolicies(node, current) {
+			state["asset_sync_status"] = "upgrade_required"
+			state["asset_drifted"] = true
+			state["asset_sync_error"] = "The actual parsing agent must advertise log-policies-v1 before this policy bundle can be acknowledged."
+		} else if bundleRequiresLogPolicies(current) && request.RuntimeInventory == nil {
+			state["asset_sync_status"] = "drifted"
+			state["asset_drifted"] = true
+			state["asset_sync_error"] = "Policy bundle acknowledgement requires runtime file inventory from the R9 client."
 		}
 	}
 	payload, _ := json.Marshal(state)

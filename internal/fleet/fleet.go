@@ -23,24 +23,26 @@ const (
 
 // Node represents a registered nli-agent installation on a Linux host.
 type Node struct {
-	ID            string            `json:"id"`
-	Hostname      string            `json:"hostname"`
-	IP            string            `json:"ip"`
-	OS            string            `json:"os"`
-	Arch          string            `json:"arch"`
-	Version       string            `json:"version"`
-	ConfigHash    string            `json:"config_hash"`
-	MetricsURL    string            `json:"metrics_url"`
-	ControlURL    string            `json:"control_url"`
-	Tags          map[string]string `json:"tags"`
-	LastSeen      time.Time         `json:"last_seen"`
-	RegisteredAt  time.Time         `json:"registered_at"`
-	Status        string            `json:"status"`
-	Metrics       *NodeMetrics      `json:"metrics,omitempty"`
-	Issues        []string          `json:"issues,omitempty"`
-	Parsers       []ParserStatus    `json:"parsers,omitempty"`
-	ActiveRollout string            `json:"active_rollout,omitempty"`
-	TokenHash     string            `json:"token_hash,omitempty"`
+	ID                  string            `json:"id"`
+	Hostname            string            `json:"hostname"`
+	IP                  string            `json:"ip"`
+	OS                  string            `json:"os"`
+	Arch                string            `json:"arch"`
+	Version             string            `json:"version"`
+	ReleaseID           string            `json:"release_id,omitempty"`
+	FeatureCapabilities []string          `json:"feature_capabilities,omitempty"`
+	ConfigHash          string            `json:"config_hash"`
+	MetricsURL          string            `json:"metrics_url"`
+	ControlURL          string            `json:"control_url"`
+	Tags                map[string]string `json:"tags"`
+	LastSeen            time.Time         `json:"last_seen"`
+	RegisteredAt        time.Time         `json:"registered_at"`
+	Status              string            `json:"status"`
+	Metrics             *NodeMetrics      `json:"metrics,omitempty"`
+	Issues              []string          `json:"issues,omitempty"`
+	Parsers             []ParserStatus    `json:"parsers,omitempty"`
+	ActiveRollout       string            `json:"active_rollout,omitempty"`
+	TokenHash           string            `json:"token_hash,omitempty"`
 }
 
 type ParserStatus struct {
@@ -55,6 +57,9 @@ type ParserStatus struct {
 type NodeMetrics struct {
 	LokiDelivery                *protocol.DeliveryMetrics `json:"loki_delivery,omitempty"`
 	ClickHouseDelivery          *protocol.DeliveryMetrics `json:"clickhouse_delivery,omitempty"`
+	Filtered                    uint64                    `json:"logs_filtered,omitempty"`
+	InputPolicyErrors           uint64                    `json:"input_policy_errors,omitempty"`
+	OutputFieldsRemoved         uint64                    `json:"output_fields_removed,omitempty"`
 	Received                    uint64                    `json:"logs_received"`
 	Parsed                      uint64                    `json:"logs_parsed"`
 	Quarantined                 uint64                    `json:"logs_quarantined"`
@@ -124,6 +129,11 @@ func (f *Fleet) save() error {
 // RegisterEnrollment atomically persists registration and its credential.
 // Retrying a bound enrollment preserves fleet metadata and refreshes the token.
 func (f *Fleet) RegisterEnrollment(n Node, token string) error {
+	if err := ValidateFeatureCapabilities(n.ReleaseID, n.FeatureCapabilities); err != nil {
+		return err
+	}
+	reportedRelease := n.ReleaseID
+	reportedCapabilities := append([]string(nil), n.FeatureCapabilities...)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	existing, registered := f.nodes[n.ID]
@@ -132,6 +142,9 @@ func (f *Fleet) RegisterEnrollment(n Node, token string) error {
 	} else {
 		n.RegisteredAt = time.Now().UTC()
 	}
+	// Preserve operator labels on a bound enrollment retry, while recording
+	// the current parsing-engine capabilities with the credential atomically.
+	n.ReleaseID, n.FeatureCapabilities = reportedRelease, reportedCapabilities
 	n.LastSeen = time.Now().UTC()
 	n.Status = StatusOnline
 	digest := sha256.Sum256([]byte(token))
@@ -215,6 +228,7 @@ func (f *Fleet) All() []*Node {
 		cp := *n
 		cp.TokenHash = ""
 		cp.Tags = cloneTags(n.Tags)
+		cp.FeatureCapabilities = append([]string(nil), n.FeatureCapabilities...)
 		cp.Issues = append([]string(nil), n.Issues...)
 		cp.Parsers = append([]ParserStatus(nil), n.Parsers...)
 		out = append(out, &cp)
@@ -233,6 +247,7 @@ func (f *Fleet) Get(id string) (*Node, bool) {
 	cp := *n
 	cp.TokenHash = ""
 	cp.Tags = cloneTags(n.Tags)
+	cp.FeatureCapabilities = append([]string(nil), n.FeatureCapabilities...)
 	cp.Issues = append([]string(nil), n.Issues...)
 	cp.Parsers = append([]ParserStatus(nil), n.Parsers...)
 	return &cp, true
@@ -338,4 +353,58 @@ func cloneTags(tags map[string]string) map[string]string {
 		copyOfTags[key] = value
 	}
 	return copyOfTags
+}
+
+// ValidateFeatureCapabilities bounds additive metadata before mutating fleet state.
+func ValidateFeatureCapabilities(release string, capabilities []string) error {
+	if len(release) > 128 || len(capabilities) > 32 {
+		return fmt.Errorf("node capabilities exceed bounds")
+	}
+	valid := func(value string) bool {
+		for _, c := range value {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_' || c == '+') {
+				return false
+			}
+		}
+		return true
+	}
+	if !valid(release) {
+		return fmt.Errorf("invalid release identity")
+	}
+	for _, capability := range capabilities {
+		if len(capability) == 0 || len(capability) > 64 || !valid(capability) {
+			return fmt.Errorf("invalid node capability")
+		}
+	}
+	return nil
+}
+
+// UpdateFeatureCapabilities persists only an authenticated node's bounded advertised capabilities.
+func (f *Fleet) UpdateFeatureCapabilities(id, release string, capabilities []string) error {
+	if err := ValidateFeatureCapabilities(release, capabilities); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	values := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		if !seen[capability] {
+			seen[capability] = true
+			values = append(values, capability)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	node, ok := f.nodes[id]
+	if !ok {
+		return fmt.Errorf("node not found: %s", id)
+	}
+	oldRelease, oldCapabilities := node.ReleaseID, node.FeatureCapabilities
+	node.ReleaseID = release
+	node.FeatureCapabilities = values
+	if err := f.save(); err != nil {
+		node.ReleaseID = oldRelease
+		node.FeatureCapabilities = oldCapabilities
+		return err
+	}
+	return nil
 }

@@ -5,8 +5,129 @@ import { contrast as designContrast } from './design-engine.js';
 // These browser regressions verify frontend behavior independently of network
 // and database availability. e2e.spec.js separately exercises a real controller.
 const origin = 'http://127.0.0.1:4176';
-const tabs = ['sample-history', 'header-templates', 'kv-templates', 'operations', 'monitoring', 'streams', 'sync-fabric', 'nhle-monitor', 'napi-monitor', 'nal-monitor', 'assurance', 'quarantine-wizard', 'upes', 'parser-workspace', 'nupire', 'api-monitor', 'latency', 'field-integrity', 'fleet', 'parser-sync', 'clients', 'controller', 'controller-gateway', 'ai-privacy', 'parsers', 'reference-ai', 'building-blocks', 'field-mapping', 'migration', 'input-paths', 'kv', 'static', 'projection', 'studio', 'regex', 'knownkeys', 'semantic', 'engine-network', 'engine-url', 'engine-email', 'engine-subject', 'outputs', 'metadata', 'unknowns', 'drift', 'performance', 'rollouts', 'backup-restore', 'artifacts', 'security', 'system', 'communications', 'notifications', 'ai', 'ai-guidance'];
+const tabs = ['sample-history', 'header-templates', 'kv-templates', 'operations', 'monitoring', 'streams', 'sync-fabric', 'nhle-monitor', 'napi-monitor', 'nal-monitor', 'assurance', 'quarantine-wizard', 'upes', 'parser-workspace', 'nupire', 'api-monitor', 'latency', 'field-integrity', 'fleet', 'parser-sync', 'clients', 'controller', 'controller-gateway', 'ai-privacy', 'parsers', 'reference-ai', 'building-blocks', 'field-mapping', 'migration', 'input-paths', 'selective-input', 'output-fields', 'kv', 'static', 'projection', 'studio', 'regex', 'knownkeys', 'semantic', 'engine-network', 'engine-url', 'engine-email', 'engine-subject', 'outputs', 'metadata', 'unknowns', 'drift', 'performance', 'rollouts', 'backup-restore', 'artifacts', 'security', 'system', 'communications', 'notifications', 'ai', 'ai-guidance'];
 const assets = Object.fromEntries(await Promise.all(['index.html', 'app.js', 'styles.css', 'design-engine.js', 'design-engine.css', 'nli-mark.svg', 'nexora-logo-v21.png', 'login-banner-v22.jpg', 'nexora-poster-v21.png'].map(async name => [name, await readFile(new URL(name, import.meta.url))])));
+
+test('R9 selective input keeps the exact EHLO raw record before explicit parsing and saves only a reviewed draft',async({page})=>{
+  test.setTimeout(60000);await page.setViewportSize({width:1920,height:1080});await mockController(page);const calls=[],saves=[];let items=[];
+  await page.route('**/api/v1/config/selective-input',route=>{
+    if(route.request().method()==='POST'){const body=route.request().postDataJSON();saves.push(body);items=[{id:body.id,revision:1,state:'draft',payload:{name:body.name,config:body.config}}];return route.fulfill({status:201,json:items[0]});}
+    return route.fulfill({json:{items}});
+  });
+  await page.route('**/api/v1/policies/input/preview',route=>{
+    const body=route.request().postDataJSON();calls.push(body);const raw=body.raw.split(/\r?\n/).filter(Boolean),matched=body.config.enabled?raw.filter(line=>line.includes('SmtpServerEHLO(')):raw,excluded=raw.filter(line=>!matched.includes(line));
+    return route.fulfill({json:{matched_raw:matched,excluded_raw:excluded,accepted_count:matched.length,excluded_count:excluded.length,total:raw.length,scope:'draft',parse_requested:body.parse,results:body.parse?matched.map(line=>({raw:line,passed:true,actual:{event:'SmtpServerEHLO',domain:'server035.mx.internal',host:'11.22.33.44'}})):[]}});
+  });
+  await login(page);await page.getByTestId('nav-selective-input').click();
+  const editor=page.locator('#config-form'),preview=page.locator('#policy-preview-form');
+  await expect(editor.getByLabel('Enable policy after review and publication')).not.toBeChecked();
+  await preview.getByRole('button',{name:'Load example logs'}).click();
+  const source=(await preview.getByLabel('Raw log samples',{exact:true}).inputValue()).split('\n');
+  await preview.getByRole('button',{name:'Run Filter',exact:true}).click();
+  await expect(page.getByTestId('policy-preview-summary')).toContainText('3 accepted');
+  await editor.getByLabel('Enable policy after review and publication').check();
+  await expect(preview.getByRole('button',{name:'Parse matched records'})).toBeDisabled();
+  await preview.getByRole('button',{name:'Run Filter',exact:true}).click();
+  await expect(page.getByTestId('policy-matched-raw')).toHaveText(source[1]);
+  await expect(page.getByTestId('policy-preview-summary')).toContainText('1 accepted · 2 intentionally excluded · 3 total');
+  await expect(page.getByTestId('policy-input-json')).toHaveCount(0);
+  expect(calls.map(call=>call.parse)).toEqual([false,false]);
+  await preview.getByRole('button',{name:'Parse matched records'}).click();
+  await expect(page.getByTestId('policy-input-json')).toContainText('server035.mx.internal');
+  expect(calls.at(-1).parse).toBe(true);expect(saves).toHaveLength(0);
+  await editor.getByLabel('Policy ID',{exact:true}).fill('smtp-ehlo-only');await editor.getByLabel('Policy name',{exact:true}).fill('SMTP EHLO only');
+  if(process.env.NLI_SELECTIVE_SCREENSHOT){await expect(page.locator('#toast-region .toast')).toHaveCount(0,{timeout:12000});await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:process.env.NLI_SELECTIVE_SCREENSHOT,fullPage:true});}
+  await editor.getByRole('button',{name:'Save draft revision',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Submit for review',exact:true})).toBeVisible();
+  expect(saves[0].config).toEqual({enabled:true,match_mode:'any',rules:[{field:'event',operator:'equals',values:['SmtpServerEHLO'],case_sensitive:false}]});
+  expect(items[0].state).toBe('draft');
+  await page.locator('#policy-preview-form').getByRole('button',{name:'Reset sample/results'}).click();
+  await expect(page.locator('#policy-preview-form [name=raw]')).toHaveValue('');await expect(page.getByTestId('policy-matched-raw')).toHaveCount(0);
+});
+
+test('R9 output field preview removes only named root keys and invalidates stale results after an edit',async({page})=>{
+  test.setTimeout(60000);await page.setViewportSize({width:1920,height:1080});await mockController(page);const calls=[];
+  await page.route('**/api/v1/policies/output/preview',route=>{
+    const body=route.request().postDataJSON();calls.push(body);const before=[{event:'SmtpServerEHLO',pid:'3609',thread_id:'140293780948736',domain:'server035.mx.internal',host:'11.22.33.44'}],after=before.map(record=>Object.fromEntries(Object.entries(record).filter(([key])=>!body.config.enabled||!body.config.fields.includes(key))));
+    return route.fulfill({json:{before,after,removed_fields:body.config.enabled?['pid','thread_id']:[],parsed_count:1,failed_count:0,total:1,scope:'draft',results:[{passed:true,actual:after[0]}]}});
+  });
+  await login(page);await page.getByTestId('nav-output-fields').click();
+  const editor=page.locator('#config-form'),preview=page.locator('#policy-preview-form');
+  await preview.getByRole('button',{name:'Load example logs'}).click();
+  await editor.getByLabel('Enable policy after review and publication').check();
+  const single=(await preview.getByLabel('Raw log samples',{exact:true}).inputValue()).split('\n')[1];await preview.getByLabel('Raw log samples',{exact:true}).fill(single);
+  await preview.getByRole('button',{name:'Parse and preview field removal'}).click();
+  await expect(page.getByTestId('policy-output-before')).toContainText('"pid": "3609"');
+  await expect(page.getByTestId('policy-output-after')).not.toContainText('"pid"');
+  await expect(page.getByTestId('policy-output-after')).not.toContainText('"thread_id"');
+  await expect(page.getByTestId('policy-output-after')).toContainText('"domain": "server035.mx.internal"');
+  expect(calls[0].config).toEqual({enabled:true,fields:['pid','thread_id']});
+  if(process.env.NLI_OUTPUT_FIELDS_SCREENSHOT){await expect(page.locator('#toast-region .toast')).toHaveCount(0,{timeout:12000});await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:process.env.NLI_OUTPUT_FIELDS_SCREENSHOT,fullPage:true});}
+  await editor.getByLabel('Field names to remove').fill('host');
+  await expect(page.getByRole('button',{name:'Download preview results'})).toBeDisabled();
+  await expect(preview.locator('[data-policy-preview-status]')).toContainText('Run a fresh preview');
+  await preview.getByRole('button',{name:'Reset sample/results'}).click();
+  await expect(preview.getByLabel('Raw log samples',{exact:true})).toHaveValue('');
+  await expect(page.getByTestId('policy-output-after')).toHaveCount(0);
+});
+
+test('R9 selective policy file loading rules and live preview are explicit and read-only roles cannot save',async({page})=>{
+  const requests=[];await mockController(page,{role:'viewer',permissions:['fleet:read','parsers:read','assurance:run']});
+  await page.route('**/api/v1/policies/input/preview',route=>{const body=route.request().postDataJSON();requests.push(body);return route.fulfill({json:{matched_raw:[body.raw],excluded_raw:[],accepted_count:1,excluded_count:0,total:1,scope:'live',bundle_hash:'a'.repeat(64),parse_requested:false,results:[]}});});
+  await login(page);await page.getByTestId('nav-selective-input').click();
+  await expect(page.locator('#config-form')).toBeHidden();
+  const preview=page.locator('#policy-preview-form');
+  await preview.getByLabel('Load raw sample file').setInputFiles({name:'sample.log',mimeType:'text/plain',buffer:Buffer.from('one raw test record')});
+  await expect(preview.getByLabel('Raw log samples',{exact:true})).toHaveValue('one raw test record');
+  await preview.getByLabel('Test published live policies instead of this draft').check();
+  await preview.getByRole('button',{name:'Run Filter',exact:true}).click();
+  await expect(page.getByTestId('policy-preview-summary')).toContainText('Published live policies');
+  expect(requests[0].use_live).toBe(true);expect(requests[0].config).toBeUndefined();
+});
+
+test('R9 excluded live Assurance is intentional and policy AI offers guidance without a parser draft',async({page})=>{
+  await mockController(page);
+  await page.route('**/api/v1/assurance/run',route=>route.fulfill({json:{filtered_out:true,parse_attempted:false,route:'filtered_out',passed:false,actual:{},errors:[],counts:{attempts:0},policy:{reason:'No enabled rule matched'}}}));
+  await login(page);await page.getByTestId('nav-assurance').click();
+  await page.locator('#assurance-form [name=raw]').fill('unselected raw event');
+  await page.getByRole('button',{name:'Run assurance',exact:true}).click();
+  await expect(page.locator('#assurance-result')).toContainText('EXCLUDED');
+  await expect(page.locator('#assurance-result')).not.toContainText('Parser remediation is required');
+  await page.getByTestId('nav-selective-input').click();
+  await page.getByRole('button',{name:'Auto Fix with Nexora AI',exact:true}).first().click();
+  const dialog=page.locator('#workspace-ai-dialog');await expect(dialog).toContainText('AI cannot save, enable, publish or restore a policy');
+  await expect(dialog.locator('[name=artifact]')).toHaveCount(0);
+  await expect(dialog.getByRole('button',{name:'Get guidance',exact:true})).toBeVisible();
+});
+
+test('R9 uploaded samples keep intentional exclusions separate from parser failures',async({page})=>{
+  await mockController(page);
+  await page.route('**/api/v1/assurance/upload',route=>route.fulfill({json:{filename:'test.log',member_count:1,record_count:2,retained:false,results:[{filename:'test.log',results:[{source_line:1,filtered_out:true,parse_attempted:false,passed:false,actual:{},errors:[]},{source_line:2,passed:true,actual:{event:'SmtpServerEHLO'},errors:[]}]}]}}));
+  await login(page);await page.getByTestId('nav-assurance').click();
+  await page.locator('#assurance-upload-form [name=file]').setInputFiles({name:'test.log',mimeType:'text/plain',buffer:Buffer.from('raw one\nraw two')});
+  await page.getByRole('button',{name:'Analyze uploaded sample',exact:true}).click();
+  await expect(page.getByTestId('assurance-upload-summary')).toContainText('1 parsed · 0 failed · 1 intentionally excluded · 2 total');
+  await expect(page.locator('#assurance-result')).not.toContainText('Parser remediation is required');
+});
+
+test('R9 advanced policy JSON rejects unsupported fields and disable revisions preserve exact revision checks',async({page})=>{
+  await mockController(page);const saved=[];
+  const active={id:'smtp-ehlo',revision:4,state:'active',payload:{name:'EHLO',config:{enabled:true,match_mode:'all',rules:[{field:'event',operator:'equals',values:['SmtpServerEHLO'],case_sensitive:false}]}}};
+  await page.route('**/api/v1/config/selective-input**',route=>{
+    const request=route.request();if(request.method()==='PUT'){saved.push(request.postDataJSON());return route.fulfill({json:{...active,revision:5,state:'draft',payload:request.postDataJSON()}});}
+    return route.fulfill({json:new URL(request.url()).pathname.endsWith('/smtp-ehlo')?active:{items:[active]}});
+  });
+  await login(page);await page.getByTestId('nav-selective-input').click();
+  await page.getByRole('button',{name:'Prepare disable revision',exact:true}).click();
+  const form=page.locator('#config-form');await expect(form.getByLabel('Enable policy after review and publication')).not.toBeChecked();
+  await expect(form).toContainText('Prepared a revision only');
+  await form.locator('summary').click();await form.locator('[name=config]').fill('{"enabled":false,"match_mode":"all","rules":[],"unsupported":true}');
+  await form.locator('[name=config]').blur();await form.getByRole('button',{name:'Save draft revision',exact:true}).click();
+  await expect(page.locator('#toast-region')).toContainText('unsupported configuration key');expect(saved).toHaveLength(0);
+  await page.getByRole('button',{name:'Prepare disable revision',exact:true}).click();
+  await form.getByRole('button',{name:'Save draft revision',exact:true}).click();
+  await expect.poll(()=>saved.length).toBe(1);expect(saved[0].expected_revision).toBe(4);expect(saved[0].config.enabled).toBe(false);
+});
 
 test('R8 client names and 1005-member groups retain IDs, freeze exact targets and require normal action approval',async({page})=>{
   test.setTimeout(90000);await page.setViewportSize({width:1920,height:1080});await mockController(page);
@@ -33,7 +154,7 @@ test('R8 client names and 1005-member groups retain IDs, freeze exact targets an
   await page.route('**/api/v1/parser-sync/rollout',route=>{actions.push(route.request().postDataJSON());return route.fulfill({json:{proposal:{id:'parser-approval-needed',state:'pending_approval'}}});});
   await login(page);await page.getByTestId('nav-clients').click();
   await expect(page.locator('[data-client-inventory-count]')).toContainText('1005 enrolled clients');
-  await page.locator('[data-client-inventory-next]').click();await expect(page.locator('[data-client-inventory-count]')).toContainText('11â€“20');
+  await page.locator('[data-client-inventory-next]').click();await expect(page.locator('[data-client-inventory-count]')).toContainText('11–20');
   const naming=page.locator('#client-display-form');
   await naming.getByLabel('Client to name').selectOption('client-0');await naming.getByLabel('Display name',{exact:true}).fill('Office mail gateway');
   await naming.getByRole('button',{name:'Save display name',exact:true}).click();
@@ -47,7 +168,7 @@ test('R8 client names and 1005-member groups retain IDs, freeze exact targets an
   await expect.poll(()=>groups.size).toBe(1);expect(groups.get('office-mail').node_ids).toHaveLength(1005);expect(actions).toHaveLength(0);
   const action=page.locator('#client-action-form');await action.getByLabel('Scope',{exact:true}).selectOption('group');await action.getByLabel('Target client group').selectOption('office-mail');
   await action.getByRole('button',{name:'Preview group targets'}).click();await expect(action.locator('[data-client-group-targets]')).toContainText('1005 exact target IDs');
-  await expect(action.locator('[data-client-group-targets]')).toContainText('Office mail gateway Â· client-0');
+  await expect(action.locator('[data-client-group-targets]')).toContainText('Office mail gateway · client-0');
   await page.locator('#client-inventory-search').fill('Office mail gateway');
   if(process.env.NLI_CLIENT_SCREENSHOT){await page.evaluate(()=>{document.activeElement?.blur();window.scrollTo({top:0,behavior:'instant'});});await page.screenshot({path:process.env.NLI_CLIENT_SCREENSHOT,fullPage:true,animations:'disabled'});}
   staleMembership=true;await action.getByRole('button',{name:'Request approval',exact:true}).click();await expect(action.locator('[data-client-action-result]')).toContainText('Group membership changed');expect(actions).toHaveLength(0);
@@ -100,7 +221,7 @@ test('R8 known-key bulk import previews 1500 keys, imports file, rejects invalid
   const keys=Array.from({length:1500},(_,i)=>`KnownKey_${String(i).padStart(4,'0')}`);
   await source.fill(keys.join('\n')+'\nknownkey_0000\nKnownKey_0001');
   await form.getByRole('button',{name:'Preview import'}).click();
-  await expect(form.locator('[data-known-key-import-result]')).toContainText('1502 entries Â· 1500 unique keys Â· 2 duplicate(s) removed Â· 0 invalid');
+  await expect(form.locator('[data-known-key-import-result]')).toContainText('1502 entries · 1500 unique keys · 2 duplicate(s) removed · 0 invalid');
   await expect(save).toBeEnabled();
   if(process.env.NLI_KNOWNKEY_SCREENSHOT)await page.screenshot({path:process.env.NLI_KNOWNKEY_SCREENSHOT,fullPage:true});
   await source.fill('valid_key\nbad=value');
@@ -361,7 +482,7 @@ test('saved header preview defaults to the built-in Global AutoSense profile', a
   await page.getByTestId('nav-kv-templates').click();
   await expect(page.getByRole('heading',{name:'Global AutoSense',exact:true})).toBeVisible();
   const revisions=page.getByLabel('Header template',{exact:true});
-  await expect(revisions.locator('option')).toHaveText(['Select a saved revision','Mail header Â· revision 5 Â· draft','Mail header Â· revision 4 Â· active']);
+  await expect(revisions.locator('option')).toHaveText(['Select a saved revision','Mail header · revision 5 · draft','Mail header · revision 4 · active']);
   await revisions.selectOption(JSON.stringify({id:'mail-header',revision:4}));
   const raw='20250811 080053105+0100 aaa-gmailrgi009 smtp 3692 0 140026854221568 123456;Note;efgh;ijkl;mnop;SieveRuleMsg status=failed;reason=not needed';
   await page.getByLabel('Sample log',{exact:true}).fill(raw);
@@ -476,10 +597,10 @@ test('R7 Ask Nexora AI separates verified workspace guidance from untrusted prov
     await form.getByLabel('Tab or step (optional)').fill('Provider');
     await form.getByLabel('What do you need help with?').fill('Which control tests my connection?');
     await form.getByRole('button',{name:'Get guidance'}).click();
-    await expect(verified).toContainText('AI Resolution & Providers Â· provider');
+    await expect(verified).toContainText('AI Resolution & Providers · provider');
     await expect(verified).toContainText('Test connection');
     await expect(verified).toContainText('Test the selected provider profile and inspect the connection result.');
-    await expect(verified).toContainText('Catalog release 23.0.0-7 Â· version 2');
+    await expect(verified).toContainText('Catalog release 23.0.0-7 · version 2');
     await expect(verified).toContainText(catalog.sha256);
     await expect(verified).not.toContainText('Provider suggestion');
     await expect(form.getByRole('status')).toContainText('Provider answer');
@@ -1337,7 +1458,7 @@ for(const passes of [true,false])test(`R9 combined wizard generation validates s
  const raw='mailnode status=failed:server=cloud';const mock=await mockController(page,{quarantineRaw:raw,assurancePassed:passes});let nativePlan;
  await page.route('**/api/v1/assurance/mapping-preview',async route=>{nativePlan=route.request().postDataJSON().plan;await route.fulfill({contentType:'application/json',body:JSON.stringify({passed:true,actual:{hostname:'mailnode',status:'failed',server:'cloud'},errors:[]})});});
  await login(page);await page.getByTestId('nav-quarantine-wizard').click();await page.getByRole('button',{name:'Inspect',exact:true}).click();await page.getByRole('button',{name:/Review desired schema/}).click();await page.getByText('Import or edit a mapping plan',{exact:true}).click();await page.locator('#nfi-plan-import').fill(JSON.stringify({version:1,fields:[{name:'hostname',method:'position',source:'1',type:'string',policy:'required'},{name:'tail_fields',method:'kv_eol',source:'2',unit:'token',type:'object',policy:'required',output_policy:'flatten',assignment_separators:['='],pair_delimiters:':;| \t\r\n',require_complete:true}]}));await page.getByRole('button',{name:'Import mapping',exact:true}).click();
- const method=page.locator('[data-qrw-key=method]').nth(1);await expect(method.locator('option:checked')).toHaveText('Key value EOL â€” End of line');await expect(method.locator('option[value=key_value]')).toHaveCount(1);
+ const method=page.locator('[data-qrw-key=method]').nth(1);await expect(method.locator('option:checked')).toHaveText('Key value EOL — End of line');await expect(method.locator('option[value=key_value]')).toHaveCount(1);
  await page.getByRole('button',{name:'Generate + validate complete parser pack',exact:true}).click();await expect(page.locator('#gprs-parser-helper-form')).toBeVisible();expect(nativePlan.fields[1]).toMatchObject({method:'kv_all',end_of_line:true,source:'2',output_policy:'flatten'});const parser=JSON.parse(await page.locator('#gprs-parser-helper-form [name=parser]').inputValue());expect(parser.fields.map(field=>field.name)).toEqual(['hostname']);expect(parser.mapping_plan.fields).toHaveLength(2);await expect(page.locator('#gprs-parser-helper-form [data-parser-helper-status]')).toContainText(passes?'Complete parser validation passed':'0/1 passed');expect(mock.observed).toContain('POST /api/v1/assurance/parser-preview');expect(mock.observed.some(item=>item.endsWith('/publish'))).toBe(false);
 });
 
@@ -1422,7 +1543,8 @@ test('all workspaces render and audit is visible', async ({ page }) => {
   expect(observed.filter(item => item.endsWith('/api/v1/stream'))).toEqual([]);
   const fleetSyncRequests = observed.filter(item => item === 'GET /api/v1/fleet/sync');
   expect(fleetSyncRequests.length).toBeGreaterThanOrEqual(1);
-  expect(fleetSyncRequests.length).toBeLessThanOrEqual(6);
+  // The two optional policy workspaces each read the shared fleet metrics once.
+  expect(fleetSyncRequests.length).toBeLessThanOrEqual(8);
   expect(errors).toEqual([]);
   await page.locator('#notification-bell').click();
   await expect(page.getByText('Notifications', { exact: true })).toBeVisible();
@@ -1576,7 +1698,7 @@ test('empty telemetry uses reported state and never renders NaN', async ({ page 
   }));
   await login(page);
   await expect(page.locator('.diagnostic-panel')).toContainText('No active latency or error diagnostics');
-  await expect(page.locator('.dashboard-kpi-strip').first()).toContainText('â€”');
+  await expect(page.locator('.dashboard-kpi-strip').first()).toContainText('—');
   await expect(page.locator('#page')).not.toContainText('NaN');
   await page.setViewportSize({width:390,height:844});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
@@ -1607,11 +1729,8 @@ test('navigation leads with Command Center, Assurance Lab, approvals and notific
   expect(ids.slice(0,26)).toEqual(['operations','monitoring','streams','assurance','quarantine-wizard','upes','rollouts','backup-restore','parser-sync','artifacts','parser-workspace','nupire','field-integrity','ai','ai-guidance','sample-history','header-templates','kv-templates','parsers','reference-ai','building-blocks','field-mapping','studio','regex','knownkeys','drift']);
   expect(ids[26]).toBe('notifications');
   const input=ids.indexOf('input-paths'),output=ids.indexOf('outputs'),parsing=ids.indexOf('kv');
-  expect(ids[input+1]).toBe('migration');
-  expect(ids[input+2]).toBe('outputs');
-  expect(ids[output+1]).toBe('metadata');
-  expect(ids[output+2]).toBe('unknowns');
-  expect(ids[output+3]).toBe('performance');
+  expect(ids.slice(input,input+4)).toEqual(['input-paths','selective-input','migration','outputs']);
+  expect(ids.slice(output,output+5)).toEqual(['outputs','output-fields','metadata','unknowns','performance']);
   expect(ids[parsing]).toBe('kv');
   expect(ids.indexOf('parsers')).toBeLessThan(parsing);
   expect(ids.indexOf('parsers')).toBe(ids.indexOf('kv-templates')+1);
@@ -1677,7 +1796,7 @@ test('Quarantine inbox groups only controller-verified signatures and isolates u
   ] });
   await login(page);
   await page.getByTestId('nav-quarantine-wizard').click();
-  await expect(page.getByText('Individual record Â· shared cause unverified')).toHaveCount(2);
+  await expect(page.getByText('Individual record · shared cause unverified')).toHaveCount(2);
   await expect(page.getByText('2 signature-matched records')).toHaveCount(1);
 });
 
@@ -1789,7 +1908,7 @@ test('FieldSense requests guidance before native preview and preserves the edita
   await page.locator('#nfi-raw').fill('status=FAILED');
   await page.getByRole('button',{name:'Add Custom Field',exact:true}).click();
   await page.locator('[data-qrw-key=name]').fill('my_status');
-  await page.getByText('Optional configured AI help Â· review only',{exact:true}).click();
+  await page.getByText('Optional configured AI help · review only',{exact:true}).click();
   await page.getByRole('button',{name:'Ask configured Nexora AI for review-only help',exact:true}).click();
   const dialog=page.getByRole('dialog');
   await dialog.getByRole('textbox',{name:'What do you need help with?'}).fill('How should I map status?');
@@ -1828,22 +1947,22 @@ test('NFI maps compound tokens and colon key/value fields into a transform-capab
   const event=page.locator('[data-qrw-row]').nth(8);await event.locator('.nfi-operations summary').click();await event.getByRole('button',{name:'Add operation',exact:true}).click();
   await event.locator('[data-qrw-op-key=op]').selectOption('uppercase');await page.getByRole('button',{name:'Test all fields',exact:true}).click();
   const desired=JSON.parse(await page.locator('[name=gprs_desired]').inputValue());expect(desired).toMatchObject({loglevel:'Note',event:'DELIVERYEVENT',status:'failed',reason:'notneeded',server:'cloud',thread_id:'140026854221568'});
-  await page.getByRole('button',{name:/5 Â· Auto-populate complete parser/}).click();
+  await page.getByRole('button',{name:/5 · Auto-populate complete parser/}).click();
   const form=page.locator('#gprs-parser-helper-form'),parser=JSON.parse(await form.locator('[name=parser]').inputValue());expect(parser.pattern_type).toBe('mapping');expect(parser.mapping_plan.fields.find(field=>field.name==='event').operations[0].op).toBe('uppercase');
   await form.getByRole('button',{name:'Save review-gated draft',exact:true}).click();await expect.poll(()=>mock.observed.includes('POST /api/v1/assurance/parsers')).toBe(true);expect(mock.observed.some(request=>request.endsWith('/publish'))).toBe(false);
 });
 
 test('NFI standalone workbench verifies ordered splits, Unicode selections and merged names and saves one governed plan',async({page})=>{
   const mock=await mockController(page);let verifiedPlan;
-  await page.route('**/api/v1/assurance/mapping-preview',async route=>{verifiedPlan=route.request().postDataJSON().plan;await route.fulfill({contentType:'application/json',body:JSON.stringify({passed:true,actual:{kind:'event:x',symbol:'Î±',combined:'event:x/Î±'},fields:[],errors:[]})});});
+  await page.route('**/api/v1/assurance/mapping-preview',async route=>{verifiedPlan=route.request().postDataJSON().plan;await route.fulfill({contentType:'application/json',body:JSON.stringify({passed:true,actual:{kind:'event:x',symbol:'\u03b1',combined:'event:x/\u03b1'},fields:[],errors:[]})});});
   await login(page);await page.getByTestId('nav-field-mapping').click();await expect(page.locator('#page h1')).toHaveText('NLI FieldSense Studio');
-  await page.locator('#nfi-raw').fill('Î± beta;X|Y');await expect(page.locator('.nfi-token').first()).toContainText('chars 1â€“1');
+  await page.locator('#nfi-raw').fill('\u03b1 beta;X|Y');await expect(page.locator('.nfi-token').first()).toContainText('chars 1–1');
   await page.getByText('Import or edit a mapping plan',{exact:true}).click();
   const fields=[{name:'kind',type:'string',policy:'required',method:'position',source:'2',operations:[{op:'split',delimiter:';',part:2},{op:'split',delimiter:'|',part:1},{op:'lowercase'},{op:'prefix',value:'event:'}]},{name:'symbol',type:'string',policy:'required',method:'character',source:'1',source_end:'1'},{name:'combined',type:'string',policy:'derived',method:'derived',source:'kind,symbol',join_separator:'/'}];
-  await page.locator('#nfi-plan-import').fill(JSON.stringify({version:1,fields,service_scope:'mapping-test',scope_pattern:'^Î±',reviewed_global_scope:false}));await page.getByRole('button',{name:'Import mapping',exact:true}).click();await page.getByRole('button',{name:'Test all fields',exact:true}).click();
-  await expect(page.locator('[data-qrw-row]').nth(2).locator('[data-qrw-preview]')).toHaveText('event:x/Î±');
+  await page.locator('#nfi-plan-import').fill(JSON.stringify({version:1,fields,service_scope:'mapping-test',scope_pattern:'^\u03b1',reviewed_global_scope:false}));await page.getByRole('button',{name:'Import mapping',exact:true}).click();await page.getByRole('button',{name:'Test all fields',exact:true}).click();
+  await expect(page.locator('[data-qrw-row]').nth(2).locator('[data-qrw-preview]')).toHaveText('event:x/\u03b1');
   await page.getByRole('button',{name:'Preview mapping',exact:true}).click();await expect(page.locator('#qrw-field-status')).toContainText('Verified by controller');expect(verifiedPlan.fields[0].operations).toHaveLength(4);
-  await page.locator('[data-action=nfi-generate]').first().click();const parser=JSON.parse(await page.locator('#nfi-parser-json').inputValue());expect(parser.mapping_plan.fields[2].method).toBe('derived');expect(parser.service_scope).toBe('mapping-test');expect(parser.scope_pattern).toBe('^Î±');
+  await page.locator('[data-action=nfi-generate]').first().click();const parser=JSON.parse(await page.locator('#nfi-parser-json').inputValue());expect(parser.mapping_plan.fields[2].method).toBe('derived');expect(parser.service_scope).toBe('mapping-test');expect(parser.scope_pattern).toBe('^\u03b1');
   await page.getByRole('button',{name:'Validate and save review-gated draft',exact:true}).click();await expect.poll(()=>mock.observed.includes('POST /api/v1/assurance/parsers')).toBe(true);await expect(page.locator('#page-title')).toHaveText('NLI FieldSense Studio');await expect(page.locator('#page tr').filter({hasText:'native-field-mapping'})).toContainText('draft');
   await page.getByRole('button',{name:'Use candidate in Parser Creation Workspace',exact:true}).click();expect(JSON.parse(await page.locator('#parser-workspace-form [name=parser]').inputValue()).mapping_plan.fields).toHaveLength(3);
   await page.getByTestId('nav-field-mapping').click();await page.getByRole('button',{name:'Use mapped names in output delivery',exact:true}).click();expect(JSON.parse(await page.locator('#output-profile-form [name=field_columns]').inputValue())).toEqual({kind:'kind',symbol:'symbol',combined:'combined'});
@@ -1890,7 +2009,7 @@ test('QRW preserves the supplied SMTP sample structure, multiword key-value reas
   const desired = JSON.parse(await page.locator('#gprs-preview-form [name=gprs_desired]').inputValue());
   expect(desired).toMatchObject({ status: 'failed', reason: 'not needed', event_type: 'SieveRuleMsg' });
 
-  const autoPopulate = page.getByRole('button', { name: /5 Â· Auto-populate complete parser/ });
+  const autoPopulate = page.getByRole('button', { name: /5 · Auto-populate complete parser/ });
   await expect(autoPopulate).toBeVisible();
   await expect(autoPopulate).toBeEnabled();
   await autoPopulate.click();
@@ -1978,7 +2097,7 @@ test('terminal quarantine metadata stays out of manual attention and repair acti
   await page.evaluate(()=>sessionStorage.setItem('nli.qrw.selected-record','q-excluded'));
   await page.getByTestId('nav-quarantine-wizard').click();
   await expect(page.getByRole('button',{name:'Inspect',exact:true})).toHaveCount(0);
-  await expect(page.locator('[data-wizard-step="1"] .qrw-step-state')).toHaveText('Current Â· do this now');
+  await expect(page.locator('[data-wizard-step="1"] .qrw-step-state')).toHaveText('Current · do this now');
   await page.reload();
   await page.getByTestId('nav-unknowns').click();
   await expect(page.locator('.card.metric').filter({hasText:'Manual attention'}).locator('.metric-value')).toHaveText('0');
@@ -2023,7 +2142,7 @@ test('QRW stages 6â€“9 give the next action and gate replay on the exact or
   await expect(page.locator('.qrw-next-action')).toContainText('Create the origin-client rollout proposal');
   await expect(page.getByRole('button',{name:/Request targeted replay/})).toBeDisabled();
   await expect(page.locator('#gprs-replay-form [name=record_ids] option[value="q-1"]')).toHaveAttribute('disabled','');
-  await expect(page.getByTestId('qrw-deployment-status')).toContainText('Step 8 Â· Deploy and replay');
+  await expect(page.getByTestId('qrw-deployment-status')).toContainText('Step 8 · Deploy and replay');
   await page.getByText('Deployment details and fleet controls',{exact:true}).click();
   await expect(page.getByRole('list',{name:'Deployment and replay checklist'})).toContainText('Published bundle available');
   await page.getByRole('button',{name:'Propose to all eligible clients'}).click();
@@ -2031,7 +2150,7 @@ test('QRW stages 6â€“9 give the next action and gate replay on the exact or
   expect(mock.qrwRolloutRequests[0]).toEqual({target_mode:'all_eligible',origin_node_id:'node-1',node_ids:[],bundle_hash:checksum});
   await page.getByText('Deployment details and fleet controls',{exact:true}).click();
   const rolloutRow=page.locator('#page tr').filter({hasText:'qrw-rollout-1'});
-  await expect(rolloutRow).toContainText('all_eligible Â· 2 client(s)');
+  await expect(rolloutRow).toContainText('all_eligible · 2 client(s)');
   await expect(rolloutRow.getByRole('button',{name:'Administrator approve exact bundle'})).toBeEnabled();
   await expect(page.getByRole('button',{name:'Propose to origin client'})).toBeDisabled();
   await expect(page.getByRole('button',{name:'Propose to all eligible clients'})).toBeDisabled();
@@ -2196,7 +2315,7 @@ test('legacy parser proposals reach controller verification and a hash rejection
   await login(page);
   await page.getByTestId('nav-rollouts').click();
   const row=page.locator('tr').filter({hasText:'Legacy parser rollout'});
-  await expect(row).toContainText('Legacy snapshot Â· controller verification required');
+  await expect(row).toContainText('Legacy snapshot · controller verification required');
   await expect(row.getByRole('button',{name:'Approve reviewed proposal'})).toBeEnabled();
   await row.locator('[data-rollout-reason]').fill('Reviewed legacy snapshot evidence');
   await row.getByRole('button',{name:'Approve reviewed proposal'}).click();
@@ -2252,14 +2371,14 @@ test('browser brand, Assurance selection, and account/audit timestamps stay expl
   const created = usersPanel.locator('tr', { hasText: 'test-operator' }).locator('td').nth(4);
   const expected = await page.evaluate(() => new Intl.DateTimeFormat(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(new Date('2026-10-24T00:34:56Z')));
   await expect(created).toHaveText(expected);
-  await expect(usersPanel.locator('tr', { hasText: 'never-signed-in' }).locator('td').nth(5)).toHaveText('â€”');
+  await expect(usersPanel.locator('tr', { hasText: 'never-signed-in' }).locator('td').nth(5)).toHaveText('—');
   expect(expected).toMatch(/\d{2}:\d{2}:\d{2}/);
   const auditPanel = page.locator('.panel').filter({ has: page.getByRole('heading', { name: 'Immutable audit chain' }) });
   const approvalTime = auditPanel.locator('tr', { hasText: 'user.approved' }).locator('td').nth(1);
   const approvalExpected = await page.evaluate(() => new Intl.DateTimeFormat(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(new Date('2026-10-24T02:03:04Z')));
   await expect(approvalTime).toHaveText(approvalExpected);
   await page.getByTestId('nav-communications').click();
-  await expect(page.getByText('Client â†’ Controller', { exact: true })).toBeVisible();
+  await expect(page.getByText('Client \u2192 Controller', { exact: true })).toBeVisible();
   await page.getByTestId('nav-notifications').click();
   await expect(page.getByText('not_configured').first()).toBeVisible();
   await page.getByLabel('Enable SMTP email').check();
@@ -2766,7 +2885,7 @@ test('Parser Creation Workspace builds a complete editable draft without publish
   await expect(page.getByText('1 live runtime parsers are available as reference.')).toBeVisible();
   await expect(page.getByRole('row').filter({hasText:'Legacy draft'}).getByRole('button',{name:'Submit for review'})).toBeDisabled();
   await page.getByRole('button', { name: 'Validate on controller' }).click();
-  await expect(form.locator('[data-parser-status]')).toContainText('Include 1â€“100 validation cases');
+  await expect(form.locator('[data-parser-status]')).toContainText('Include 1–100 validation cases');
   expect(observed.filter(path=>path==='POST /api/v1/assurance/parser-preview')).toHaveLength(0);
   await form.locator('[name=samples]').fill('level=INFO user=alice   \r\nlevel=WARN user=bob\t  \r\n');
   const autoPopulate = page.getByRole('button', { name: 'Auto-populate complete parser' });
@@ -2941,7 +3060,7 @@ test('published endpoint profile requests a revision-bound single-client canary 
   const delivery = page.locator('#endpoint-delivery-status');
   await expect(delivery).toContainText('1 enabled / 1 reporting / 1 online clients');
   await expect(delivery.getByRole('row').filter({hasText:'Grafana Loki'}).filter({hasText:'mail-node-1'})).toContainText('42');
-  await form.locator('[name=profile_id]').selectOption({label:'Remote delivery Â· r4'});
+  await form.locator('[name=profile_id]').selectOption({label:'Remote delivery · r4'});
   await expect(form.locator('[name=scope]')).toHaveValue('canary');
   await form.locator('[name=canary_node]').selectOption('node-1');
   await form.getByRole('button', { name: 'Request independent approval' }).click();
@@ -3356,7 +3475,7 @@ test('draft input profiles expose lifecycle actions and JSON without a dead roll
   await page.getByRole('button',{name:'Approve',exact:true}).click();
   await expect(page.getByRole('button',{name:'Publish',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Publish',exact:true}).click();
-  await expect(rollout.locator('[name=profile_id]')).toContainText('Draft inputs Â· r1');
+  await expect(rollout.locator('[name=profile_id]')).toContainText('Draft inputs · r1');
 });
 
 test('mobile navigation exposes all workspaces without horizontal page overflow', async ({ page }) => {
@@ -3442,7 +3561,7 @@ test('An acknowledged but exhausted quarantine record has an honest Step 9 outco
   await page.locator('[data-wizard-step="8"] button').click();
   await expect(page.getByRole('button', { name: /Request targeted replay/ })).toBeDisabled();
   await expect(page.locator('#gprs-replay-form')).toContainText(/retry limit|attempts exhausted/i);
-  await page.getByRole('button', { name: '9 Â· Verify replay result', exact: true }).click();
+  await page.getByRole('button', { name: '9 · Verify replay result', exact: true }).click();
   await expect(page.locator('#qrw-verification')).toContainText('manual_attention');
   await expect(page.locator('[data-wizard-step="9"]')).toHaveAttribute('data-step-complete', 'false');
 });
@@ -3487,7 +3606,7 @@ test('Guided Parser Repair Studio onboards a pasted sample without quarantine re
   await page.getByTestId('nav-quarantine-wizard').click();
   await page.getByLabel('Manual raw sample').fill(raw);
   await page.getByLabel('Service scope',{exact:true}).first().fill('login');
-  await page.getByRole('button',{name:'1 Â· Use manual sample'}).click();
+  await page.getByRole('button',{name:'1 · Use manual sample'}).click();
   await expect(page.locator('#gprs-preview-form [name=raw_evidence]')).toHaveValue(raw);
   await page.getByTestId('nav-assurance').click();
   await page.getByRole('tab',{name:'Guided Parser Repair Studio'}).click();
@@ -3501,20 +3620,20 @@ test('Guided Parser Repair Studio onboards a pasted sample without quarantine re
   await expect.poll(()=>draft?.cases?.[0]).toMatchObject({raw,desired,source:'manual',service:'login'});
   expect(draft.source_quarantine_record_id).toBe('');
   const studio=page.locator('#assurance-panel-gprs');
-  await studio.getByRole('button',{name:/7 Â· Review & publish/}).click();
+  await studio.getByRole('button',{name:/7 · Review & publish/}).click();
   const lifecycle=studio.locator('[data-qrw-panel="7"]');
   await lifecycle.getByRole('button',{name:'Submit',exact:true}).click();
   page.once('dialog', dialog => dialog.accept('Verified against the reviewed sample'));
   await lifecycle.getByRole('button',{name:'Approve',exact:true}).click();
   await lifecycle.getByRole('button',{name:'Publish',exact:true}).click();
-  await studio.getByRole('button',{name:/8 Â· Deploy/}).first().click();
+  await studio.getByRole('button',{name:/8 · Deploy/}).first().click();
   await studio.getByLabel('Verification client').selectOption('node-1');
-  await studio.getByRole('button',{name:'9 Â· Verify manual sample'}).click();
-  await studio.getByRole('button',{name:'9.1 Â· Run production verification'}).click();
+  await studio.getByRole('button',{name:'9 · Verify manual sample'}).click();
+  await studio.getByRole('button',{name:'9.1 · Run production verification'}).click();
   await expect(studio.getByText(/selected a different parser/)).toBeVisible();
   exactAvailable=true;
   await studio.getByRole('button',{name:/9.1 .*Run production verification/}).click();
-  await expect(studio.getByText(/Complete Â· Published parser and automatic output matched/)).toBeVisible();
+  await expect(studio.getByText(/Complete · Published parser and automatic output matched/)).toBeVisible();
   expect(verification).toMatchObject({raw,desired,service:'login',preserve_source:true,parser_id:'draft-1'});
   expect(mock.qrwReplays).toEqual([]);
   expect(mock.observed.some(item=>item.endsWith('/analyze')&&item.includes('/quarantine/records/'))).toBe(false);
@@ -3532,7 +3651,7 @@ test('Ver22 replay requires the controller acknowledgement even when the hashes 
   await page.getByRole('button', { name: 'Inspect', exact: true }).click();
   await page.locator('[data-wizard-step="8"] button').click();
   await expect(page.getByRole('button', { name: /Request targeted replay/ })).toBeDisabled();
-  await page.getByRole('button', { name: '9 Â· Verify replay result', exact: true }).click();
+  await page.getByRole('button', { name: '9 · Verify replay result', exact: true }).click();
   await expect(page.locator('#qrw-verification')).toContainText('waiting');
   await expect(page.locator('[data-wizard-step="9"]')).toHaveAttribute('data-step-complete', 'false');
 });

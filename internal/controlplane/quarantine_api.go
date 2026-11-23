@@ -54,6 +54,8 @@ type quarantineRecord struct {
 	RetryAfter           time.Time `json:"retry_after,omitempty"`
 	AttemptCount         int       `json:"attempt_count"`
 	ReplayAttemptCount   int       `json:"replay_attempt_count"`
+	FilteredByPolicy     bool      `json:"filtered_by_policy,omitempty"`
+	InputPolicyError     bool      `json:"input_policy_error,omitempty"`
 	LastReplayBundleHash string    `json:"last_replay_bundle_hash,omitempty"`
 	RecoveryReplayUsed   bool      `json:"recovery_replay_used,omitempty"`
 	Status               string    `json:"status"`
@@ -86,7 +88,7 @@ func isActionableQuarantineRecord(record quarantineRecord) bool {
 const quarantineReplayLimit = 4
 
 func (s *Server) normalizeLegacyQuarantineReplay(record *quarantineRecord) {
-	if record.ReplayAttemptCount == 0 {
+	if record.ReplayAttemptCount == 0 && !record.FilteredByPolicy && !record.InputPolicyError {
 		switch record.Status {
 		case "dead_letter", "manual_attention":
 			record.ReplayAttemptCount = quarantineReplayLimit
@@ -880,7 +882,7 @@ func (s *Server) handleQuarantineExport(w http.ResponseWriter, r *http.Request) 
 			}
 			continue
 		}
-		item := map[string]any{"id": record.ID, "node_id": record.NodeID, "service": record.Service, "hash": record.Hash, "first_seen": record.FirstSeen, "last_attempt": record.LastAttempt, "attempt_count": record.AttemptCount, "replay_attempt_count": record.ReplayAttemptCount, "status": record.Status, "error_codes": record.ErrorCodes, "parser_revision": record.ParserRevision, "source_path": record.SourcePath, "source_line": record.SourceLine, "raw_available": record.RawAvailable}
+		item := map[string]any{"id": record.ID, "node_id": record.NodeID, "service": record.Service, "hash": record.Hash, "first_seen": record.FirstSeen, "last_attempt": record.LastAttempt, "attempt_count": record.AttemptCount, "replay_attempt_count": record.ReplayAttemptCount, "filtered_by_policy": record.FilteredByPolicy, "input_policy_error": record.InputPolicyError, "status": record.Status, "error_codes": record.ErrorCodes, "parser_revision": record.ParserRevision, "source_path": record.SourcePath, "source_line": record.SourceLine, "raw_available": record.RawAvailable}
 		if len(raw) > 0 {
 			item["raw"] = string(raw)
 		}
@@ -1040,7 +1042,7 @@ func (s *Server) handleQuarantineReprocess(w http.ResponseWriter, r *http.Reques
 	desiredBundleHash := stateString("desired_asset_bundle_hash")
 	activeBundleHash := stateString("active_asset_bundle_hash")
 	syncStatus := stateString("asset_sync_status")
-	if !parserBundleAcknowledged(syncState, bundle.BundleHash) {
+	if !parserBundleAcknowledged(syncState, bundle.BundleHash) || !parserClientSupportsLogPolicies(node, bundle) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -1096,6 +1098,8 @@ func (s *Server) handleQuarantineReprocess(w http.ResponseWriter, r *http.Reques
 		record.ReplayRolloutID = rollout.ID
 		record.LastReplayBundleHash = bundle.BundleHash
 		record.ReplayAttemptCount++
+		record.FilteredByPolicy = false
+		record.InputPolicyError = false
 		record.LastAttempt = now
 		record.RetryAfter = time.Time{}
 		if err := s.putQuarantineRecord(r.Context(), record, documents[id].CreatedBy); err != nil {
@@ -1133,6 +1137,8 @@ func (s *Server) recordQuarantineReplayResult(ctx context.Context, rolloutID, no
 		WaitingIDs         []string          `json:"waiting_ids"`
 		TelemetryFailedIDs []string          `json:"telemetry_failed_ids"`
 		MissingIDs         []string          `json:"missing_ids"`
+		FilteredIDs        []string          `json:"filtered_ids"`
+		PolicyErrorIDs     []string          `json:"policy_error_ids"`
 		ParserRevision     string            `json:"parser_revision,omitempty"`
 		ParserRevisions    map[string]string `json:"parser_revisions,omitempty"`
 		Replayed           int               `json:"replayed"`
@@ -1151,9 +1157,21 @@ func (s *Server) recordQuarantineReplayResult(ctx context.Context, rolloutID, no
 		}
 	}
 	resolved, waiting, telemetryFailed, missing := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
-	if parsed && len(outcome.ResolvedIDs)+len(outcome.WaitingIDs)+len(outcome.TelemetryFailedIDs)+len(outcome.MissingIDs) <= 1000 {
-		for _, id := range outcome.ResolvedIDs {
+	filtered := map[string]bool{}
+	policyErrors := map[string]bool{}
+	if parsed && len(outcome.ResolvedIDs)+len(outcome.WaitingIDs)+len(outcome.TelemetryFailedIDs)+len(outcome.MissingIDs)+len(outcome.FilteredIDs)+len(outcome.PolicyErrorIDs) <= 1000 {
+		for _, id := range outcome.PolicyErrorIDs {
 			if id = safeID(id); id != "" && allowed[id] {
+				policyErrors[id] = true
+			}
+		}
+		for _, id := range outcome.FilteredIDs {
+			if id = safeID(id); id != "" && allowed[id] && !policyErrors[id] {
+				filtered[id] = true
+			}
+		}
+		for _, id := range outcome.ResolvedIDs {
+			if id = safeID(id); id != "" && allowed[id] && !filtered[id] && !policyErrors[id] {
 				resolved[id] = true
 			}
 		}
@@ -1191,6 +1209,10 @@ func (s *Server) recordQuarantineReplayResult(ctx context.Context, rolloutID, no
 		switch {
 		case resultStatus == rolloutStatusFailed:
 			status, detail = "replay_failed", "Replay command failed."
+		case policyErrors[id]:
+			status, detail = "waiting", "Selective-input policy could not evaluate this retained record because it was oversized or incomplete. Parsing was not attempted; review the input policy and raw record size."
+		case filtered[id]:
+			status, detail = "waiting", "Active selective-input policy excluded this record before parsing. Existing evidence remains queued; no parser failure or replay retry is charged."
 		case resolved[id]:
 			status, detail = "resolved", "Agent confirmed this record parsed successfully during replay."
 		case waiting[id]:
@@ -1203,7 +1225,14 @@ func (s *Server) recordQuarantineReplayResult(ctx context.Context, rolloutID, no
 			detail = "Agent outcome omitted this record; it remains queued for review."
 		}
 		record.Status, record.LastAttempt = status, now
-		if status != "resolved" {
+		record.FilteredByPolicy = filtered[id] && resultStatus != rolloutStatusFailed
+		record.InputPolicyError = policyErrors[id] && resultStatus != rolloutStatusFailed
+		if (filtered[id] || policyErrors[id]) && resultStatus != rolloutStatusFailed {
+			if record.ReplayAttemptCount > 0 {
+				record.ReplayAttemptCount--
+			}
+			record.RetryAfter = time.Time{}
+		} else if status != "resolved" {
 			if record.ReplayAttemptCount >= quarantineReplayLimit {
 				record.Status = "dead_letter"
 				record.RetryAfter = time.Time{}

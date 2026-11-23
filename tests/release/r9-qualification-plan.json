@@ -1,0 +1,13 @@
+{
+  "release": "v23.0.0-9",
+  "baseline": "published v23.0.0-8, commit 3cc822d633b38f63676bc0994a40966ddfac776d",
+  "phases": [
+    {"id": 1, "name": "Policy contracts and safe defaults", "gates": ["When no policy is enabled, preserve R8 behavior", "Literal bounded rules and explicit field semantics", "Separate intentional exclusions from parse failures", "Old clients cannot acknowledge unsupported policy bundles"]},
+    {"id": 2, "name": "Runtime selective input and output field removal", "gates": ["Filter logical records before parsing and customer storage", "Three supplied records select exactly the EHLO raw record", "Excluded input advances cursors without quarantine or endpoint delivery", "Output fields removed after enrichment at final customer delivery", "Consistent file, Loki, ClickHouse, replay and quarantine partial-JSON behavior", "Atomic activation and rollback"]},
+    {"id": 3, "name": "Revisioned control plane and recovery", "gates": ["Draft preview cannot activate policy", "Independent review and publish", "Enable/disable and revoke restore pass-through appropriately", "Exact client capability and hash acknowledgement", "Both new asset classes in backup/restore without deleting existing definitions"]},
+    {"id": 4, "name": "Two optional workspaces and AI guidance", "gates": ["Load pasted/file samples", "Run filter shows raw records first", "Parse only on explicit action", "Output before/after field removal preview", "RBAC, reset, revision editing and status", "Step-by-step verified AI navigation and bounded live Gemini test"]},
+    {"id": 5, "name": "Qualification and stress", "gates": ["One million selective-input records with exact accepted/excluded counts", "One million output-removal records with exact kept fields", "Mixed rules, disabled policies, malformed input, multiline, reload and failure scenarios", "Full Linux, vet, meaningful race/fuzz and browser checks", "Tab/subtab/control coverage inventory with honest limits", "Actual packaged client/controller sync, restore and restart"]},
+    {"id": 6, "name": "Local build and publication", "gates": ["Two byte-identical builds", "Fresh archive installer and checksum checks", "R8-compatible installer modes and mixed-role preservation", "Published bytes match verified local files"]}
+  ],
+  "limits": ["Finite tests cannot prove every possible log, button state, network or hardware condition", "Throughput is measured rather than promising one million records per second or zero latency", "Intentionally excluded consumed records require original-source replay to recover", "Output policy targets explicit customer JSON root fields; it does not delete internal audit/health records"]
+}

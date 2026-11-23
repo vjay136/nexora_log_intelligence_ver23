@@ -226,3 +226,28 @@ The provided corpus proves coverage only for its pinned samples and declared par
 ### R8 explicit AI mapping and removal controls
 
 Use **Suggest with AI** beside native/manual mapping for a new or quarantined exact raw sample. Its separate ephemeral proposal must pass the controller's native schema/compile/execution checks; a desired mismatch remains a reviewable diff. Confirm import, inspect names/selectors and confirm delimiters yourself, then follow deterministic validation, draft approval/publication and client ACK. Reject/remove advisory proposals separately from Catalog offboard/rollback of a saved or published parser. Administrator credential-clear/delete targets one exact profile and purges stored history; it does not revoke an external provider key. See `V21_R8_AI_PROVIDER_GUIDE.md` for bounds, permissions, protected key sources and removal limits.
+
+
+## R9 optional global log policies
+
+Open **Selective Input Raw Log filter** (`selective-input`) under Input. Paste
+or load representative raw records, choose literal keyword or header rules and
+click **Run Filter**. Inspect the exact matched raw records before using the
+separate **Parse matched records** action. Values within a rule use OR; rules
+use the configured ANY/ALL mode; enabled global policies use OR. Per-path input
+selection must also pass. Intentional exclusions have separate counters and do
+not represent successful parses or quarantine failures.
+
+Open **Remove Unwanted key names & its values in the JSON outputs**
+(`output-fields`) under Output. Enter one exact, case-sensitive root field per
+line and use **Parse and preview field removal** to compare before/after JSON.
+A dot is literal, not a nested path. This affects customer JSON, not raw retained
+evidence, audits, transport metadata or Loki routing labels.
+
+Both previews are local tests. Save a draft, submit it, obtain independent
+review approval, publish, then independently approve fleet rollout. Verify the
+controller hash and each client's exact inventory acknowledgement. R8 agents
+must be upgraded to support policy bundles. **Backup & Restore** includes both
+policy classes and preserves prior revisions. Policy activation is prospective:
+already serialized queue/WAL records keep their original generation. Reset
+clears the local form/results and does not revoke a published policy.

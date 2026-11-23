@@ -168,6 +168,10 @@ func (q *assuranceRunScheduler) execute(record assuranceRunRecord) {
 	} else if ctx.Err() != nil {
 		current.State = "failed"
 		current.Error = "Assurance run exceeded its bounded execution time"
+	} else if evidence["filtered_out"] == true {
+		current.State = "excluded"
+		current.Evidence = evidence
+		current.Error = ""
 	} else if evidence["passed"] == true {
 		current.State = "passed"
 		current.Evidence = evidence
@@ -181,7 +185,7 @@ func (q *assuranceRunScheduler) execute(record assuranceRunRecord) {
 		return
 	}
 	outcome := "failure"
-	if current.State == "passed" {
+	if current.State == "passed" || current.State == "excluded" {
 		outcome = "success"
 	}
 	q.server.auditAction(&middleware.SecurityContext{Username: current.RequestedBy, Role: current.RequestedRole}, "assurance.run", "assurance-runs/"+current.ID, outcome, map[string]string{"state": current.State, "plan_revision": fmt.Sprint(current.PlanRevision)})

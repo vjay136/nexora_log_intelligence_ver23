@@ -31,10 +31,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"nexora.local/nli-v20/internal/adapter"
 	"nexora.local/nli-v20/internal/agent"
 	"nexora.local/nli-v20/internal/canonicaljson"
 	"nexora.local/nli-v20/internal/engine"
 	"nexora.local/nli-v20/internal/familyprofile"
+	"nexora.local/nli-v20/internal/logpolicy"
 	"nexora.local/nli-v20/internal/protocol"
 	"nexora.local/nli-v20/internal/registry"
 	"nexora.local/nli-v20/internal/rollout"
@@ -542,7 +544,8 @@ func (c *Client) EnsureEnrollment(ctx context.Context) error {
 	request := protocol.RegisterRequest{
 		ID: c.nodeID, Hostname: hostname, IP: primaryIP(), OS: osRelease(), Arch: normalizedArch(),
 		Version: engine.Version, ConfigHash: fileSHA256(c.cfg.AgentConfigPath), MetricsURL: c.cfg.MetricsURL,
-		Tags: c.cfg.Tags,
+		Tags:      c.cfg.Tags,
+		ReleaseID: engine.ReleaseID, FeatureCapabilities: c.agentPolicyCapabilities(),
 	}
 	var response protocol.RegisterResponse
 	headers := map[string]string{"X-NLI-Enrollment": enrollment}
@@ -559,8 +562,14 @@ func (c *Client) EnsureEnrollment(ctx context.Context) error {
 		}
 		headers["X-NLI-Enrollment-Proof"] = proof
 	}
-	if err := c.requestJSON(ctx, http.MethodPost, "/api/v1/node/register", request, &response, headers); err != nil {
-		return err
+	status, requestErr := c.requestJSONStatus(ctx, http.MethodPost, "/api/v1/node/register", request, &response, headers)
+	if status == http.StatusBadRequest {
+		// Older controllers reject additive fields before consuming a grant.
+		request.ReleaseID, request.FeatureCapabilities = "", nil
+		_, requestErr = c.requestJSONStatus(ctx, http.MethodPost, "/api/v1/node/register", request, &response, headers)
+	}
+	if requestErr != nil {
+		return requestErr
 	}
 	if response.NodeToken == "" {
 		return fmt.Errorf("controller returned an empty node token")
@@ -584,6 +593,7 @@ func (c *Client) heartbeat(ctx context.Context) error {
 	request := protocol.HeartbeatRequest{
 		NodeID: c.nodeID, Version: engine.Version, ConfigHash: configHash, InputInventory: inputs, AgentStatus: agentStatus,
 		RuntimeInventory: c.runtimeParserInventory(), Metrics: metrics, Health: "online", Parsers: parsers, ActiveAssetBundleHash: bundleHash, ActiveAssetRevisions: assetRevisions,
+		ReleaseID: engine.ReleaseID, FeatureCapabilities: c.agentPolicyCapabilities(),
 	}
 	stripDeliveryMetrics := func() {
 		request.Metrics.LokiDelivery = nil
@@ -594,6 +604,12 @@ func (c *Client) heartbeat(ctx context.Context) error {
 	}
 	var response protocol.HeartbeatResponse
 	status, err := c.requestJSONStatus(ctx, http.MethodPost, "/api/v1/node/heartbeat", request, &response, nil)
+	if status == http.StatusBadRequest {
+		request.ReleaseID, request.FeatureCapabilities = "", nil
+		request.Metrics.Filtered, request.Metrics.OutputFieldsRemoved = 0, 0
+		request.Metrics.InputPolicyErrors = 0
+		status, err = c.requestJSONStatus(ctx, http.MethodPost, "/api/v1/node/heartbeat", request, &response, nil)
+	}
 	if status == http.StatusBadRequest && (request.Metrics.LokiDelivery != nil || request.Metrics.ClickHouseDelivery != nil) {
 		// A controller rollback can remove support while the client is running.
 		stripDeliveryMetrics()
@@ -849,6 +865,60 @@ func (c *Client) restartAndVerifyAgent(ctx context.Context) error {
 			return err
 		}
 	}
+	if bundleRequiresLogPolicies(filepath.Join(c.cfg.AssetDir, "bundle.json")) && len(c.agentPolicyCapabilities()) == 0 {
+		return errors.New("agent runtime does not advertise log-policies-v1; refusing a false policy acknowledgement")
+	}
+	return nil
+}
+
+func bundleRequiresLogPolicies(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var bundle synchronizedAssetBundle
+	if json.Unmarshal(data, &bundle) != nil {
+		return false
+	}
+	for _, asset := range bundle.Assets {
+		if asset.AssetClass == "selective-input" || asset.AssetClass == "output-fields" {
+			return true
+		}
+	}
+	return false
+}
+
+// Capabilities come from the running parsing agent, not merely this sidecar's
+// version. A partial/rolling RPM upgrade must not silently skip a policy.
+func (c *Client) agentPolicyCapabilities() []string {
+	endpoint, err := url.Parse(c.cfg.MetricsURL)
+	if err != nil || endpoint.Host == "" {
+		return nil
+	}
+	endpoint.Path = "/health"
+	endpoint.RawQuery = ""
+	endpoint.Fragment = ""
+	client := http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get(endpoint.String())
+	if err != nil {
+		return nil
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil
+	}
+	var health struct {
+		Status       string   `json:"status"`
+		Capabilities []string `json:"feature_capabilities"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&health) != nil || health.Status != "running" {
+		return nil
+	}
+	for _, capability := range health.Capabilities {
+		if capability == logpolicy.Capability {
+			return []string{logpolicy.Capability}
+		}
+	}
 	return nil
 }
 
@@ -985,7 +1055,7 @@ func (c *Client) applyAssetBundle(ctx context.Context, data []byte) (string, err
 	if computed != bundle.BundleHash {
 		return "", errors.New("parser asset bundle hash verification failed")
 	}
-	allowed := map[string]string{"kv-config": "kv", "static-patterns": "static-patterns", "projections": "projections", "templates": "templates", "regex-patterns": "regex", "known-keys": "known-keys", "semantic-extraction": "semantic-extraction", "parser-packs": ""}
+	allowed := map[string]string{"kv-config": "kv", "static-patterns": "static-patterns", "projections": "projections", "templates": "templates", "regex-patterns": "regex", "known-keys": "known-keys", "semantic-extraction": "semantic-extraction", "selective-input": "selective-input", "output-fields": "output-fields", "parser-packs": ""}
 	parent := filepath.Dir(c.cfg.AssetDir)
 	if err := os.MkdirAll(parent, 0750); err != nil {
 		return "", err
@@ -1083,6 +1153,11 @@ func (c *Client) applyAssetBundle(ctx context.Context, data []byte) (string, err
 		_ = os.RemoveAll(staging)
 		_ = os.RemoveAll(parserStaging)
 		return "", err
+	}
+	if _, err := adapter.NewParserPackAdapterFromSynchronizedDirectories(ctx, parserStaging, staging); err != nil {
+		_ = os.RemoveAll(staging)
+		_ = os.RemoveAll(parserStaging)
+		return "", fmt.Errorf("parser/policy generation failed runtime preflight: %w", err)
 	}
 	_ = os.RemoveAll(backup)
 	_ = os.RemoveAll(parserBackup)
@@ -1574,6 +1649,15 @@ func readMetricsStatus(endpoint string) (protocol.Metrics, bool) {
 		case strings.HasPrefix(line, "nli_logs_quarantined_total "):
 			fmt.Sscanf(line, "nli_logs_quarantined_total %d", &value)
 			metrics.Quarantined = value
+		case strings.HasPrefix(line, "nli_logs_filtered_total "):
+			fmt.Sscanf(line, "nli_logs_filtered_total %d", &value)
+			metrics.Filtered = value
+		case strings.HasPrefix(line, "nli_input_policy_errors_total "):
+			fmt.Sscanf(line, "nli_input_policy_errors_total %d", &value)
+			metrics.InputPolicyErrors = value
+		case strings.HasPrefix(line, "nli_output_fields_removed_total "):
+			fmt.Sscanf(line, "nli_output_fields_removed_total %d", &value)
+			metrics.OutputFieldsRemoved = value
 		case strings.HasPrefix(line, "nli_input_errors_total "):
 			fmt.Sscanf(line, "nli_input_errors_total %d", &value)
 			metrics.Errors = value

@@ -1,3 +1,7 @@
+# NLI Ver23 R9 — v23.0.0-9
+
+Optional selective-input filtering and customer JSON field removal on the published R8 baseline. See [R9 release notes](docs/V23_R9_RELEASE_NOTES.md).
+
 # NLI Ver23 R8 — v23.0.0-8
 
 NAPI evidence and review workflow, bulk Known Key Catalog import, and step-by-step verified AI guidance. See [R8 release notes](docs/V23_R8_RELEASE_NOTES.md). Existing install modes 1–10 and R7 parser/sync protections remain.

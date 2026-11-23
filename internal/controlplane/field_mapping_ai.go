@@ -98,6 +98,10 @@ func (s *Server) suggestAIMapping(w http.ResponseWriter, r *http.Request, input 
 	}
 	request := assuranceRequest{Raw: input.Raw, Service: input.Service, Desired: input.Desired, PreserveSource: true}
 	native := s.runAssuranceContext(ctx, request)
+	if native["filtered_out"] == true {
+		jsonError(w, "Active selective-input policy excluded this sample before parsing. Review Selective Input Raw Log Filter; no external AI mapping request was sent.", http.StatusConflict)
+		return
+	}
 	if ctx.Err() != nil {
 		jsonError(w, "Mapping analysis deadline reached; no parser changed", 504)
 		return

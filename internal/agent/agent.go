@@ -29,6 +29,7 @@ import (
 	"nexora.local/nli-v20/internal/engine"
 	"nexora.local/nli-v20/internal/enrichment"
 	"nexora.local/nli-v20/internal/familyprofile"
+	"nexora.local/nli-v20/internal/logpolicy"
 	"nexora.local/nli-v20/internal/masker"
 	"nexora.local/nli-v20/internal/multiline"
 	"nexora.local/nli-v20/internal/output"
@@ -506,11 +507,13 @@ func selectionMatches(s SelectionConfig, line string) (bool, string) {
 }
 
 type counters struct {
-	received    uint64
-	parsed      uint64
-	quarantined uint64
-	filtered    uint64
-	failures    uint64
+	fieldsRemoved uint64
+	policyErrors  uint64
+	received      uint64
+	parsed        uint64
+	quarantined   uint64
+	filtered      uint64
+	failures      uint64
 }
 
 func acceptsRoute(routes []string, route string) bool {
@@ -588,7 +591,17 @@ func checkpoint(path string, states map[string]cursor) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	if err = os.Rename(tmp, path); err != nil {
+	// Windows readers/virus scanners can briefly deny replacement while holding
+	// an existing checkpoint. Keep the prior checkpoint intact and retry the
+	// same fsynced temporary file; never delete the destination to make room.
+	for attempt := 0; ; attempt++ {
+		err = os.Rename(tmp, path)
+		if err == nil || runtime.GOOS != "windows" || !os.IsPermission(err) || attempt >= 10 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err != nil {
 		return err
 	}
 	return syncDirectory(filepath.Dir(path))
@@ -728,6 +741,13 @@ func Run(ctx context.Context, c Config, once bool) (runErr error) {
 	} else {
 		fmt.Fprintf(os.Stderr, "WARNING: v5 parser disabled - using legacy v4 parsing only\n")
 	}
+	runtimePolicies := v5Adapter.PolicySnapshot()
+	if v5Adapter == nil {
+		runtimePolicies, err = adapter.LoadLogPolicySnapshot(ParserAssetDirectory(c))
+		if err != nil {
+			return fmt.Errorf("log policy initialization: %w", err)
+		}
+	}
 
 	// Set up routing - v5 separated routing is now the production default
 	var v5Router *routing.V5Router
@@ -790,6 +810,7 @@ func Run(ctx context.Context, c Config, once bool) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("v5 router: %w", err)
 		}
+		v5Router.SetOutputPolicy(runtimePolicies)
 		defer func() { runErr = errors.Join(runErr, v5Router.Close()) }()
 	}
 
@@ -1105,6 +1126,9 @@ func Run(ctx context.Context, c Config, once bool) (runErr error) {
 			t.stream.addOutput(time.Since(outputStarted))
 		} else {
 			// Legacy envelope routing
+			originalFieldCount := len(envelope.Data)
+			envelope.Data = runtimePolicies.FilterFields(envelope.Data)
+			atomic.AddUint64(&metrics.fieldsRemoved, uint64(originalFieldCount-len(envelope.Data)))
 			encoded, err := json.Marshal(envelope)
 			if err != nil {
 				return err
@@ -1147,9 +1171,20 @@ func Run(ctx context.Context, c Config, once bool) (runErr error) {
 	}
 	emitSelected := func(t *tail, line string, truncated, oversized bool) error {
 		t.state.Events++
+		decision := runtimePolicies.MatchInputRecord(line, t.input.Service, hostname, truncated || oversized)
+		if !decision.Allowed {
+			atomic.AddUint64(&metrics.filtered, 1)
+			t.stream.filteredRecords.Add(1)
+			if decision.PolicyError {
+				atomic.AddUint64(&metrics.policyErrors, 1)
+				t.stream.policyErrors.Add(1)
+			}
+			return nil
+		}
 		keep, parserService := selectionMatches(t.input.Selection, line)
 		if !keep {
 			atomic.AddUint64(&metrics.filtered, 1)
+			t.stream.filteredRecords.Add(1)
 			return nil
 		}
 		return emit(t, line, truncated, oversized, parserService)
@@ -1181,17 +1216,25 @@ func Run(ctx context.Context, c Config, once bool) (runErr error) {
 		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"status":         "running",
-				"version":        engine.Version,
-				"inputs":         len(tails),
-				"source_workers": sourceWorkers,
-				"logs_received":  atomic.LoadUint64(&metrics.received),
+				"status":               "running",
+				"version":              engine.Version,
+				"release_id":           engine.ReleaseID,
+				"feature_capabilities": []string{logpolicy.Capability},
+				"inputs":               len(tails),
+				"source_workers":       sourceWorkers,
+				"logs_received":        atomic.LoadUint64(&metrics.received),
 			})
 		})
 		mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 			aiStats := discoverer.Stats()
 			upesStats := upesRuntime.Stats()
+			fmt.Fprintf(w, "nli_input_policy_errors_total %d\n", atomic.LoadUint64(&metrics.policyErrors))
+			removed := atomic.LoadUint64(&metrics.fieldsRemoved)
+			if v5Router != nil {
+				removed += v5Router.OutputFieldsRemoved()
+			}
+			fmt.Fprintf(w, "nli_output_fields_removed_total %d\n", removed)
 			fmt.Fprintf(w, "nli_logs_received_total %d\nnli_logs_parsed_total %d\nnli_logs_quarantined_total %d\nnli_logs_filtered_total %d\nnli_input_errors_total %d\nnli_ai_pending_clusters %d\nnli_ai_pending_dropped_total %d\nnli_ai_samples_truncated_total %d\nnli_upes_unique_failure_signatures_total %d\nnli_upes_observed_failures_total %d\nnli_upes_discovery_queued_total %d\nnli_upes_discovery_dropped_total %d\nnli_upes_discovery_pending %d\n",
 				atomic.LoadUint64(&metrics.received),
 				atomic.LoadUint64(&metrics.parsed),
@@ -1440,12 +1483,12 @@ func Run(ctx context.Context, c Config, once bool) (runErr error) {
 				phase = "reading"
 				journal.event("source_resume", t.input.Path, "appended bytes")
 			}
-			journal.progress(t.input.Path, phase, journalCounts{read: t.stream.readLines.Load(), parsed: t.stream.normalized.Load(), quarantined: t.stream.quarantined.Load(), errors: t.stream.errors.Load(), bytes: t.stream.bytes.Load()})
+			journal.progress(t.input.Path, phase, journalCounts{filtered: t.stream.filteredRecords.Load(), policyErrors: t.stream.policyErrors.Load(), read: t.stream.readLines.Load(), parsed: t.stream.normalized.Load(), quarantined: t.stream.quarantined.Load(), errors: t.stream.errors.Load(), bytes: t.stream.bytes.Load()})
 			journal.outputRecovered(t.input.Path)
 			depth, capacity := outputQueueStats()
 			streamSamples.put(t.stream.publish(t.input.Path, phase, depth, capacity, time.Now()))
 		} else {
-			journal.progress(t.input.Path, "reading", journalCounts{read: t.stream.readLines.Load(), parsed: t.stream.normalized.Load(), quarantined: t.stream.quarantined.Load(), errors: t.stream.errors.Load(), bytes: t.stream.bytes.Load()})
+			journal.progress(t.input.Path, "reading", journalCounts{filtered: t.stream.filteredRecords.Load(), policyErrors: t.stream.policyErrors.Load(), read: t.stream.readLines.Load(), parsed: t.stream.normalized.Load(), quarantined: t.stream.quarantined.Load(), errors: t.stream.errors.Load(), bytes: t.stream.bytes.Load()})
 			journal.outputRecovered(t.input.Path)
 			depth, capacity := outputQueueStats()
 			streamSamples.put(t.stream.publish(t.input.Path, "reading", depth, capacity, time.Now()))

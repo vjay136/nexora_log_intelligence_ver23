@@ -115,25 +115,25 @@ def validate(root: Path, output: Path, client: Path, controller: Path) -> None:
                 fail(f"{relative} does not reference packaged artifact {name}")
 
     workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    for claim in ("Verify local-first NLI release", "workflow_dispatch", "sha256sum -c SHA256SUMS", "v23.0.0-8"):
+    for claim in ("Verify local-first NLI release", "workflow_dispatch", "sha256sum -c SHA256SUMS", "v23.0.0-9"):
         if claim not in workflow:
             fail(f"release workflow does not preserve the local-first Ver23 contract: {claim!r}")
 
     release_env = (root / "packaging/release.env").read_text(encoding="utf-8")
-    if "NLI_VERSION=23.0.0" not in release_env or "NLI_RELEASE=8" not in release_env.splitlines():
-        fail("packaging release identity is not 23.0.0-8")
+    if "NLI_VERSION=23.0.0" not in release_env or "NLI_RELEASE=9" not in release_env.splitlines():
+        fail("packaging release identity is not 23.0.0-9")
 
     for relative in (
-        "README.md", "CHANGELOG.md", "docs/V23_R8_RELEASE_NOTES.md",
+        "README.md", "CHANGELOG.md", "docs/V23_R9_RELEASE_NOTES.md",
         "packaging/rpm/nli-client.spec", "packaging/rpm/nli-controller-agent.spec",
     ):
-        if "23.0.0-8" not in (root / relative).read_text(encoding="utf-8"):
+        if "23.0.0-9" not in (root / relative).read_text(encoding="utf-8"):
             fail(f"{relative} does not identify the current release")
 
-    current_note = (root / "docs/V23_R8_RELEASE_NOTES.md").read_bytes()
+    current_note = (root / "docs/V23_R9_RELEASE_NOTES.md").read_bytes()
     for target_dir in (output, client, controller):
-        if (target_dir / "V23_R8_RELEASE_NOTES.md").read_bytes() != current_note:
-            fail(f"R8 release notes missing or different in {target_dir}")
+        if (target_dir / "V23_R9_RELEASE_NOTES.md").read_bytes() != current_note:
+            fail(f"R9 release notes missing or different in {target_dir}")
 
     # Historical source evidence remains available for compatibility and audit.
     for relative in (

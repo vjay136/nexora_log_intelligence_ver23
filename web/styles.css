@@ -450,3 +450,11 @@ button[data-ai-pending]::before {
 
 /* Keep long diagnostic commands locally scrollable on narrow screens. */
 .panel pre { max-width: 100%; overflow-x: auto; }
+
+/* Policy editors retain local scrolling and ordinary document wrapping. */
+.policy-rule-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(100px, 1fr) minmax(160px, 2fr) minmax(100px, 1fr) auto; align-items: end; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.policy-rule-row > * { min-width: 0; }
+.policy-rule-row textarea { min-height: 76px; }
+#page[data-page="output-fields"] .panel, #page[data-page="selective-input"] .panel { min-width: 0; }
+@media (max-width: 900px) { .policy-rule-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .policy-rule-row .field:nth-child(3) { grid-column: 1 / -1; } }
+@media (max-width: 520px) { .policy-rule-row { grid-template-columns: minmax(0, 1fr); } .policy-rule-row .field:nth-child(3) { grid-column: auto; } }

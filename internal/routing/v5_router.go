@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
+	"nexora.local/nli-v20/internal/logpolicy"
 	"nexora.local/nli-v20/internal/output"
 	"nexora.local/nli-v20/telemetry"
 )
@@ -13,6 +15,19 @@ import (
 type V5Router struct {
 	customerRouter  *output.Router
 	telemetryRouter *output.Router
+	outputPolicy    *logpolicy.Set
+	fieldsRemoved   atomic.Uint64
+}
+
+// SetOutputPolicy is called once before this generation routes records.
+func (router *V5Router) SetOutputPolicy(policy *logpolicy.Set) { router.outputPolicy = policy }
+func (router *V5Router) OutputFieldsRemoved() uint64           { return router.fieldsRemoved.Load() }
+func (router *V5Router) customerFields(fields map[string]any) map[string]any {
+	filtered := router.outputPolicy.FilterFields(fields)
+	if len(fields) > len(filtered) {
+		router.fieldsRemoved.Add(uint64(len(fields) - len(filtered)))
+	}
+	return filtered
 }
 
 func NewV5Router(customerConfigs, telemetryConfigs []output.Config) (*V5Router, error) {
@@ -78,7 +93,10 @@ func (router *V5Router) routeV5CustomerIdentified(result *V5ParseResult, family,
 			Destination: "customer", Status: "skipped_quarantine", Timestamp: time.Now().UTC(),
 		})
 	} else if result.Success && result.EventPayload != nil && result.EventPayload.FieldCount() > 0 {
-		payload, err := json.Marshal(result.EventPayload.WithSourceOrder(metadata.FieldEvidence))
+		// A successful payload may intentionally become {} after removal.
+		filtered := *result.EventPayload
+		filtered.Fields = router.customerFields(result.EventPayload.Fields)
+		payload, err := json.Marshal(filtered.WithSourceOrder(metadata.FieldEvidence))
 		if err != nil {
 			return err
 		}
@@ -114,7 +132,7 @@ func (router *V5Router) RouteLegacyIdentified(eventData map[string]interface{}, 
 func (router *V5Router) RouteLegacyWithEvidence(eventData map[string]interface{}, telemetryMetadata map[string]interface{}, evidence []telemetry.FieldEvidence, route, family, id string) error {
 	var customerErr error
 	if (route == "normal" || route == "warning") && len(eventData) > 0 {
-		event := telemetry.EventPayload{Fields: eventData}
+		event := telemetry.EventPayload{Fields: router.customerFields(eventData)}
 		payload, err := json.Marshal(event.WithSourceOrder(evidence))
 		if err != nil {
 			return err

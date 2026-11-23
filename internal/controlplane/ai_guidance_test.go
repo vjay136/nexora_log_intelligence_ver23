@@ -14,6 +14,48 @@ import (
 	"time"
 )
 
+func TestR9PolicyGuidanceUsesRealControlsAndExplicitPreviewReviewSequence(t *testing.T) {
+	for _, example := range []struct{ question, workspace, action string }{
+		{"Please grep SmtpServerEHLO and only read those raw logs", "selective-input", "policy-run-filter"},
+		{"Remove pid and thread_id from the JSON before Loki", "output-fields", "policy-run-output"},
+		{"Hide these unwanted JSON fields", "output-fields", "policy-run-output"},
+	} {
+		scope := guidanceQuestionScope(example.question)
+		if scope.Workspace != example.workspace {
+			t.Fatalf("%q selected %s", example.question, scope.Workspace)
+		}
+		_, choices, err := scope.resolve()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var selected aiGuidanceAction
+		for _, action := range choices {
+			if action.ID == example.action {
+				selected = action
+			}
+		}
+		if selected.ID == "" {
+			t.Fatalf("missing actual policy control %s", example.action)
+		}
+		instructions := guidanceInstructions(scope, selected)
+		joined := strings.Join(instructions.Steps, "\n")
+		for _, marker := range []string{"Save draft revision", "Submit for review", "Approve", "Parser Fleet Sync"} {
+			if !strings.Contains(joined, marker) {
+				t.Fatalf("guidance omits %s: %s", marker, joined)
+			}
+		}
+		if example.workspace == "selective-input" && (!strings.Contains(joined, "Run Filter") || !strings.Contains(joined, "Parse matched records") || !strings.Contains(joined, "one accepted raw record")) {
+			t.Fatal("input guide lost raw-first selection semantics")
+		}
+		if example.workspace == "output-fields" && !strings.Contains(joined, "case-sensitive root JSON key") {
+			t.Fatal("output guide implies unsupported recursive removal")
+		}
+	}
+	if aiGuidanceCatalogVersion != 3 {
+		t.Fatal("new policy guidance must have its own catalog revision")
+	}
+}
+
 func TestAIGuidanceCatalogMatchesWebNavigationAndControls(t *testing.T) {
 	web, err := os.ReadFile("../../web/app.js")
 	if err != nil {
@@ -279,7 +321,7 @@ func TestAIGuidanceInstructionsNeverClaimApprovalOrLiveState(t *testing.T) {
 			}
 		}
 	}
-	if aiGuidanceIdentity.Version != 2 {
+	if aiGuidanceIdentity.Version != 3 {
 		t.Fatal("workflow instructions require a new catalog revision")
 	}
 }

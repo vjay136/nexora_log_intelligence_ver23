@@ -18,7 +18,7 @@ type journalLimiter struct {
 	interval time.Duration
 }
 
-type journalCounts struct{ read, parsed, quarantined, errors, bytes uint64 }
+type journalCounts struct{ read, parsed, quarantined, filtered, policyErrors, errors, bytes uint64 }
 
 type journalProgress struct {
 	counts journalCounts
@@ -110,9 +110,12 @@ func (j *journalLimiter) progress(source, phase string, current journalCounts) {
 		"active", phase == "reading", "complete_to_eof", phase == "eof_wait",
 		"read_delta", readDelta, "processed_delta", parsedDelta + quarantinedDelta,
 		"parsed_delta", parsedDelta, "quarantined_delta", quarantinedDelta,
+		"excluded_delta", counterDelta(current.filtered, previous.counts.filtered),
+		"policy_errors_delta", counterDelta(current.policyErrors, previous.counts.policyErrors),
 		"errors_delta", errorDelta, "bytes_delta", bytesDelta,
 		"read_total", current.read, "processed_total", current.parsed + current.quarantined,
 		"parsed_total", current.parsed, "quarantined_total", current.quarantined,
+		"excluded_total", current.filtered, "policy_errors_total", current.policyErrors,
 		"errors_total", current.errors, "bytes_total", current.bytes,
 	}
 	slog.Info("runtime", attrs...)
@@ -143,6 +146,9 @@ func (j *journalLimiter) outputRecovered(source string) {
 }
 
 type streamState struct {
+	policyErrors                                                                                                              atomic.Uint64
+	filteredRecords                                                                                                           atomic.Uint64
+	prevFilteredRecords                                                                                                       uint64
 	nodeID                                                                                                                    string
 	sourceWorkers                                                                                                             int
 	thresholds                                                                                                                telemetry.StreamThresholds
@@ -163,6 +169,7 @@ func (s *streamState) publish(source, phase string, depth, capacity int, now tim
 	defer s.lastMu.Unlock()
 	if s.last.IsZero() {
 		s.prevLines = s.readLines.Load()
+		s.prevFilteredRecords = s.filteredRecords.Load()
 		s.prevNormalized = s.normalized.Load()
 		s.prevQuarantined = s.quarantined.Load()
 		s.prevValidationAttempts = s.validationAttempts.Load()
@@ -171,7 +178,7 @@ func (s *streamState) publish(source, phase string, depth, capacity int, now tim
 		s.prevBytes = s.bytes.Load()
 		s.prevOutputDuration = s.outputDuration.Load()
 		s.last = now
-		return telemetry.StreamFileTelemetry{NodeID: s.nodeID, Source: source, Phase: phase, SourceWorkers: s.sourceWorkers, ReadLines: s.prevLines, Normalized: s.prevNormalized, Quarantined: s.prevQuarantined, ValidationAttempts: s.prevValidationAttempts, ValidationPassed: s.prevValidationPassed, ValidationFailed: s.prevValidationFailed, Errors: s.errors.Load(), Bytes: s.prevBytes, QueueDepth: depth, QueueCapacity: capacity, Backpressure: queueBackpressure(depth, capacity, s.thresholds.QueueDepth), Thresholds: s.thresholds, UpdatedAt: now.UTC()}
+		return telemetry.StreamFileTelemetry{InputPolicyErrors: s.policyErrors.Load(), FilteredRecords: s.prevFilteredRecords, NodeID: s.nodeID, Source: source, Phase: phase, SourceWorkers: s.sourceWorkers, ReadLines: s.prevLines, Normalized: s.prevNormalized, Quarantined: s.prevQuarantined, ValidationAttempts: s.prevValidationAttempts, ValidationPassed: s.prevValidationPassed, ValidationFailed: s.prevValidationFailed, Errors: s.errors.Load(), Bytes: s.prevBytes, QueueDepth: depth, QueueCapacity: capacity, Backpressure: queueBackpressure(depth, capacity, s.thresholds.QueueDepth), Thresholds: s.thresholds, UpdatedAt: now.UTC()}
 	}
 	elapsed := now.Sub(s.last).Seconds()
 	if elapsed <= 0 {
@@ -187,8 +194,13 @@ func (s *streamState) publish(source, phase string, depth, capacity int, now tim
 	outputDuration := s.outputDuration.Load()
 	outputDelta := outputDuration - s.prevOutputDuration
 	outputWaitBackpressure := float64(outputDelta) >= elapsed*float64(time.Second)*0.5
+	filtered := s.filteredRecords.Load()
 	sample := telemetry.StreamFileTelemetry{NodeID: s.nodeID, Source: source, Phase: phase, SourceWorkers: s.sourceWorkers, ReadLinesPerSecond: float64(rl-s.prevLines) / elapsed, NormalizedPerSecond: float64(no-s.prevNormalized) / elapsed, QuarantinedPerSecond: float64(q-s.prevQuarantined) / elapsed, ValidationAttemptsPerSecond: float64(va-s.prevValidationAttempts) / elapsed, ValidationPassedPerSecond: float64(vp-s.prevValidationPassed) / elapsed, ValidationFailedPerSecond: float64(vf-s.prevValidationFailed) / elapsed, BytesPerSecond: float64(b-s.prevBytes) / elapsed, QueueDepth: depth, QueueCapacity: capacity, Backpressure: queueBackpressure(depth, capacity, s.thresholds.QueueDepth) || outputWaitBackpressure, ReadDuration: time.Duration(s.readDuration.Load()), ParseDuration: time.Duration(s.parseDuration.Load()), OutputDuration: time.Duration(outputDuration), TotalDuration: time.Duration(s.totalDuration.Load()), ReadLines: rl, Normalized: no, Quarantined: q, ValidationAttempts: va, ValidationPassed: vp, ValidationFailed: vf, Errors: s.errors.Load(), Bytes: b, UpdatedAt: now.UTC(), Thresholds: s.thresholds}
 	s.prevLines, s.prevNormalized, s.prevQuarantined, s.prevValidationAttempts, s.prevValidationPassed, s.prevValidationFailed, s.prevBytes, s.prevOutputDuration, s.last = rl, no, q, va, vp, vf, b, outputDuration, now
+	sample.FilteredRecords = filtered
+	sample.InputPolicyErrors = s.policyErrors.Load()
+	sample.FilteredRecordsPerSecond = float64(filtered-s.prevFilteredRecords) / elapsed
+	s.prevFilteredRecords = filtered
 	return sample
 }
 

@@ -81,6 +81,8 @@ func (s *Server) handleNavigationCounts(w http.ResponseWriter, r *http.Request) 
 		"regex":            "regex-patterns",
 		"knownkeys":        "known-keys",
 		"semantic":         "semantic-extraction",
+		"selective-input":  "selective-input",
+		"output-fields":    "output-fields",
 	}
 
 	counts := make(map[string]navigationActionCount, len(pageCollections)+5)

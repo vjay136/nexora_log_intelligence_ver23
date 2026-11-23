@@ -24,6 +24,7 @@ import (
 
 	"nexora.local/nli-v20/internal/auditlog"
 	"nexora.local/nli-v20/internal/engine"
+	"nexora.local/nli-v20/internal/logpolicy"
 	"nexora.local/nli-v20/internal/middleware"
 	metastore "nexora.local/nli-v20/internal/store"
 	"nexora.local/nli-v20/telemetry"
@@ -72,15 +73,16 @@ type assuranceSecret struct {
 	FieldMapping map[string]string `json:"field_mapping,omitempty"`
 }
 type assuranceRequest struct {
-	EvidenceSource string            `json:"evidence_source,omitempty"`
-	Raw            string            `json:"raw"`
-	Desired        map[string]any    `json:"desired,omitempty"`
-	Service        string            `json:"service"`
-	Source         string            `json:"source,omitempty"`
-	ParserID       string            `json:"parser_id,omitempty"`
-	PreserveSource bool              `json:"preserve_source,omitempty"`
-	FieldMapping   map[string]string `json:"field_mapping,omitempty"`
-	Template       map[string]any    `json:"template,omitempty"`
+	BypassLogPolicies bool              `json:"-"`
+	EvidenceSource    string            `json:"evidence_source,omitempty"`
+	Raw               string            `json:"raw"`
+	Desired           map[string]any    `json:"desired,omitempty"`
+	Service           string            `json:"service"`
+	Source            string            `json:"source,omitempty"`
+	ParserID          string            `json:"parser_id,omitempty"`
+	PreserveSource    bool              `json:"preserve_source,omitempty"`
+	FieldMapping      map[string]string `json:"field_mapping,omitempty"`
+	Template          map[string]any    `json:"template,omitempty"`
 }
 
 func (s *Server) storeAssuranceCiphertext(ctx context.Context, ciphertext []byte) (string, string, error) {
@@ -187,7 +189,7 @@ func (s *Server) runAssurance(request assuranceRequest) map[string]any {
 }
 
 func (s *Server) runAssuranceContext(parent context.Context, request assuranceRequest) map[string]any {
-	isAutomatic := strings.TrimSpace(request.ParserID) == ""
+	isAutomatic := strings.TrimSpace(request.ParserID) == "" || strings.TrimSpace(request.ParserID) == "auto"
 	ctx := parent
 	cancel := func() {}
 	if isAutomatic {
@@ -208,6 +210,29 @@ func (s *Server) runAssuranceContext(parent context.Context, request assuranceRe
 	if isAutomatic {
 		deps, runtimeSnapshot, runtimeErr = s.automaticAssuranceDeps(ctx)
 	}
+	var policies *logpolicy.Set
+	if !request.BypassLogPolicies {
+		if runtimeSnapshot == nil && !isAutomatic {
+			runtimeSnapshot, _ = s.automaticParserRuntime(ctx)
+		}
+		var policyErr error
+		policies, policyErr = s.controllerLogPolicies(ctx, runtimeSnapshot)
+		if policyErr != nil {
+			return policyAssuranceSkipped(request, "blocked", "Published log policy state is unavailable or invalid; no parsing was attempted.")
+		}
+		decision := policies.MatchInput(request.Raw, request.Service, "")
+		if !decision.Allowed {
+			if decision.PolicyError {
+				result := policyAssuranceSkipped(request, "blocked", decision.Reason)
+				result["policy_error"] = true
+				result["policy_decision"] = decision
+				return result
+			}
+			result := policyAssuranceSkipped(request, "filtered_out", "")
+			result["policy_decision"] = decision
+			return result
+		}
+	}
 	envelope, selectedParserError := engine.ParseWithSelectedParser(request.Raw, source, deps, request.ParserID)
 	if selectedParserError != nil {
 		result := map[string]any{
@@ -226,6 +251,9 @@ func (s *Server) runAssuranceContext(parent context.Context, request assuranceRe
 	if actual == nil {
 		actual = map[string]any{}
 	}
+	beforeOutputPolicy := actual
+	actual = policies.FilterFields(actual)
+	removedFields := removedLogPolicyFields(beforeOutputPolicy, actual)
 	differences := []map[string]any{}
 	matches := 0
 	comparisonEnabled := len(request.Desired) > 0
@@ -252,7 +280,7 @@ func (s *Server) runAssuranceContext(parent context.Context, request assuranceRe
 	if envelope.Meta.ParserAttempts == 0 {
 		fallbacks = maxInt(0, attempts-1)
 	}
-	passed := envelope.Meta.Route == "normal" && len(actual) > 0 && (!comparisonEnabled || len(differences) == 0)
+	passed := envelope.Meta.Route == "normal" && len(beforeOutputPolicy) > 0 && (!comparisonEnabled || len(differences) == 0)
 	expected := map[string]any{}
 	for key, value := range request.Desired {
 		expected[key] = value
@@ -284,10 +312,13 @@ func (s *Server) runAssuranceContext(parent context.Context, request assuranceRe
 	}
 	score := int((confidence*0.45+coverage/100*0.45+boolFloat(passed)*0.10)*100 + 0.5)
 	var candidate any
-	if envelope.Meta.Route != "normal" || confidence < 0.65 || len(missing) > 0 {
+	if envelope.Meta.Route != "normal" || confidence < 0.65 || (len(missing) > 0 && len(removedFields) == 0) {
 		candidate = map[string]any{"name": "candidate-" + hex.EncodeToString(hashBytes([]byte(request.Raw))[:4]), "source_parser": envelope.NLI.Parser, "detected_format": envelope.Meta.Format, "fields": sortedMapKeys(actual), "sample_values": actual, "suggested_strategy": "key_value_or_format_specific", "review_state": "draft", "requires_human_approval": true}
 	}
-	result := map[string]any{"raw": request.Raw, "raw_sha256": hex.EncodeToString(hashBytes([]byte(request.Raw))), "desired": request.Desired, "actual": actual, "diff": differences, "matches": matches, "passed": passed, "comparison_enabled": comparisonEnabled, "counts": map[string]int{"desired": len(request.Desired), "actual": len(actual), "matches": matches, "differences": len(differences), "attempts": attempts, "fallbacks": fallbacks}, "evidence_spans": evidence, "trace": trace, "parser": map[string]any{"name": envelope.NLI.Parser, "version": envelope.NLI.ParserVersion, "confidence": envelope.NLI.Confidence, "strategy": envelope.Meta.Assurance.SelectedStrategy}, "requested_parser": request.ParserID, "requested_family": request.Service, "route": envelope.Meta.Route, "errors": envelope.Meta.Errors, "latency_us": time.Since(start).Microseconds(), "retained": false, "score": score, "coverage": map[string]any{"expected": len(expected), "found": found, "percent": coverage, "missing": missing}, "parser_creation_helper": buildParserCreationHelper(request.Raw, request.Service, envelope, actual)}
+	result := map[string]any{"raw": request.Raw, "raw_sha256": hex.EncodeToString(hashBytes([]byte(request.Raw))), "desired": request.Desired, "actual": actual, "diff": differences, "matches": matches, "passed": passed, "comparison_enabled": comparisonEnabled, "counts": map[string]int{"desired": len(request.Desired), "actual": len(actual), "matches": matches, "differences": len(differences), "attempts": attempts, "fallbacks": fallbacks}, "evidence_spans": evidence, "trace": trace, "parser": map[string]any{"name": envelope.NLI.Parser, "version": envelope.NLI.ParserVersion, "confidence": envelope.NLI.Confidence, "strategy": envelope.Meta.Assurance.SelectedStrategy}, "requested_parser": request.ParserID, "requested_family": request.Service, "route": envelope.Meta.Route, "errors": envelope.Meta.Errors, "latency_us": time.Since(start).Microseconds(), "retained": false, "score": score, "coverage": map[string]any{"expected": len(expected), "found": found, "percent": coverage, "missing": missing}, "parser_creation_helper": buildParserCreationHelper(request.Raw, request.Service, envelope, beforeOutputPolicy)}
+	if policies.OutputEnabled() {
+		result["output_policy"] = map[string]any{"applied": true, "removed_fields": removedFields, "scope": "final_customer_json", "authoring_definition_scope": "before_output_policy"}
+	}
 	if isAutomatic {
 		result["runtime_pool"] = automaticRuntimeSummary(runtimeSnapshot, runtimeErr)
 	}
@@ -620,21 +651,23 @@ func (s *Server) handleAssuranceCorpus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	results := make([]map[string]any, 0, len(request.Cases))
-	passed := 0
+	passed, excluded := 0, 0
 	for _, item := range request.Cases {
 		if strings.TrimSpace(item.Raw) == "" {
 			jsonError(w, "every corpus case requires raw input", http.StatusBadRequest)
 			return
 		}
 		result := s.runAssurance(item)
-		if value, _ := result["passed"].(bool); value {
+		if result["filtered_out"] == true {
+			excluded++
+		} else if value, _ := result["passed"].(bool); value {
 			passed++
 		}
 		result["raw"] = ""
 		result["actual"] = orderedAssuranceValues(result)
 		results = append(results, result)
 	}
-	jsonOK(w, map[string]any{"total": len(results), "passed": passed, "failed": len(results) - passed, "results": results, "retained": false})
+	jsonOK(w, map[string]any{"total": len(results), "passed": passed, "failed": len(results) - passed - excluded, "excluded": excluded, "results": results, "retained": false})
 }
 
 func (s *Server) handleAssuranceCases(w http.ResponseWriter, r *http.Request) {

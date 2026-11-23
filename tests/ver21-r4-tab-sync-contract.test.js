@@ -14,7 +14,7 @@ const routes = [
   'artifacts', 'parser-workspace', 'nupire', 'field-integrity', 'ai', 'ai-guidance',
   'sample-history', 'header-templates', 'kv-templates', 'parsers', 'reference-ai', 'building-blocks', 'field-mapping', 'studio', 'regex', 'knownkeys', 'drift', 'notifications',
   'sync-fabric', 'nhle-monitor', 'napi-monitor', 'nal-monitor',
-  'input-paths', 'migration', 'outputs', 'metadata', 'unknowns', 'performance',
+  'input-paths', 'selective-input', 'migration', 'outputs', 'output-fields', 'metadata', 'unknowns', 'performance',
   'kv', 'static', 'projection', 'semantic',
   'engine-network', 'engine-url', 'engine-email', 'engine-subject',
   'fleet', 'clients', 'controller', 'controller-gateway', 'ai-privacy', 'api-monitor', 'latency', 'system', 'communications', 'security',
@@ -49,7 +49,7 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-test('Primary navigation includes all 55 workspaces in their declared order', () => {
+test('Primary navigation includes all 57 workspaces in their declared order', () => {
   const nav = app.slice(app.indexOf('const NAV = ['), app.indexOf('const TITLES'));
   const actual = [...nav.matchAll(/\[\s*'[^']+'\s*,\s*'([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(actual, routes);
