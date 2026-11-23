@@ -200,6 +200,27 @@ func (c *Client) exchangeTerminal(ctx context.Context, status terminalrpc.Status
 	}
 	return result, nil
 }
+
+// brokerReady tolerates a transient read-only status failure within the existing
+// transport grace. It never opens a session from an unverified status, renews a
+// host/browser lease, or retries an ambiguous stdin operation. Explicit disable
+// and controller capability revocation still close sessions immediately.
+func (r *terminalRelay) brokerReady(ctx context.Context, status terminalrpc.Status, err error, supported bool) bool {
+	if !supported || (err == nil && !status.Enabled) {
+		if len(r.owned) > 0 {
+			r.closeAll(ctx)
+		}
+		return false
+	}
+	if err != nil {
+		if len(r.owned) > 0 && (r.lastSuccess.IsZero() || time.Since(r.lastSuccess) >= 10*time.Second) {
+			r.closeAll(ctx)
+		}
+		return false
+	}
+	return true
+}
+
 func (c *Client) runTerminalWorker(ctx context.Context) {
 	broker := terminalrpc.NewClient("")
 	relay := newTerminalRelay(broker)
@@ -220,9 +241,9 @@ func (c *Client) runTerminalWorker(ctx context.Context) {
 		statusCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 		status, err := broker.Status(statusCtx)
 		cancel()
-		if !c.terminalSupported.Load() || err != nil || !status.Enabled {
+		if !relay.brokerReady(ctx, status, err, c.terminalSupported.Load()) {
 			if len(relay.owned) > 0 {
-				relay.closeAll(ctx)
+				delay = 350 * time.Millisecond
 			}
 			timer.Reset(delay)
 			continue

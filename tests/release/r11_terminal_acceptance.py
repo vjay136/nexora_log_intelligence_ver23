@@ -314,6 +314,17 @@ def main():
             if target==client:
                 out=t.command('sudo systemctl restart nli-agent; systemctl is-active nli-agent')
                 require('\r\nactive\r\n' in out,'Limited service restart failed')
+            if target==client:
+                broker_pid=docker('exec',a.client,'systemctl','show','--property=MainPID','--value','nli-node-terminal.service').strip()
+                require(broker_pid.isdigit() and int(broker_pid)>0,'Broker process missing before bounded status-stall test')
+                docker('exec',a.client,'kill','-STOP',broker_pid)
+                try:
+                    time.sleep(3)
+                finally:
+                    docker('exec',a.client,'kill','-CONT',broker_pid)
+                out=t.command("printf '%s%s\\n' 'STATUS_PROBE_' 'RECOVERED'")
+                require('STATUS_PROBE_RECOVERED' in out and t.read()['session']['status']=='running','One short read-only broker status stall closed the existing shell')
+                checks.append('transient_local_broker_status_stall_preserves_same_session_without_input_replay')
             # Flood without reading. Ring drops old bytes and reports cursor gap.
             t.send("head -c 700000 /dev/zero | tr '\\000' X; printf '\\nFLOOD_DONE\\n'\n")
             time.sleep(7)

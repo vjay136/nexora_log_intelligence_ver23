@@ -168,3 +168,47 @@ func TestTerminalExchangeUsesAuthenticatedNodeAndBounds(t *testing.T) {
 		t.Fatal("missing enrollment accepted")
 	}
 }
+
+func TestTerminalTransientStatusProbeKeepsExistingSessionWithoutOpeningOrReplaying(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeTerminalBroker{states: map[string]nodeterminal.State{}}
+	r := newTerminalRelay(f)
+	r.owned["existing"] = protocol.TerminalSessionDirective{ID: "existing"}
+	r.lastSuccess = time.Now()
+	if r.brokerReady(ctx, terminalrpc.Status{}, context.DeadlineExceeded, true) {
+		t.Fatal("unverified broker status must not admit operations")
+	}
+	if len(r.owned) != 1 || len(f.closed) != 0 || len(f.writes) != 0 || len(f.states) != 0 {
+		t.Fatal("one transient status timeout changed the session or replayed input")
+	}
+	if !r.brokerReady(ctx, terminalrpc.Status{Enabled: true}, nil, true) {
+		t.Fatal("healthy broker did not recover inside the existing grace")
+	}
+	r.lastSuccess = time.Now().Add(-11 * time.Second)
+	if r.brokerReady(ctx, terminalrpc.Status{}, context.DeadlineExceeded, true) || len(r.owned) != 0 || len(f.closed) != 1 {
+		t.Fatal("persistent broker failure did not close the session within the transport grace")
+	}
+}
+
+func TestTerminalExplicitDisableAndCapabilityRevocationBypassProbeGrace(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    terminalrpc.Status
+		err       error
+		supported bool
+	}{
+		{"host disabled", terminalrpc.Status{Enabled: false}, nil, true},
+		{"capability revoked", terminalrpc.Status{Enabled: true}, nil, false},
+		{"capability revoked with probe failure", terminalrpc.Status{}, context.DeadlineExceeded, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeTerminalBroker{states: map[string]nodeterminal.State{}}
+			r := newTerminalRelay(f)
+			r.owned["existing"] = protocol.TerminalSessionDirective{ID: "existing"}
+			r.lastSuccess = time.Now()
+			if r.brokerReady(context.Background(), tc.status, tc.err, tc.supported) || len(r.owned) != 0 || len(f.closed) != 1 {
+				t.Fatal("explicit disable/revocation must close without waiting for transient-error grace")
+			}
+		})
+	}
+}
