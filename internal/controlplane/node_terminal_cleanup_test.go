@@ -2,7 +2,9 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"nexora.local/nli-v20/internal/protocol"
+	"nexora.local/nli-v20/internal/terminalrpc"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +13,10 @@ import (
 type terminalCleanupProbe struct {
 	terminalBroker
 	calls atomic.Int32
+}
+
+func (p *terminalCleanupProbe) Status(context.Context) (terminalrpc.Status, error) {
+	return terminalrpc.Status{}, errors.New("fixture broker disabled")
 }
 
 func (p *terminalCleanupProbe) Close(context.Context, string, string) error {

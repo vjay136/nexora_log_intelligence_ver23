@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	aiGuidanceCatalogVersion  = 4
+	aiGuidanceCatalogVersion  = 5
 	aiGuidanceRevisionStore   = "ai-guidance-revisions"
 	aiGuidanceEvaluationStore = "ai-guidance-evaluations"
 	aiGuidanceProviderBudget  = 4 * time.Second
@@ -109,6 +109,7 @@ var aiGuidanceNavigation = []aiGuidanceWorkspace{
 
 var aiGuidanceActions = map[string][]aiGuidanceAction{
 	"node-terminal": {
+		{"terminal-access-change", "Approve enable", "Review the exact Node Terminal host request. Approve enable grants browser access; Request disable followed by Approve disable closes host terminal sessions. Reject request leaves the prior approved access unchanged. These controls do not approve parser rollouts or restart parsing services."},
 		{"terminal-connect", "Connect terminal", "Select one online host with terminal access explicitly enabled, reauthenticate with the current NLI password, provide a reason and open the dedicated operator PTY."},
 		{"terminal-disconnect", "Disconnect terminal", "Close the selected terminal explicitly. Leaving the workspace or signing out also closes it; a node restart requires a new explicit connection."},
 		{"terminal-example", "Show working directory", "Prepare a command example locally; inspect it, use Paste example · no Enter, then press Enter only when ready. Examples never execute automatically."},
@@ -380,8 +381,10 @@ func guidanceInstructions(scope aiGuidanceScope, action aiGuidanceAction) aiGuid
 		guide.PermissionNote = "Node Terminal is administrator-only and requires terminal access plus current-password reauthentication. Host opt-in is separate from NLI login. It runs a dedicated operator account, not a root shell; permitted input writes and exact NLI service controls are enforced by host policy."
 		guide.Steps = append(guide.Steps,
 			"Open COMMAND CENTER → Node Terminal. Search by immutable node ID, friendly name, hostname or group. Use Next nodes and Previous nodes for large inventories; discovery does not open shells.",
+			"Host opt-in creates a pending Node Terminal enable request. Open the notification bell and choose Review Node Terminal, verify the exact node and select Approve enable. This approval is separate from parser rollouts. To disable browser access, choose Request disable and then Approve disable; that closes the host's terminal sessions without stopping NLI parsing services. Local root disable remains immediate. A fresh host disable/re-enable needs a fresh approval, while ordinary restarts keep the same opt-in epoch.",
 			"If Terminal access is disabled, an authorized host administrator must explicitly enable the optional broker using the shipped nli-node-terminal-setup helper. Confirm the selected node is online and its terminal heartbeat is current. No incoming SSH port or SSH private key is required.",
-			"Select the intended node, enter NLI login password and Session reason, then press Connect terminal. The password is not retained in the browser; never include credentials or terminal output in an AI question.",
+			"Select the intended node. In NLI login password, enter your current NLI Webapp password; complete Session reason, then press Connect terminal. The same signed-in account password is used for controller and every client; there is no separate Linux, SSH or per-node terminal password. The password field clears after each attempt. Never include credentials or terminal output in an AI question.",
+			"A rejected password (HTTP 403) is different from a host shell failing after authentication. For a host startup failure, an authorized host administrator can run sudo /usr/bin/nli-node-terminal --check-runtime and inspect sudo journalctl -u nli-node-terminal.service -n 60 --no-pager. Keep TLS verification and SELinux enforcement enabled. Passwords are stored only as salted hashes in the controller account store and cannot be retrieved as plaintext.",
 			"Wait for running status. Type into Terminal keyboard input; Enter sends a command, arrows edit shell history and Ctrl+C interrupts a foreground program. Commands execute as the host operator account under its actual permissions.",
 			"Demo command examples only prepare text locally. Inspect Prepared example, select Paste example · no Enter, then press Enter only when ready. Input-file editing, truncating and deleting change data. Restarting the controller or client-control service may disconnect this session.",
 			"Check output, node identity, expiry and idle timeout directly in Node Terminal. Use Disconnect terminal when finished. Navigation and signout close the session; reconnect explicitly after a lost connection. Uncertain stdin is not automatically retried.",

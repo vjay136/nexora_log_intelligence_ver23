@@ -14,6 +14,18 @@ while (($#)); do case $1 in
 for tool in systemctl python3 getent useradd groupadd setfacl visudo; do command -v "$tool" >/dev/null || fail "required host tool unavailable: $tool"; done
 if [[ $action == --disable ]]; then
  systemctl disable --now nli-node-terminal.service >/dev/null 2>&1 || true
+ if [[ $purge == 0 ]]; then python3 - <<'PY'
+import os,json,stat,tempfile
+path='/etc/nli/node-terminal.json'
+if os.path.exists(path):
+ if os.path.islink(path) or not stat.S_ISREG(os.lstat(path).st_mode):raise SystemExit('refusing non-regular terminal policy')
+ with open(path) as f:cfg=json.load(f)
+ cfg['enabled']=False
+ fd,tmp=tempfile.mkstemp(prefix='.node-terminal.',dir='/etc/nli')
+ with os.fdopen(fd,'w') as f:json.dump(cfg,f);f.write('\n');f.flush();os.fsync(f.fileno())
+ os.chmod(tmp,0o600);os.chown(tmp,0,0);os.replace(tmp,path)
+PY
+ fi
  rm -f -- /etc/sudoers.d/nli-terminal /etc/systemd/system/nli-controller-agent.service.d/90-node-terminal.conf
  rm -f -- /usr/libexec/nli-terminal/bin/systemctl /usr/libexec/nli-terminal/bin/journalctl /usr/libexec/nli-terminal/bin/sudo
  systemctl daemon-reload
@@ -62,7 +74,8 @@ PY
 fi
 [[ $role == controller || $role == client ]] || fail '--role must be controller or client'
 [[ $purge == 0 ]] || fail '--purge applies only to --disable'
-[[ -x /usr/bin/nli-node-terminal ]] || fail 'install the R10 node RPM first'
+[[ -x /usr/bin/nli-node-terminal ]] || fail 'install the current node RPM first'
+policy_before=$(sha256sum /etc/nli/node-terminal.json 2>/dev/null | cut -d' ' -f1 || true)
 getent passwd nli >/dev/null || fail 'NLI service account is unavailable'
 getent group nli-terminal >/dev/null || groupadd -r nli-terminal
 getent group nli-terminal-api >/dev/null || groupadd -r nli-terminal-api
@@ -90,10 +103,16 @@ visudo -cf "$tmp" >/dev/null || fail 'sudo policy did not validate'
 mv -f -- "$tmp" /etc/sudoers.d/nli-terminal
 # No project, cloud secret, node token or user password is stored in this policy.
 python3 - <<'PY'
-import os,json,stat,subprocess,tempfile,pwd,grp
+import os,json,stat,subprocess,tempfile,pwd,grp,secrets
 path='/etc/nli/node-terminal.json'
 if os.path.lexists(path) and (os.path.islink(path) or not stat.S_ISREG(os.lstat(path).st_mode)):raise SystemExit('refusing non-regular terminal policy')
+old={}
+if os.path.exists(path):
+ with open(path) as f:old=json.load(f)
+epoch=old.get('access_epoch','') if old.get('enabled') is True else ''
+if len(epoch)!=64 or any(c not in '0123456789abcdef' for c in epoch):epoch=secrets.token_hex(32)
 cfg=dict(enabled=True,privilege_mode='operator',allow_input_write=True,max_sessions=4,idle_timeout_seconds=300,lifetime_seconds=1800,max_output_bytes=262144,output_bytes_per_second=131072)
+cfg['access_epoch']=epoch
 fd,tmp=tempfile.mkstemp(prefix='.node-terminal.',dir='/etc/nli')
 with os.fdopen(fd,'w') as f:json.dump(cfg,f);f.write('\n');f.flush();os.fsync(f.fileno())
 os.chmod(tmp,0o600);os.chown(tmp,0,0);os.replace(tmp,path)
@@ -150,12 +169,22 @@ for path in ['/var/log/nli/input','/var/log/nli/output','/etc/nli/parsers','/var
  try:walk(fd,path.endswith('/input'))
  finally:os.close(fd)
 PY
+controller_restart=false
 if [[ $role == controller ]]; then
  install -d -o root -g root -m 0755 /etc/systemd/system/nli-controller-agent.service.d
+ if [[ $(cat /etc/systemd/system/nli-controller-agent.service.d/90-node-terminal.conf 2>/dev/null || true) != $'[Service]\nSupplementaryGroups=nli-terminal-api' ]]; then controller_restart=true; fi
  printf '[Service]\nSupplementaryGroups=nli-terminal-api\n' >/etc/systemd/system/nli-controller-agent.service.d/90-node-terminal.conf
  chmod 0644 /etc/systemd/system/nli-controller-agent.service.d/90-node-terminal.conf
 fi
 systemctl daemon-reload
+systemctl reset-failed nli-node-terminal.service >/dev/null 2>&1 || true
+if systemctl is-active --quiet nli-node-terminal.service && [[ $policy_before != $(sha256sum /etc/nli/node-terminal.json | cut -d' ' -f1) ]]; then systemctl restart nli-node-terminal.service; fi
 systemctl enable --now nli-node-terminal.service
-if [[ $role == controller ]]; then systemctl try-restart nli-controller-agent.service; else systemctl try-restart nli-client-control.service; fi
-printf '%s\n' 'PASS: operator terminal enabled. Sign in as an administrator, open Command Center > Node Terminal, select this node and connect using your current NLI password.' 'Input log writes/deletes are immediate. Output and parser files are read-only. No unrestricted sudo is granted.'
+if ! /usr/bin/nli-node-terminal --check-runtime; then fail 'Terminal runtime preflight failed. Inspect nli-node-terminal and nli-terminal-session scope journals; do not disable host security enforcement.'; fi
+# A new supplementary group needs one controller restart. Repeated enable and
+# client enable do not restart parsing/control services or interrupt live sync.
+if [[ $controller_restart == true ]]; then
+ printf '%s\n' 'Applying the controller terminal group once; active Webapp connections may briefly reconnect.'
+ systemctl try-restart nli-controller-agent.service
+fi
+printf '%s\n' 'PASS: host terminal runtime enabled. In COMMAND CENTER > Node Terminal, approve this host enable request before connecting. The request appears after the next authenticated terminal heartbeat.' 'Use your current NLI Webapp login password for both node roles. Input log writes/deletes are immediate. Output/parser files are read-only. No unrestricted sudo is granted.'

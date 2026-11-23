@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"golang.org/x/sys/unix"
+	"log"
 	"os"
 	"os/exec"
 	"os/user"
@@ -107,6 +108,18 @@ func startProcess(cfg Config, account platformAccount, id string, cols, rows uin
 		return nil, errors.New("PTY slave is unavailable")
 	}
 	defer slave.Close()
+	// Keep the already-open PTY within the broker's security domain. PID 1
+	// reopening/chowning a systemd-run --pty terminal can be denied on enforcing
+	// hosts (208/STDIN). A scope inherits these descriptors and still contains
+	// every descendant, including detached jobs and the allowlisted sudo helpers.
+	if cfg.Systemd {
+		if err = slave.Chown(int(account.uid), int(account.gid)); err != nil {
+			return nil, errors.New("terminal PTY ownership setup denied; inspect host security diagnostics")
+		}
+		if err = slave.Chmod(0600); err != nil {
+			return nil, errors.New("terminal PTY permission setup denied")
+		}
+	}
 	if err = unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, &unix.Winsize{Col: cols, Row: rows}); err != nil {
 		return nil, errors.New("PTY initial resize failed")
 	}
@@ -115,11 +128,11 @@ func startProcess(cfg Config, account platformAccount, id string, cols, rows uin
 	cmd := exec.Command(cfg.Shell, "--noprofile", "--norc", "-i")
 	if cfg.Systemd {
 		digest := sha256.Sum256([]byte(id))
-		unit = fmt.Sprintf("nli-terminal-session-%x.service", digest[:16])
+		unit = fmt.Sprintf("nli-terminal-session-%x.scope", digest[:16])
 		seconds := int64((cfg.MaxLifetime + time.Second - 1) / time.Second)
-		args := []string{"--quiet", "--no-ask-password", "--wait", "--collect", "--pty", "--service-type=exec", "--unit=" + unit, "--uid=" + strconv.FormatUint(uint64(account.uid), 10), "--gid=" + strconv.FormatUint(uint64(account.gid), 10),
-			"--property=WorkingDirectory=" + cfg.WorkDir, "--property=RuntimeMaxSec=" + strconv.FormatInt(seconds, 10), "--property=KillMode=control-group", "--property=TimeoutStopSec=3s", "--property=SendSIGKILL=yes", "--property=TasksMax=64", "--property=NoNewPrivileges=false", "--property=MemoryMax=256M", "--property=CPUQuota=50%", "--property=BindsTo=nli-node-terminal.service", "--property=After=nli-node-terminal.service", "/usr/bin/env", "-i"}
-		args = append(args, environment...)
+		args := []string{"--quiet", "--no-ask-password", "--scope", "--collect", "--unit=" + unit,
+			"--property=RuntimeMaxSec=" + strconv.FormatInt(seconds, 10), "--property=KillMode=control-group", "--property=TimeoutStopSec=3s", "--property=SendSIGKILL=yes", "--property=TasksMax=64", "--property=MemoryMax=256M", "--property=CPUQuota=50%", "--property=BindsTo=nli-node-terminal.service", "--property=After=nli-node-terminal.service",
+			"/usr/bin/setpriv", "--reuid=" + strconv.FormatUint(uint64(account.uid), 10), "--regid=" + strconv.FormatUint(uint64(account.gid), 10), "--init-groups"}
 		args = append(args, cfg.Shell, "--noprofile", "--norc", "-i")
 		cmd = exec.Command("/usr/bin/systemd-run", args...)
 	}
@@ -154,6 +167,9 @@ func (p *ptyProcess) Wait() int {
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
+		if p.unit != "" && exit.ExitCode() > 0 {
+			log.Printf("nli-node-terminal: contained session exited unit=%s code=%d; no command or output contents retained", p.unit, exit.ExitCode())
+		}
 		return exit.ExitCode()
 	}
 	return -1
@@ -220,7 +236,7 @@ func cleanupSystemdSessions() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "/usr/bin/systemctl", "list-units", "--all", "--type=service", "--plain", "--no-legend", "nli-terminal-session-*.service").Output()
+	output, err := exec.CommandContext(ctx, "/usr/bin/systemctl", "list-units", "--all", "--type=service,scope", "--plain", "--no-legend", "nli-terminal-session-*.service", "nli-terminal-session-*.scope").Output()
 	if err != nil {
 		return errors.New("terminal systemd containment is unavailable")
 	}
@@ -231,8 +247,12 @@ func cleanupSystemdSessions() error {
 			continue
 		}
 		name := fields[0]
-		part := strings.TrimSuffix(strings.TrimPrefix(name, "nli-terminal-session-"), ".service")
-		if len(part) != 32 || "nli-terminal-session-"+part+".service" != name {
+		suffix := ".service"
+		if strings.HasSuffix(name, ".scope") {
+			suffix = ".scope"
+		}
+		part := strings.TrimSuffix(strings.TrimPrefix(name, "nli-terminal-session-"), suffix)
+		if len(part) != 32 || "nli-terminal-session-"+part+suffix != name {
 			continue
 		}
 		valid := true

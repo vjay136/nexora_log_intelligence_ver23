@@ -26,6 +26,7 @@ type Status struct {
 	Enabled            bool   `json:"enabled"`
 	PrivilegeMode      string `json:"privilege_mode"`
 	Generation         string `json:"generation"`
+	AccessEpoch        string `json:"access_epoch,omitempty"`
 	Reason             string `json:"reason,omitempty"`
 	MaxSessions        int    `json:"max_sessions"`
 	IdleTimeoutSeconds int    `json:"idle_timeout_seconds"`
@@ -76,6 +77,7 @@ func NewServer(manager *nodeterminal.Manager, cfg HostConfig) (*Server, error) {
 		return nil, err
 	}
 	status := Status{Supported: true, Enabled: manager.Enabled(), PrivilegeMode: cfg.PrivilegeMode, Generation: hex.EncodeToString(random[:]), MaxSessions: cfg.MaxSessions, IdleTimeoutSeconds: cfg.IdleTimeoutSeconds, LifetimeSeconds: cfg.LifetimeSeconds}
+	status.AccessEpoch = cfg.AccessEpoch
 	if !status.Enabled {
 		status.Reason = "Node terminal is disabled by host policy"
 	}

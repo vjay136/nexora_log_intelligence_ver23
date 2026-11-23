@@ -51,7 +51,7 @@ func TestR9PolicyGuidanceUsesRealControlsAndExplicitPreviewReviewSequence(t *tes
 			t.Fatal("output guide implies unsupported recursive removal")
 		}
 	}
-	if aiGuidanceCatalogVersion != 4 {
+	if aiGuidanceCatalogVersion != 5 {
 		t.Fatal("new policy guidance must have its own catalog revision")
 	}
 }
@@ -321,7 +321,7 @@ func TestAIGuidanceInstructionsNeverClaimApprovalOrLiveState(t *testing.T) {
 			}
 		}
 	}
-	if aiGuidanceIdentity.Version != 4 {
+	if aiGuidanceIdentity.Version != 5 {
 		t.Fatal("workflow instructions require a new catalog revision")
 	}
 }
@@ -347,7 +347,7 @@ func TestR10TerminalGuidanceIsPreciseAndTranscriptFree(t *testing.T) {
 			t.Fatal("terminal guidance must explain operator privilege boundary")
 		}
 	}
-	if aiGuidanceCatalogVersion != 4 {
-		t.Fatal("R10 terminal guidance needs catalog revision 4")
+	if aiGuidanceCatalogVersion != 5 {
+		t.Fatal("R11 terminal guidance needs catalog revision 5")
 	}
 }

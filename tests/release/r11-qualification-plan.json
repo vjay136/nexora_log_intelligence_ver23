@@ -1,0 +1,14 @@
+{
+  "release": "v23.0.0-11",
+  "baseline": "v23.0.0-10 / b8a880072bbf28a589b1c45a0cf6982b61ad1431",
+  "phases": [
+    {"id": 1, "task": "Classify supplied journals and reproduce terminal startup with enforcing-host diagnostics", "status": "verified_diagnostic"},
+    {"id": 2, "task": "Fix terminal startup and preserve dedicated-account containment and cleanup", "status": "implemented_pending_final_package_gate"},
+    {"id": 3, "task": "Bound terminal inventory/output latency and isolate it from Webapp navigation and canonical sync", "status": "implemented_pending_final_package_gate"},
+    {"id": 4, "task": "Add Node Terminal-only enable/disable approval, notifications, password clarity, diagnostics and recovery messages", "status": "implemented_pending_final_package_gate"},
+    {"id": 5, "task": "Run parser regression, 1000-plus fleet inventory/load, terminal responsiveness and all-workspace browser qualification", "status": "running"},
+    {"id": 6, "task": "Build twice, verify final Linux RPM installation/upgrade, rollout/restore/sync and immutable release assets", "status": "pending"},
+    {"id": 7, "task": "Publish verified local R11 files and compare GitHub checksums", "status": "pending"}
+  ],
+  "acceptance_limits": "Record actual finite test scenarios and measured capacity; do not assert universal accuracy or 1000 simultaneous shells. Do not weaken TLS verification or SELinux enforcement. Do not publish credentials or production transcripts."
+}

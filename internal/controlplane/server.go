@@ -525,6 +525,7 @@ func (s *Server) registerRoutes() {
 		return s.security.Require(permission, handler)
 	}
 	s.mux.HandleFunc("/api/v1/terminal/nodes", guard(middleware.PermissionTerminal, s.handleTerminalNodes))
+	s.mux.HandleFunc("/api/v1/terminal/access", guard(middleware.PermissionTerminal, s.handleTerminalAccess))
 	s.mux.HandleFunc("/api/v1/terminal/sessions", guard(middleware.PermissionTerminal, s.handleTerminalSessions))
 	s.mux.HandleFunc("/api/v1/terminal/sessions/", guard(middleware.PermissionTerminal, s.handleTerminalSession))
 	s.mux.HandleFunc("/api/v1/node/terminal/exchange", s.handleTerminalExchange)

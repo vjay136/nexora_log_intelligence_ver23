@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"nexora.local/nli-v20/internal/fleet"
+	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,15 +35,15 @@ func terminalTestEnroll(t *testing.T, f *apiFixture, id string) string {
 	return decodeMap(t, body)["node_token"].(string)
 }
 
-func TestTerminalThousandNodeInventoryPagination(t *testing.T) {
+func TestTerminalTwoThousandNodeInventoryPagination(t *testing.T) {
 	f := newAPIFixture(t)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 2048; i++ {
 		id := fmt.Sprintf("terminal-fleet-%04d", i)
 		f.server.fleet.Register(&fleet.Node{ID: id, Hostname: id, LastSeen: time.Now(), Status: fleet.StatusOnline})
 	}
 	cursor := ""
 	seen := map[string]bool{}
-	for page := 0; page < 12; page++ {
+	for page := 0; page < 22; page++ {
 		resp, data := f.request("GET", "/api/v1/terminal/nodes?cursor="+cursor, nil)
 		if resp.StatusCode != 200 {
 			t.Fatalf("inventory %d %s", resp.StatusCode, data)
@@ -62,11 +65,59 @@ func TestTerminalThousandNodeInventoryPagination(t *testing.T) {
 			break
 		}
 	}
-	if len(seen) != 1001 {
+	if len(seen) != 2049 {
 		t.Fatalf("inventory lost nodes: %d", len(seen))
+	}
+	var wg sync.WaitGroup
+	latencies := make(chan time.Duration, 80)
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				started := time.Now()
+				resp, data := f.request("GET", "/api/v1/terminal/nodes?q=terminal-fleet", nil)
+				if resp.StatusCode != 200 {
+					t.Errorf("concurrent inventory failed: %d %s", resp.StatusCode, data)
+					return
+				}
+				latencies <- time.Since(started)
+			}
+		}()
+	}
+	wg.Wait()
+	close(latencies)
+	var samples []time.Duration
+	for elapsed := range latencies {
+		samples = append(samples, elapsed)
+	}
+	if len(samples) != 80 {
+		t.Fatal("inventory stress requests were dropped", len(samples))
+	}
+	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	t.Logf("fleet_nodes=2048 concurrent_readers=8 requests=80 p95=%s max=%s", samples[75], samples[79])
+	if samples[75] > 2*time.Second {
+		t.Fatal("terminal inventory exceeded the bounded responsiveness budget")
 	}
 }
 func terminalTestExchange(t *testing.T, f *apiFixture, node, token string, in protocol.TerminalExchangeRequest) (int, protocol.TerminalExchangeResponse) {
+	if in.Terminal.Enabled && in.Terminal.AccessEpoch == "" {
+		in.Terminal.AccessEpoch = strings.Repeat("e", 64)
+	}
+	code, out := terminalTestExchangeWithoutApproval(t, f, node, token, in)
+	// These pre-existing transport tests explicitly grant the host request so
+	// their assertions remain about delivery/ownership, not approval policy.
+	if code == 200 && in.Terminal.Enabled {
+		v := f.server.terminal.access.view(node)
+		if v.State == "pending_enable" {
+			if _, err := f.server.terminal.access.update(node, v.Epoch, "approve", "test-fixture administrator", v.Revision); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return code, out
+}
+func terminalTestExchangeWithoutApproval(t *testing.T, f *apiFixture, node, token string, in protocol.TerminalExchangeRequest) (int, protocol.TerminalExchangeResponse) {
 	t.Helper()
 	in.NodeID = node
 	data, _ := json.Marshal(in)

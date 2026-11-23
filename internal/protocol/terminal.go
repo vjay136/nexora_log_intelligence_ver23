@@ -7,6 +7,7 @@ type TerminalStatus struct {
 	Enabled            bool   `json:"enabled"`
 	PrivilegeMode      string `json:"privilege_mode"`
 	Generation         string `json:"generation"`
+	AccessEpoch        string `json:"access_epoch,omitempty"`
 	Reason             string `json:"reason,omitempty"`
 	MaxSessions        int    `json:"max_sessions"`
 	IdleTimeoutSeconds int    `json:"idle_timeout_seconds"`

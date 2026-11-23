@@ -1,3 +1,7 @@
+# NLI Ver23 R11 — v23.0.0-11
+
+Fixes enforcing-host terminal startup, adds an explicit contained-runtime preflight, bounds inventory and browser terminal work, clarifies Webapp password confirmation, and avoids unnecessary service restarts. See [R11 release notes](docs/V23_R11_RELEASE_NOTES.md).
+
 # NLI Ver23 R10 — v23.0.0-10
 
 Optional authenticated Node Terminal for controller/client demonstrations over existing NLI HTTPS, with explicit host opt-in, dedicated operator permissions and ephemeral bounded sessions. See [R10 release notes](docs/V23_R10_RELEASE_NOTES.md). Existing installation modes 1–10 remain.

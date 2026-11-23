@@ -269,3 +269,10 @@ clears the local form/results and does not revoke a published policy.
 Only the dedicated operator's actual permissions are available; Node Terminal is not an unrestricted root shell. It does not bypass organization access policy. The broker has no public listener and reuses existing TLS-authenticated NLI transport. Large enrolled inventories are searched and paged; session capacity is bounded independently. Stale/offline/disabled nodes are never treated as connected.
 
 Do not paste credentials into guidance questions. Command input and output are not sent to AI, browser storage, parser bundles or Supabase backups. Audit metadata records access lifecycle, actor, target and reason. **AI Guidance & Revisions → Node Terminal** describes navigation and controls only; it cannot see the live terminal or execute its commands.
+
+
+## R11 terminal startup and password clarification
+
+Node Terminal uses the current signed-in NLI Webapp password for every node. It does not use an SSH, root, Supabase or per-node password. The form clears the password after an attempt. Host/runtime failure after authentication is a different condition. See [R11 terminal troubleshooting](R11_TERMINAL_TROUBLESHOOTING.md) for the bounded `--check-runtime` diagnostic, password hash storage and an optional root-admin reset procedure.
+
+R11 uses inherited PTYs in systemd scopes to avoid the enforcing-host `208/STDIN` failure. Repeated enable no longer restarts the controller unnecessarily, and client enable does not restart client services. Do not disable SELinux or certificate verification as a workaround.

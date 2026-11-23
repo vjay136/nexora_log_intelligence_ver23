@@ -30,7 +30,7 @@ func refreshTerminalReadAccess(ctx context.Context) {
 }
 
 func terminalStatus(s terminalrpc.Status) protocol.TerminalStatus {
-	return protocol.TerminalStatus{Supported: s.Supported, Enabled: s.Enabled, PrivilegeMode: s.PrivilegeMode, Generation: s.Generation, Reason: s.Reason, MaxSessions: s.MaxSessions, IdleTimeoutSeconds: s.IdleTimeoutSeconds, LifetimeSeconds: s.LifetimeSeconds}
+	return protocol.TerminalStatus{Supported: s.Supported, Enabled: s.Enabled, PrivilegeMode: s.PrivilegeMode, Generation: s.Generation, AccessEpoch: s.AccessEpoch, Reason: s.Reason, MaxSessions: s.MaxSessions, IdleTimeoutSeconds: s.IdleTimeoutSeconds, LifetimeSeconds: s.LifetimeSeconds}
 }
 func (c *Client) localTerminalStatus(ctx context.Context) protocol.TerminalStatus {
 	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)

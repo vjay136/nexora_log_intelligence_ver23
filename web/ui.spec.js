@@ -3819,6 +3819,67 @@ async function prepareTerminal(page){
 }
 async function connectTerminal(page){await prepareTerminal(page);await page.getByRole('button',{name:'Connect terminal',exact:true}).click();await expect(page.getByLabel('Terminal keyboard input',{exact:true})).toBeEnabled();}
 
+test('R11 terminal explains shared Webapp reauthentication and keeps wrong passwords local',async({page})=>{
+ await mockController(page);await mockTerminal(page);
+ await page.route('**/api/v1/terminal/sessions',route=>route.fulfill({status:403,json:{error:'Enter the current NLI Webapp login password for this signed-in account.'}}));
+ await login(page);await prepareTerminal(page);
+ await expect(page.locator('#terminal-connect-form')).toContainText('same password for controller and client');
+ await page.getByRole('button',{name:'Connect terminal',exact:true}).click();
+ await expect(page.locator('#terminal-status')).toContainText('current NLI Webapp login password');
+ await expect(page.getByLabel('NLI login password',{exact:true})).toHaveValue('');
+ await expect(page.locator('.toast.error')).toHaveCount(0);
+ await expect(page.locator('#terminal-keyboard')).toBeDisabled();
+});
+
+test('R11 terminal navigation stays responsive while remote close is stalled and late cleanup cannot clear a new session',async({page})=>{
+ await mockController(page);await mockTerminal(page);let releaseClose;
+ const closeGate=new Promise(resolve=>releaseClose=resolve);
+ await page.route('**/api/v1/terminal/sessions/*/close',async route=>{await closeGate;await route.fulfill({json:{status:'closed'}}).catch(()=>{});});
+ await login(page);await connectTerminal(page);
+ await page.getByTestId('nav-assurance').click();
+ await expect(page.locator('#assurance-form [name=raw]')).toBeVisible({timeout:1500});
+ await connectTerminal(page);releaseClose();
+ await expect(page.locator('#terminal-keyboard')).toBeEnabled();
+ await expect(page.locator('#terminal-session-detail')).toContainText('running');
+});
+
+test('R11 terminal flood remains bounded and navigation works while output is arriving',async({page})=>{
+ await mockController(page);await mockTerminal(page,{output:[Buffer.from('FLOOD '.repeat(40000))]});
+ await login(page);await connectTerminal(page);
+ await expect(page.locator('#terminal-screen')).toContainText('FLOOD');
+ await page.getByTestId('nav-assurance').click();
+ await expect(page.locator('#assurance-form [name=raw]')).toBeVisible({timeout:1500});
+ await expect(page.locator('.error-state')).toHaveCount(0);
+});
+
+test('R11 Node Terminal host opt-in waits for approval and disable waits for its own approval',async({page})=>{
+ await mockController(page);await mockTerminal(page);
+ let access={node_id:'node-0',access_epoch:'a'.repeat(64),state:'pending_enable',enabled:false,revision:1};const actions=[];
+ await page.route('**/api/v1/terminal/nodes?*',route=>route.fulfill({json:{items:[{id:'node-0',display_name:'Demo 0',role:'client',status:'online',host_enabled:true,terminal_enabled:access.enabled,access}],next_cursor:''}}));
+ await page.route('**/api/v1/terminal/access',route=>{const body=route.request().postDataJSON();actions.push(body);expect(body.revision).toBe(access.revision);expect(body.access_epoch).toBe(access.access_epoch);if(body.action==='approve'){access={...access,enabled:access.state==='pending_enable',state:access.state==='pending_enable'?'enabled':'disabled',revision:access.revision+1};}else if(body.action==='reject'){access={...access,state:access.enabled?'enabled':'disabled',revision:access.revision+1};}else{access={...access,state:body.action==='request_enable'?'pending_enable':'pending_disable',revision:access.revision+1};}return route.fulfill({json:{access,message:'Node Terminal approval recorded'}});});
+ await login(page);await page.getByTestId('nav-node-terminal').click();
+ await expect(page.getByRole('radio',{name:'Select Demo 0',exact:true})).toBeDisabled();
+ await page.getByRole('button',{name:'Approve enable',exact:true}).click();
+ await page.getByRole('radio',{name:'Select Demo 0',exact:true}).check();
+ await page.getByLabel('NLI login password',{exact:true}).fill('terminal-test-password');await page.getByLabel('Session reason',{exact:true}).fill('approved demo');
+ await page.getByRole('button',{name:'Connect terminal',exact:true}).click();await expect(page.locator('#terminal-keyboard')).toBeEnabled();
+ await page.getByRole('button',{name:'Request disable',exact:true}).click();
+ await expect(page.locator('#terminal-keyboard')).toBeEnabled();
+ await page.getByRole('button',{name:'Approve disable',exact:true}).click();
+ await expect(page.locator('#terminal-keyboard')).toBeDisabled();
+ await expect(page.getByRole('radio',{name:'Select Demo 0',exact:true})).toBeDisabled();
+ await page.getByRole('button',{name:'Request enable',exact:true}).click();await page.getByRole('button',{name:'Reject request',exact:true}).click();await expect(page.getByRole('radio',{name:'Select Demo 0',exact:true})).toBeDisabled();
+ expect(actions.map(a=>a.action)).toEqual(['approve','request_disable','approve','request_enable','reject']);
+});
+
+test('R11 terminal approval notification opens only the Node Terminal workspace',async({page})=>{
+ await mockController(page,{controllerNotifications:[{id:'audit-98',sequence:98,title:'Node Terminal approval required',resource:'Demo node',workspace:'node-terminal',category:'approval',severity:'warning',timestamp:'2026-11-23T10:00:00Z',status:'unread'}]});await mockTerminal(page);
+ await login(page);await page.locator('#notification-bell').click();
+ await page.getByRole('link',{name:'Review Node Terminal',exact:true}).click();
+ await expect(page.locator('#page-title')).toHaveText('Node Terminal');
+ await expect(page.locator('#terminal-node-list')).toBeVisible();await expect(page.locator('#notification-panel')).toBeHidden();
+});
+
 test('R10 terminal pages a 1005-node inventory without auto opening and disables offline or opted-out hosts',async({page})=>{
  await mockController(page);const t=await mockTerminal(page);await login(page);await page.getByTestId('nav-node-terminal').click();await expect(page.locator('#terminal-node-list input')).toHaveCount(100);await expect(page.locator('#terminal-node-count')).toContainText('1,005');
  await expect(page.getByRole('radio',{name:'Select Demo 1',exact:true})).toBeDisabled();await expect(page.getByRole('radio',{name:'Select Demo 2',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'Connect terminal',exact:true})).toBeDisabled();

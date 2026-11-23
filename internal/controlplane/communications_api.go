@@ -168,13 +168,18 @@ func (s *Server) handleNotificationFeed(w http.ResponseWriter, r *http.Request) 
 	if principal == nil {
 		return
 	}
+	// A slow optional notification metadata store must not hide local audit
+	// approvals or occupy the browser's connection indefinitely.
+	feedCtx, feedCancel := context.WithTimeout(r.Context(), time.Second)
+	defer feedCancel()
+	r = r.WithContext(feedCtx)
 	limit := 100
 	if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value <= 500 {
 		limit = value
 	}
 	policy := s.readNotificationPolicy(r)
 	userStates := map[uint64]notificationUserState{}
-	acks, _ := s.metadata.List(r.Context(), notificationAckCollection, metastore.Query{Limit: 1000})
+	acks, ackErr := s.metadata.List(r.Context(), notificationAckCollection, metastore.Query{Limit: 1000})
 	for _, ack := range acks {
 		var payload notificationUserState
 		if json.Unmarshal(ack.Payload, &payload) == nil && payload.Username == principal.Username {
@@ -196,6 +201,7 @@ func (s *Server) handleNotificationFeed(w http.ResponseWriter, r *http.Request) 
 	}
 	items := make([]map[string]any, 0, limit)
 	recentAuthoringFailures := make(map[string]time.Time)
+	terminalRequests := make(map[string]bool)
 	for _, event := range events {
 		resourceKey := strings.TrimSpace(strings.ToLower(event.Resource))
 		if isNotificationResolutionEvent(event) {
@@ -204,6 +210,12 @@ func (s *Server) handleNotificationFeed(w http.ResponseWriter, r *http.Request) 
 		category, severity, actionable := classifyNotificationEvent(event)
 		if !actionable || resolvedResources[resourceKey] > event.Sequence || !policyWatches(policy, category) || !notificationRecipient(policy, principal.Username, principal.Role, severity) {
 			continue
+		}
+		if event.Action == "terminal.access.approval_requested" {
+			if terminalRequests[resourceKey] {
+				continue
+			}
+			terminalRequests[resourceKey] = true
 		}
 		if status, ok := authoringFailureStatus(event); ok {
 			key := resourceKey + "\x00" + event.Actor + "\x00" + status
@@ -223,7 +235,11 @@ func (s *Server) handleNotificationFeed(w http.ResponseWriter, r *http.Request) 
 		if status == "snoozed" {
 			status = "unread"
 		}
-		items = append(items, map[string]any{"id": fmt.Sprintf("audit-%d", event.Sequence), "sequence": event.Sequence, "timestamp": event.Timestamp, "category": category, "severity": severity, "title": notificationTitle(event, category), "action": event.Action, "resource": event.Resource, "outcome": event.Outcome, "actor": event.Actor, "status": status, "read": status == "read", "acknowledged": status == "read", "snoozed_until": nullableTime(userState.SnoozedUntil), "source": "controller_audit_chain"})
+		displayResource := event.Resource
+		if event.Details["workspace"] == "node-terminal" && event.Details["node_id"] != "" {
+			displayResource = event.Details["node_id"]
+		}
+		items = append(items, map[string]any{"id": fmt.Sprintf("audit-%d", event.Sequence), "sequence": event.Sequence, "timestamp": event.Timestamp, "category": category, "severity": severity, "title": notificationTitle(event, category), "action": event.Action, "resource": displayResource, "workspace": event.Details["workspace"], "outcome": event.Outcome, "actor": event.Actor, "status": status, "read": status == "read", "acknowledged": status == "read", "snoozed_until": nullableTime(userState.SnoozedUntil), "source": "controller_audit_chain"})
 		if len(items) == limit {
 			break
 		}
@@ -234,7 +250,7 @@ func (s *Server) handleNotificationFeed(w http.ResponseWriter, r *http.Request) 
 			unreadCount++
 		}
 	}
-	deliveries, _ := s.metadata.List(r.Context(), notificationDeliveryCollection, metastore.Query{Limit: 500})
+	deliveries, deliveryErr := s.metadata.List(r.Context(), notificationDeliveryCollection, metastore.Query{Limit: 500})
 	history := make([]map[string]any, 0, len(deliveries))
 	for _, doc := range deliveries {
 		var attempt notificationDeliveryAttempt
@@ -242,7 +258,7 @@ func (s *Server) handleNotificationFeed(w http.ResponseWriter, r *http.Request) 
 			history = append(history, map[string]any{"id": attempt.ID, "sequence": attempt.Sequence, "channel": attempt.Channel, "attempt": attempt.Attempt, "status": attempt.Status, "timestamp": attempt.Timestamp, "error": attempt.Error})
 		}
 	}
-	jsonOK(w, map[string]any{"notifications": items, "count": unreadCount, "unread_count": unreadCount, "visible_count": len(items), "delivery_history": map[string]any{"in_app": "derived from persisted audit records", "attempts": history}, "policy": policy})
+	jsonOK(w, map[string]any{"notifications": items, "count": unreadCount, "unread_count": unreadCount, "visible_count": len(items), "metadata_available": feedCtx.Err() == nil && ackErr == nil && deliveryErr == nil, "delivery_history": map[string]any{"in_app": "derived from persisted audit records", "attempts": history}, "policy": policy})
 }
 
 func (s *Server) handleNotificationAck(w http.ResponseWriter, r *http.Request) {
@@ -445,6 +461,14 @@ func validateNotificationPolicy(policy notificationPolicy) bool {
 }
 
 func classifyNotificationEvent(event auditlog.Event) (string, string, bool) {
+	if strings.EqualFold(event.Action, http.MethodPost) && oneOf(event.Resource, "/api/v1/terminal/sessions", "/api/v1/terminal/access") {
+		if strings.HasPrefix(event.Details["detail"], "status=409") {
+			return "", "", false
+		}
+		if strings.HasPrefix(event.Details["detail"], "status=403") || strings.HasPrefix(event.Details["detail"], "status=429") {
+			return "security", "warning", true
+		}
+	}
 	// Periodic browser probes report connectivity in Communications Status.
 	// Keep their request audit records without raising an incident on every retry.
 	if strings.EqualFold(event.Action, http.MethodPost) && event.Resource == "/api/v1/communications/browser-heartbeat" {
@@ -554,6 +578,12 @@ func isExpectedAnonymousSessionProbe(event auditlog.Event) bool {
 }
 
 func notificationTitle(event auditlog.Event, category string) string {
+	if event.Resource == "/api/v1/terminal/sessions" && event.Outcome == "failure" && strings.HasPrefix(event.Details["detail"], "status=403") {
+		return "Node Terminal access confirmation rejected"
+	}
+	if event.Action == "terminal.access.approval_requested" {
+		return "Node Terminal approval required"
+	}
 	verb := strings.ReplaceAll(strings.ReplaceAll(event.Action, ".", " "), "_", " ")
 	if event.Outcome == "failure" || event.Outcome == "partial_failure" {
 		return strings.Title(category) + " issue: " + verb

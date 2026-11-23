@@ -70,10 +70,12 @@ type terminalRelay struct {
 	stop     chan struct{}
 	done     chan struct{}
 	once     sync.Once
+	access   *terminalAccessStore
 }
 
 func newTerminalRelay(s *Server) *terminalRelay {
 	t := &terminalRelay{s: s, broker: terminalrpc.NewClient(terminalrpc.DefaultSocket), sessions: map[string]*terminalSession{}, nodes: map[string]terminalObservation{}, attempts: map[[32]byte]terminalAttempt{}, stop: make(chan struct{}), done: make(chan struct{})}
+	t.access = newTerminalAccessStore(s.cfg.StateDir)
 	go t.run()
 	return t
 }
@@ -100,11 +102,12 @@ func (t *terminalRelay) observe(node string, status protocol.TerminalStatus) {
 	if _, ok := t.s.fleet.Get(node); !ok {
 		return
 	}
+	t.noteAccess(node, status)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.nodes[node] = terminalObservation{status, time.Now()}
 	for _, s := range t.sessions {
-		if s.NodeID == node && terminalActive(s) && s.generation != status.Generation {
+		if s.NodeID == node && terminalActive(s) && (!status.Enabled || s.generation != status.Generation) {
 			t.closeLocked(s, "Node terminal restarted; connect a new session")
 		}
 	}
@@ -124,6 +127,7 @@ func (t *terminalRelay) run() {
 	defer close(t.done)
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
+	var localProbe time.Time
 	for {
 		select {
 		case <-t.stop:
@@ -143,6 +147,18 @@ func (t *terminalRelay) run() {
 			}
 			return
 		case <-tick.C:
+			if time.Since(localProbe) > 5*time.Second {
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				t.mu.Lock()
+				broker := t.broker
+				t.mu.Unlock()
+				x, e := broker.Status(ctx)
+				cancel()
+				localProbe = time.Now()
+				if e == nil {
+					t.noteAccess("@controller", protocol.TerminalStatus{Enabled: x.Enabled, Generation: x.Generation, AccessEpoch: x.AccessEpoch})
+				}
+			}
 			ids := []string{}
 			t.mu.Lock()
 			for id, s := range t.sessions {
@@ -180,18 +196,26 @@ func (s *Server) handleTerminalNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type node struct {
-		ID            string   `json:"id"`
-		Role          string   `json:"role"`
-		DisplayName   string   `json:"display_name"`
-		Hostname      string   `json:"hostname"`
-		Groups        []string `json:"groups"`
-		Status        string   `json:"status"`
-		Enabled       bool     `json:"terminal_enabled"`
-		Reason        string   `json:"reason"`
-		PrivilegeMode string   `json:"privilege_mode"`
+		ID            string               `json:"id"`
+		Role          string               `json:"role"`
+		DisplayName   string               `json:"display_name"`
+		Hostname      string               `json:"hostname"`
+		Groups        []string             `json:"groups"`
+		Status        string               `json:"status"`
+		Enabled       bool                 `json:"terminal_enabled"`
+		Reason        string               `json:"reason"`
+		PrivilegeMode string               `json:"privilege_mode"`
+		HostEnabled   bool                 `json:"host_enabled"`
+		Access        terminalAccessRecord `json:"access"`
 	}
 	labels := map[string]clientDirectoryNode{}
-	if view, err := s.clientDirectoryView(r.Context()); err == nil {
+	// Display labels must not hold up terminal inventory or require the cloud
+	// metadata service to be healthy. Node identities and permissions stay live.
+	labelCtx, labelCancel := context.WithTimeout(r.Context(), 750*time.Millisecond)
+	labelView, labelErr := s.clientDirectoryView(labelCtx)
+	labelCancel()
+	if labelErr == nil {
+		view := labelView
 		for _, n := range view.Nodes {
 			labels[n.NodeID] = n
 		}
@@ -203,10 +227,23 @@ func (s *Server) handleTerminalNodes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		local.Reason = "Host terminal is not enabled. Run the host setup helper."
 	}
+	local.HostEnabled = local.Enabled
+	localStatus := protocol.TerminalStatus{Enabled: local.HostEnabled, Generation: status.Generation, AccessEpoch: status.AccessEpoch}
+	local.Access = s.terminal.noteAccess(local.ID, localStatus)
+	local.Enabled = local.HostEnabled && s.terminal.access.allowed(local.ID, terminalAccessEpoch(localStatus))
+	if local.HostEnabled && !local.Enabled {
+		local.Reason = "Host enabled; Node Terminal administrator approval is required"
+	}
 	nodes := []node{local}
+	fleetNodes := s.fleet.All()
+	observations := make(map[string]terminalObservation, len(fleetNodes))
 	s.terminal.mu.Lock()
-	for _, n := range s.fleet.All() {
-		obs := s.terminal.nodes[n.ID]
+	for _, n := range fleetNodes {
+		observations[n.ID] = s.terminal.nodes[n.ID]
+	}
+	s.terminal.mu.Unlock()
+	for _, n := range fleetNodes {
+		obs := observations[n.ID]
 		label := labels[n.ID]
 		groups := []string{}
 		for _, g := range label.Groups {
@@ -222,9 +259,16 @@ func (s *Server) handleTerminalNodes(w http.ResponseWriter, r *http.Request) {
 		if reason == "" && !enabled {
 			reason = "Node terminal disabled or awaiting a fresh heartbeat"
 		}
-		nodes = append(nodes, node{n.ID, "client", label.DisplayName, n.Hostname, groups, state, enabled, reason, "operator"})
+		access := s.terminal.access.view(n.ID)
+		if access.State == "" && obs.status.Enabled && terminalAccessEpoch(obs.status) == "" {
+			access.State = "host_setup_required"
+		}
+		allowed := enabled && s.terminal.access.allowed(n.ID, terminalAccessEpoch(obs.status))
+		if enabled && !allowed {
+			reason = "Host enabled; Node Terminal administrator approval is required"
+		}
+		nodes = append(nodes, node{ID: n.ID, Role: "client", DisplayName: label.DisplayName, Hostname: n.Hostname, Groups: groups, Status: state, Enabled: allowed, Reason: reason, PrivilegeMode: "operator", HostEnabled: enabled, Access: access})
 	}
-	s.terminal.mu.Unlock()
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	items := []node{}
 	q := strings.ToLower(r.URL.Query().Get("q"))
@@ -240,7 +284,11 @@ func (s *Server) handleTerminalNodes(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, n)
 	}
-	jsonOK(w, map[string]any{"items": items, "next_cursor": next, "permission": middleware.PermissionTerminal, "limits": map[string]int{"max_active_sessions": 64, "max_user_sessions": 4, "max_output_bytes": terminalBuffer}})
+	message := "Host readiness and Webapp approval are separate. Approve the exact Node Terminal enable request, then connect to the online node with your current NLI Webapp password."
+	if labelErr != nil {
+		message += " Custom display labels are temporarily unavailable; enrolled node identities remain selectable."
+	}
+	jsonOK(w, map[string]any{"items": items, "next_cursor": next, "message": message, "labels_available": labelErr == nil, "permission": middleware.PermissionTerminal, "limits": map[string]int{"max_active_sessions": 64, "max_user_sessions": 4, "max_output_bytes": terminalBuffer}})
 }
 func (s *Server) handleTerminalSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -277,7 +325,7 @@ func (s *Server) handleTerminalSessions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if !s.auth.VerifyCurrentPassword(p.Username, in.Password) {
-		jsonError(w, "current password required", 403)
+		jsonError(w, "Enter the current NLI Webapp login password for this signed-in account. The same password confirms terminal access to every node; SSH and Linux account passwords are not used.", 403)
 		return
 	}
 	in.Password = ""
@@ -290,7 +338,7 @@ func (s *Server) handleTerminalSessions(w http.ResponseWriter, r *http.Request) 
 			jsonError(w, "host terminal is not enabled", 409)
 			return
 		}
-		st = protocol.TerminalStatus{Enabled: x.Enabled, Generation: x.Generation, IdleTimeoutSeconds: x.IdleTimeoutSeconds, LifetimeSeconds: x.LifetimeSeconds, MaxSessions: x.MaxSessions}
+		st = protocol.TerminalStatus{Enabled: x.Enabled, Generation: x.Generation, AccessEpoch: x.AccessEpoch, IdleTimeoutSeconds: x.IdleTimeoutSeconds, LifetimeSeconds: x.LifetimeSeconds, MaxSessions: x.MaxSessions}
 	} else {
 		n, ok := s.fleet.Get(in.NodeID)
 		t.mu.Lock()
@@ -306,6 +354,10 @@ func (s *Server) handleTerminalSessions(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, "terminal is disabled by host policy", 409)
 		return
 	}
+	if terminalAccessEpoch(st) == "" {
+		jsonError(w, "Run the current nli-node-terminal-setup helper on this host to initialize its Node Terminal approval request.", 409)
+		return
+	}
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		jsonError(w, "cannot create session", 503)
@@ -318,6 +370,16 @@ func (s *Server) handleTerminalSessions(w http.ResponseWriter, r *http.Request) 
 	}
 	session := &terminalSession{ID: id, NodeID: in.NodeID, Status: "pending", ExpiresAt: time.Now().Add(time.Duration(life) * time.Second), IdleTimeoutSeconds: st.IdleTimeoutSeconds, owner: owner, username: p.Username, token: token, generation: st.Generation, lease: time.Now().Add(15 * time.Second), transportUntil: time.Now().Add(30 * time.Second), cols: in.Cols, rows: in.Rows}
 	t.mu.Lock()
+	if !t.access.allowed(in.NodeID, terminalAccessEpoch(st)) {
+		t.mu.Unlock()
+		decision := t.noteAccess(in.NodeID, st)
+		if decision.State == "policy_unavailable" {
+			jsonError(w, "Controller Node Terminal approval policy could not be verified; existing policy data was preserved. Ask the controller administrator to inspect terminal-access.json.", 503)
+			return
+		}
+		jsonError(w, "Node Terminal access awaits administrator approval. Review the selected node's enable request in COMMAND CENTER > Node Terminal.", 409)
+		return
+	}
 	active, user, nodeCount := 0, 0, 0
 	for _, v := range t.sessions {
 		if terminalActive(v) {

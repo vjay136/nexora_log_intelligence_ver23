@@ -2,6 +2,8 @@
 Description=NLI optional local node terminal broker
 After=local-fs.target
 ConditionPathExists=/etc/nli/node-terminal.json
+StartLimitIntervalSec=120
+StartLimitBurst=3
 
 [Service]
 Type=simple

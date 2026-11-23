@@ -18,6 +18,7 @@ const DefaultConfig = "/etc/nli/node-terminal.json"
 
 type HostConfig struct {
 	Enabled              bool   `json:"enabled"`
+	AccessEpoch          string `json:"access_epoch,omitempty"`
 	AllowInputWrite      *bool  `json:"allow_input_write,omitempty"`
 	PrivilegeMode        string `json:"privilege_mode"`
 	MaxSessions          int    `json:"max_sessions,omitempty"`
@@ -56,6 +57,9 @@ func LoadHostConfig(path string) (HostConfig, error) {
 }
 
 func NormalizeHostConfig(cfg HostConfig) (HostConfig, error) {
+	if len(cfg.AccessEpoch) > 128 {
+		return cfg, errors.New("terminal access epoch is invalid")
+	}
 	if cfg.PrivilegeMode == "" {
 		cfg.PrivilegeMode = "operator"
 	}
