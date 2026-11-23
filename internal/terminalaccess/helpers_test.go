@@ -27,7 +27,7 @@ func TestJournalScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--no-pager", "--no-ask-password", "--lines=50", "--unit=nli-agent.service", "--follow", "--since=1 hour ago", "--output=json", "--boot=-1"}
+	want := []string{"--no-pager", "--lines=50", "--unit=nli-agent.service", "--follow", "--since=1 hour ago", "--output=json", "--boot=-1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%q", got)
 	}

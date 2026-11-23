@@ -80,6 +80,8 @@ trap 'rm -f -- "${tmp:-}"' EXIT
 cat >"$tmp" <<'SUDO'
 Defaults:nli-terminal env_reset
 Defaults:nli-terminal !setenv
+# Keep restricted root helpers in their terminal unit; no logind/PAM cgroup escape.
+Defaults:nli-terminal !pam_session
 Defaults:nli-terminal secure_path="/usr/libexec/nli-terminal/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 nli-terminal ALL=(root) NOPASSWD: /usr/bin/nli-node-terminal --systemctl *, /usr/bin/nli-node-terminal --journal *
 SUDO

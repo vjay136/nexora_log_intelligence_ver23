@@ -7,6 +7,8 @@ stored. Existing r9_live_sync_restore.py separately qualifies rollout/restore.
 import argparse
 import base64
 import json
+import hashlib
+import re
 import shlex
 from pathlib import Path
 import secrets
@@ -74,6 +76,11 @@ class HTTP:
         self.proc.wait(timeout=15)
 
 
+def logical_display(text):
+    display=re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+    return display.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+
+
 class Terminal:
     def __init__(self, http, node):
         self.http=http;self.seq=0;self.cursor=0;self.text=''
@@ -96,18 +103,67 @@ class Terminal:
         raise Failure('Terminal output deadline exceeded')
 
     def send(self, data):
-        self.seq+=1
-        return self.http.call('POST',self.path+'/input',{'sequence':self.seq,'data':data})
+        sequence=self.seq+1
+        deadline=time.monotonic()+15
+        while True:
+            # Only explicit not-admitted backpressure is safe to retry. Unknown
+            # HTTP/network failures propagate without replaying a command.
+            reply=self.http.call('POST',self.path+'/input',{'sequence':sequence,'data':data})
+            if reply.get('accepted') is True:
+                require(reply.get('acknowledged')==sequence,'Terminal acknowledgement sequence differs')
+                self.seq=sequence
+                return reply
+            require(reply.get('accepted') is False and reply.get('code')=='terminal_input_backpressure' and reply.get('expected_sequence')==sequence,'Terminal input was not explicitly accepted or safely rejected')
+            require(time.monotonic()<deadline,'Terminal input backpressure deadline exceeded')
+            delay=reply.get('retry_after_ms',150)
+            require(isinstance(delay,(int,float)) and 0<delay<=1000,'Invalid backpressure retry interval')
+            time.sleep(min(delay/1000,max(0,deadline-time.monotonic())))
 
     def command(self, command, timeout=20):
         marker='R10_'+secrets.token_hex(8)
         self.text=''
         self.send(command+"; printf '\\n%s\\n' '"+marker+"'\n")
-        self.wait(lambda d: '\n'+marker+'\r\n' in self.text, timeout)
-        return self.text
+        self.wait(lambda d: '\r\n'+marker+'\r\n' in logical_display(self.text), timeout)
+        return logical_display(self.text)
 
     def close(self):
         self.http.call('POST',self.path+'/close',{})
+
+
+
+def journal_follow_running(node, session_id):
+    unit='nli-terminal-session-'+hashlib.sha256(session_id.encode()).hexdigest()[:32]+'.service'
+    code="""import json,pathlib,sys
+unit=sys.argv[1];found=False
+for p in pathlib.Path('/proc').iterdir():
+ if not p.name.isdecimal():continue
+ try:
+  if (p/'comm').read_text().strip()=='journalctl' and unit in (p/'cgroup').read_text().split('/')[-1].strip():
+   uid=int(next(line for line in (p/'status').read_text().splitlines() if line.startswith('Uid:')).split()[1])
+   if uid==0:found=True
+ except (OSError,ProcessLookupError):pass
+print(json.dumps(found))
+"""
+    return json.loads(docker('exec',node,'python3','-c',code,unit))
+
+
+def start_journal_follow(t, node, unit):
+    t.send('journalctl -u '+unit+' -f -n 1\n')
+    deadline=time.monotonic()+15
+    while not journal_follow_running(node,t.id):
+        require(time.monotonic()<deadline,'Journal follow never became a live foreground process')
+        t.read();time.sleep(.1)
+
+
+def interrupt_journal_follow(t, node, unit):
+    start_journal_follow(t,node,unit)
+    # Queue admission is not shell readiness. As with SSH, Ctrl-C can flush
+    # typeahead; wait for the newly emitted prompt before typing another command.
+    t.text=''
+    t.send('\x03')
+    t.wait(lambda d:re.search(r'(?:^|\n)nli-terminal@[^\n]*\$ $',logical_display(t.text)) is not None,15)
+    require(not journal_follow_running(node,t.id),'Journal follow survived the new shell prompt')
+    require('INTERRUPTED' in t.command('printf INTERRUPTED'),'Command after journal Ctrl-C prompt failed')
 
 
 def runtime_signature(http):
@@ -247,8 +303,7 @@ def main():
             unit='nli-controller-agent' if target=='@controller' else 'nli-agent'
             out=t.command('sudo systemctl status '+unit+' --no-pager; journalctl -u '+unit+' -n 3 --no-pager; printf \'\\nJOURNAL_RC_%s\\n\' "$?"')
             require('active (running)' in out and '\nJOURNAL_RC_0\r\n' in out,'NLI service/journal helper failed')
-            t.send('journalctl -u '+unit+' -f -n 1\n');time.sleep(1);t.read();t.send('\x03')
-            require('INTERRUPTED' in t.command('printf INTERRUPTED'),'Journal follow Ctrl-C failed')
+            interrupt_journal_follow(t,a.controller if target=='@controller' else a.client,unit)
             if target==client:
                 out=t.command('sudo systemctl restart nli-agent; systemctl is-active nli-agent')
                 require('\r\nactive\r\n' in out,'Limited service restart failed')
@@ -258,7 +313,13 @@ def main():
             gap=t.read(after=0)
             require(gap['truncated'] and gap['start']>0,'Output flood did not report bounded-buffer gap')
             t.wait(lambda d:'FLOOD_DONE\r\n' in t.text,20)
+            host=a.controller if target=='@controller' else a.client
+            start_journal_follow(t,host,unit)
             t.close();sessions.remove(t)
+            deadline=time.monotonic()+15
+            while journal_follow_running(host,t.id):
+                require(time.monotonic()<deadline,'Restricted root journal survived session close')
+                time.sleep(.1)
             t.http.call('POST',t.path+'/input',{'sequence':t.seq+1,'data':'echo replay\n'},409)
             checks.append(('controller' if target=='@controller' else 'client')+'_shell_files_vi_helpers_owner_isolation_flood_close')
         require(runtime_signature(h)==before,'Terminal operations changed parser bundle hashes')
@@ -266,9 +327,11 @@ def main():
         # Open a client shell, restart the broker, prove old session cannot replay.
         fresh=HTTP(a.controller);workers.append(fresh)
         t=Terminal(fresh,client);sessions.append(t)
+        start_journal_follow(t,a.client,'nli-agent')
         docker('exec',a.client,'systemctl','restart','nli-node-terminal.service')
         t.wait(lambda d:d['session']['status']=='closed',45)
-        t.http.call('POST',t.path+'/input',{'sequence':1,'data':'echo forbidden-replay\n'},409)
+        require(not journal_follow_running(a.client,t.id),'Restricted root journal survived broker restart')
+        t.http.call('POST',t.path+'/input',{'sequence':t.seq+1,'data':'echo forbidden-replay\n'},409)
         sessions.remove(t);checks.append('broker_restart_closes_old_generation_without_replay')
         # A live browser must not keep a shell alive after client-control stops.
         lost=Terminal(fresh,client);sessions.append(lost)

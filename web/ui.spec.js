@@ -3807,7 +3807,7 @@ async function mockTerminal(page,{output=[],failInput=false,gate=null}={}){
   const r=route.request(),url=new URL(r.url()),path=url.pathname,body=r.postData()?r.postDataJSON():null;calls.push({method:r.method(),path,body});
   if(path.endsWith('/nodes')){const q=url.searchParams.get('q'),start=Number(url.searchParams.get('cursor'))||0,items=q?[{id:'node-999',display_name:'IMAP 999',groups:['IMAP'],status:'online',terminal_enabled:true}]:Array.from({length:Math.min(100,1005-start)},(_,i)=>({id:`node-${start+i}`,display_name:`Demo ${start+i}`,role:i?'client':'controller',groups:['SMTP'],status:i===1?'offline':'online',terminal_enabled:i!==2}));return route.fulfill({json:{items,total:q?1:1005,next_cursor:!q&&start+100<1005?String(start+100):'',privilege_mode:'dedicated operator; canonical NLI input write; limited NLI sudo'}});}
   if(path==='/api/v1/terminal/sessions'){if(gate)await gate;return route.fulfill({status:201,json:{session}});}
-  if(path.endsWith('/input')){inputs.push(body);return route.fulfill({status:failInput?503:200,json:failInput?{error:'input interrupted'}:{accepted:true}});}
+  if(path.endsWith('/input')){inputs.push(body);return route.fulfill({status:failInput?503:200,json:failInput?{error:'input interrupted'}:{accepted:true,acknowledged:body.sequence}});}
   if(path.endsWith('/close')){closed.push(path);return route.fulfill({json:{status:'closed'}});}
   if(path.endsWith('/resize'))return route.fulfill({json:{accepted:true}});
   reads.push(Number(url.searchParams.get('after')));const bytes=index<output.length?Buffer.from(output[index++]):Buffer.alloc(0),start=offset;offset+=bytes.length;
@@ -3864,4 +3864,38 @@ test('R10 terminal rejects oversized paste without partially delivering it and s
  await mockController(page);const t=await mockTerminal(page,{output:['\x1b[?2004hoperator$ ']});await login(page);await connectTerminal(page);
  await page.locator('#terminal-keyboard').evaluate(node=>{const transfer=new DataTransfer();transfer.setData('text/plain','x'.repeat(9000));node.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,clipboardData:transfer}));});await expect(page.locator('#terminal-status')).toContainText('at most 8 KiB');expect(t.inputs).toHaveLength(0);
  await page.locator('#terminal-keyboard').evaluate(node=>{const transfer=new DataTransfer();transfer.setData('text/plain','status\nnext');node.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,clipboardData:transfer}));});await expect.poll(()=>t.inputs.map(item=>item.data).join('')).toBe('\x1b[200~status\nnext\x1b[201~');
+});
+
+
+test('R10 terminal fast typing retries only explicit pre-admission backpressure and admits each exact frame once',async({page})=>{
+ await mockController(page);await mockTerminal(page);const attempts=[],admitted=[];let busy=2;
+ await page.route('**/api/v1/terminal/sessions/*/input',route=>{const body=route.request().postDataJSON();attempts.push(body);if(busy-->0)return route.fulfill({json:{accepted:false,code:'terminal_input_backpressure',expected_sequence:body.sequence,retry_after_ms:100}});admitted.push(body);return route.fulfill({json:{accepted:true,acknowledged:body.sequence}});});
+ await login(page);await connectTerminal(page);const keyboard=page.locator('#terminal-keyboard'),command='printf synthetic-fast-terminal-command-and-pipeline | cat';await keyboard.pressSequentially(command,{delay:1});await keyboard.press('Enter');
+ await expect.poll(()=>admitted.map(frame=>frame.data).join('')).toBe(command+'\r');expect(attempts.slice(0,3)).toEqual([attempts[0],attempts[0],attempts[0]]);expect(admitted.map(frame=>frame.sequence)).toEqual(admitted.map((_,i)=>i+1));await expect(keyboard).toBeEnabled();
+});
+
+test('R10 terminal reconnect fences a backpressured old frame from the new session',async({page})=>{
+ await mockController(page);await mockTerminal(page);let opened=0;const frames=[];
+ await page.route('**/api/v1/terminal/sessions',route=>route.fulfill({json:{session:{id:'fence-'+(++opened),node_id:'node-0',status:'running'}}}));
+ await page.route('**/api/v1/terminal/sessions/*?*',route=>route.fulfill({json:{session:{id:new URL(route.request().url()).pathname.split('/').at(-1),node_id:'node-0',status:'running'},data_b64:'',start:0,next_sequence:0}}));
+ await page.route('**/api/v1/terminal/sessions/*/input',route=>{const id=new URL(route.request().url()).pathname.split('/').at(-2),body=route.request().postDataJSON();frames.push({id,...body});return route.fulfill({json:id==='fence-1'?{accepted:false,code:'terminal_input_backpressure',expected_sequence:body.sequence,retry_after_ms:500}:{accepted:true,acknowledged:body.sequence}});});
+ await login(page);await connectTerminal(page);await page.locator('#terminal-keyboard').pressSequentially('old-session-only');await expect.poll(()=>frames.length).toBeGreaterThan(0);await page.getByRole('button',{name:'Disconnect terminal',exact:true}).click();const oldAttempts=frames.filter(frame=>frame.id==='fence-1').length;
+ await page.getByLabel('NLI login password',{exact:true}).fill('terminal-test-password');await page.getByRole('button',{name:'Connect terminal',exact:true}).click();await expect(page.locator('#terminal-keyboard')).toBeEnabled();await page.locator('#terminal-keyboard').pressSequentially('new-session-only');await page.locator('#terminal-keyboard').press('Enter');
+ await expect.poll(()=>frames.filter(frame=>frame.id==='fence-2').map(frame=>frame.data).join('')).toBe('new-session-only\r');await page.waitForTimeout(700);
+ expect(frames.filter(frame=>frame.id==='fence-1')).toHaveLength(oldAttempts);expect(frames.filter(frame=>frame.id==='fence-2').map(frame=>frame.sequence)).toEqual(frames.filter(frame=>frame.id==='fence-2').map((_,i)=>i+1));await expect(page.locator('#terminal-keyboard')).toBeEnabled();
+});
+
+test('R10 terminal refuses a mismatched backpressure sequence instead of replaying input',async({page})=>{
+ await mockController(page);await mockTerminal(page);const frames=[];await page.route('**/api/v1/terminal/sessions/*/input',route=>{const body=route.request().postDataJSON();frames.push(body);return route.fulfill({json:{accepted:false,code:'terminal_input_backpressure',expected_sequence:body.sequence+1,retry_after_ms:100}});});
+ await login(page);await connectTerminal(page);await page.locator('#terminal-keyboard').press('Enter');await expect(page.locator('#terminal-status')).toContainText('will not be retried');await expect(page.locator('#terminal-keyboard')).toBeDisabled();await page.waitForTimeout(500);expect(frames).toHaveLength(1);
+});
+
+
+test('R10 terminal ignores a late uncertain old-session response after reconnect',async({page})=>{
+ await mockController(page);await mockTerminal(page);let opened=0,release;const late=new Promise(resolve=>release=resolve),frames=[];
+ await page.route('**/api/v1/terminal/sessions',route=>route.fulfill({json:{session:{id:'late-'+(++opened),node_id:'node-0',status:'running'}}}));
+ await page.route('**/api/v1/terminal/sessions/*?*',route=>route.fulfill({json:{session:{id:new URL(route.request().url()).pathname.split('/').at(-1),node_id:'node-0',status:'running'},data_b64:'',start:0,next_sequence:0}}));
+ await page.route('**/api/v1/terminal/sessions/*/input',async route=>{const id=new URL(route.request().url()).pathname.split('/').at(-2),body=route.request().postDataJSON();frames.push({id,...body});if(id==='late-1'){await late;return route.fulfill({status:503,json:{error:'old uncertain delivery'}});}return route.fulfill({json:{accepted:true,acknowledged:body.sequence}});});
+ await login(page);await connectTerminal(page);await page.locator('#terminal-keyboard').press('Enter');await expect.poll(()=>frames.length).toBe(1);await page.getByRole('button',{name:'Disconnect terminal',exact:true}).click();await page.getByLabel('NLI login password',{exact:true}).fill('terminal-test-password');await page.getByRole('button',{name:'Connect terminal',exact:true}).click();await expect(page.locator('#terminal-keyboard')).toBeEnabled();release();await page.waitForTimeout(100);
+ await page.locator('#terminal-keyboard').pressSequentially('fresh');await page.locator('#terminal-keyboard').press('Enter');await expect.poll(()=>frames.filter(frame=>frame.id==='late-2').map(frame=>frame.data).join('')).toBe('fresh\r');await expect(page.locator('#terminal-keyboard')).toBeEnabled();await expect(page.locator('#terminal-status')).not.toContainText('uncertain');expect(frames.filter(frame=>frame.id==='late-1')).toHaveLength(1);
 });

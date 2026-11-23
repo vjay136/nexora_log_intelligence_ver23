@@ -2894,7 +2894,7 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
       if(nodeTerminal!==current||generation!==nodeTerminalGeneration||state.page!=='node-terminal'){
         if(result.session?.id)await api(`/terminal/sessions/${encodeURIComponent(result.session.id)}/close`,{method:'POST',body:{}}).catch(()=>{});return;
       }
-      current.session=result.session;current.outputSequence=0;current.serverTruncated=false;current.inputSequence=0;current.inputFailed=false;current.screen.clear();current.decoder=new TextDecoder('utf-8');current.abort=new AbortController();renderTerminalOutput();terminalSessionState();
+      clearTimeout(current.inputTimer);current.inputTimer=null;current.sending=false;current.pendingInput='';current.session=result.session;current.outputSequence=0;current.serverTruncated=false;current.inputSequence=0;current.inputFailed=false;current.screen.clear();current.decoder=new TextDecoder('utf-8');current.abort=new AbortController();renderTerminalOutput();terminalSessionState();
       if(!current.session?.id)throw new Error('The controller did not return a terminal session.');
       await pollNodeTerminal(generation);el('terminal-keyboard')?.focus();
     }catch(error){if(nodeTerminal===current&&current.generation===generation)terminalStatus(`Terminal was not connected. ${requestFailure(error)}`);throw error;}
@@ -2903,23 +2903,37 @@ let pairs=[];try{pairs=qrwPairs(text);}catch{}const firstPair=pairs.length?Math.
   function queueTerminalInput(text){
     const current=nodeTerminal;if(!current||!['running','connected'].includes(current.session?.status)||current.inputFailed||!terminalAuthorized())return;
     if(new TextEncoder().encode(text).length>8192||new TextEncoder().encode(current.pendingInput+text).length>32768){terminalStatus('Input was not sent: paste at most 8 KiB at a time and wait for pending input.');return;}
-    current.pendingInput+=text;if(!current.inputTimer)current.inputTimer=setTimeout(()=>flushTerminalInput(current),30);
+    current.pendingInput+=text;if(!current.inputTimer){const generation=current.generation,sessionID=current.session.id;current.inputTimer=setTimeout(()=>flushTerminalInput(current,generation,sessionID),30);}
   }
-  async function flushTerminalInput(current){
-    clearTimeout(current.inputTimer);current.inputTimer=null;if(current.sending||nodeTerminal!==current||!current.pendingInput)return;
+  async function flushTerminalInput(current,generation,sessionID){
+    const live=()=>nodeTerminal===current&&current.generation===generation&&current.session?.id===sessionID&&terminalIsActive(current.session)&&terminalAuthorized();
+    if(!live())return;
+    clearTimeout(current.inputTimer);current.inputTimer=null;if(current.sending||!current.pendingInput)return;
     current.sending=true;
     try{
-      while(current.pendingInput&&nodeTerminal===current&&terminalIsActive(current.session)){
+      while(current.pendingInput&&live()){
         let cut=Math.min(2048,current.pendingInput.length);const tail=current.pendingInput.charCodeAt(cut-1);if(tail>=0xd800&&tail<=0xdbff)cut--;let data=current.pendingInput.slice(0,cut);current.pendingInput=current.pendingInput.slice(cut);
-        const sequence=current.inputSequence+1;
-        await api(`/terminal/sessions/${encodeURIComponent(current.session.id)}/input`,{method:'POST',body:{data,sequence},timeoutMs:15000});data='';current.inputSequence=sequence;
+        const sequence=current.inputSequence+1,deadline=Date.now()+15000;
+        for(;;){
+          if(!live())return;
+          const remaining=deadline-Date.now();if(remaining<=0)throw new Error('The terminal input queue remained busy. No further input was sent.');
+          const result=await api(`/terminal/sessions/${encodeURIComponent(sessionID)}/input`,{method:'POST',body:{data,sequence},timeoutMs:remaining});
+          if(!live())return;
+          if(result.accepted===true&&result.acknowledged===sequence){current.inputSequence=sequence;data='';break;}
+          // Only this exact pre-admission response proves that no byte entered
+          // the remote queue. Never retry a transport error or ambiguous reply.
+          if(result.accepted!==false||result.code!=='terminal_input_backpressure'||result.expected_sequence!==sequence)throw new Error('The controller did not confirm this exact input sequence.');
+          const delay=Math.max(100,Math.min(500,Number(result.retry_after_ms)||150));
+          await new Promise(resolve=>setTimeout(resolve,Math.min(delay,Math.max(1,deadline-Date.now()))));
+          if(!live())return;
+        }
       }
-    }catch(error){current.pendingInput='';current.inputFailed=true;terminalSessionState();terminalStatus(`Input delivery is uncertain; it will not be retried. Disconnect and open a new session. ${requestFailure(error)}`);}
-    finally{current.sending=false;}
+    }catch(error){if(live()){current.pendingInput='';current.inputFailed=true;terminalSessionState();terminalStatus(`Input delivery is uncertain; it will not be retried. Disconnect and open a new session. ${requestFailure(error)}`);}}
+    finally{if(live())current.sending=false;}
   }
   async function stopNodeTerminal(reason='disconnect'){
     const current=nodeTerminal;nodeTerminalGeneration++;clearTimeout(terminalSearchTimer);if(!current)return;
-    clearTimeout(current.pollTimer);clearTimeout(current.inputTimer);current.abort?.abort();if(reason==='navigation'||reason==='signout')current.resizeObserver?.disconnect();clearTimeout(current.resizeTimer);current.pendingInput='';current.opening=false;current.generation=nodeTerminalGeneration;
+    clearTimeout(current.pollTimer);clearTimeout(current.inputTimer);current.inputTimer=null;current.sending=false;current.abort?.abort();if(reason==='navigation'||reason==='signout')current.resizeObserver?.disconnect();clearTimeout(current.resizeTimer);current.pendingInput='';current.opening=false;current.generation=nodeTerminalGeneration;
     const session=current.session;current.session=null;terminalSessionState();
     if(session?.id&&state.user){try{await api(`/terminal/sessions/${encodeURIComponent(session.id)}/close`,{method:'POST',body:{},timeoutMs:5000});}catch{terminalStatus('The disconnect could not be confirmed. The server and host session limits still apply.');}}
     if(reason==='navigation'||reason==='signout'){current.screen.clear();const output=el('terminal-screen');if(output)output.textContent='';const keyboard=el('terminal-keyboard');if(keyboard)keyboard.value='';nodeTerminal=null;}

@@ -127,7 +127,7 @@ func JournalArgs(args []string) ([]string, error) {
 			inline = ""
 		}
 		switch {
-		case arg == "--no-pager" || arg == "--no-ask-password":
+		case arg == "--no-pager":
 			continue
 		case arg == "-f" || arg == "--follow":
 			follow = true
@@ -196,7 +196,7 @@ func JournalArgs(args []string) ([]string, error) {
 	if len(selected) == 0 {
 		return nil, errors.New("journal access requires an explicit NLI service unit")
 	}
-	result := []string{"--no-pager", "--no-ask-password", "--lines=" + strconv.Itoa(lines)}
+	result := []string{"--no-pager", "--lines=" + strconv.Itoa(lines)}
 	for _, unit := range selected {
 		result = append(result, "--unit="+unit)
 	}

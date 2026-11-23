@@ -171,9 +171,34 @@ func TestTerminalRemoteSessionLifecycleAndNodeIsolation(t *testing.T) {
 	}
 	f.server.terminal.mu.Unlock()
 	code, bounded := terminalTestExchange(t, f, "terminal-node", token, protocol.TerminalExchangeRequest{Terminal: status})
-	if code != 200 || len(bounded.Sessions) != 1 || len(bounded.Sessions[0].Inputs) != 4 {
+	if code != 200 || len(bounded.Sessions) != 1 || len(bounded.Sessions[0].Inputs) != 32 {
 		t.Fatal("queued terminal stdin exceeded a bounded response window")
 	}
+	response, pressureData := f.request("POST", "/api/v1/terminal/sessions/"+id+"/input", map[string]any{"sequence": 2, "data": "not-admitted"})
+	pressure := decodeMap(t, pressureData)
+	if response.StatusCode != 200 || pressure["accepted"] != false || pressure["code"] != "terminal_input_backpressure" || pressure["expected_sequence"] != float64(2) {
+		t.Fatal("full queue lacked explicit non-admission contract")
+	}
+	f.server.terminal.mu.Lock()
+	if queued.lastInputSeq != 1 || len(queued.inputs) != 32 {
+		t.Error("backpressured input changed admission state")
+	}
+	for i := 1; i < 16; i++ {
+		clone := *queued
+		clone.ID = fmt.Sprintf("term-frame-budget-%d", i)
+		f.server.terminal.sessions[clone.ID] = &clone
+	}
+	f.server.terminal.mu.Unlock()
+	code, window := terminalTestExchange(t, f, "terminal-node", token, protocol.TerminalExchangeRequest{Terminal: status})
+	encodedWindow, _ := json.Marshal(window)
+	if code != 200 || len(window.Sessions) != 16 || len(encodedWindow) >= 1<<20 {
+		t.Fatal("node input window exceeds bounded response", len(encodedWindow))
+	}
+	f.server.terminal.mu.Lock()
+	for i := 1; i < 16; i++ {
+		delete(f.server.terminal.sessions, fmt.Sprintf("term-frame-budget-%d", i))
+	}
+	f.server.terminal.mu.Unlock()
 	f.server.terminal.mu.Lock()
 	queued.inputs = original
 	f.server.terminal.mu.Unlock()

@@ -486,12 +486,20 @@ func (s *Server) handleTerminalSession(w http.ResponseWriter, r *http.Request) {
 		t.mu.Lock()
 		if in.Sequence == v.lastInputSeq && hash == v.lastInputHash {
 			t.mu.Unlock()
-			jsonOK(w, map[string]any{"acknowledged": in.Sequence})
+			jsonOK(w, map[string]any{"accepted": true, "acknowledged": in.Sequence})
 			return
 		}
-		if in.Sequence != v.lastInputSeq+1 || len(v.inputs) >= 32 {
+		if in.Sequence != v.lastInputSeq+1 {
 			t.mu.Unlock()
-			jsonError(w, "input sequence conflict or queue full", 409)
+			jsonError(w, "input sequence conflict", 409)
+			return
+		}
+		if len(v.inputs) >= 32 {
+			expected := v.lastInputSeq + 1
+			t.mu.Unlock()
+			// Explicit non-admission is the only response a browser may retry.
+			// Do not advance the sequence/hash or retain this frame.
+			jsonOK(w, map[string]any{"accepted": false, "code": "terminal_input_backpressure", "expected_sequence": expected, "retry_after_ms": 150})
 			return
 		}
 		v.lastInputSeq = in.Sequence
@@ -513,7 +521,7 @@ func (s *Server) handleTerminalSession(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		jsonOK(w, map[string]any{"acknowledged": in.Sequence})
+		jsonOK(w, map[string]any{"accepted": true, "acknowledged": in.Sequence})
 	default:
 		jsonError(w, "operation not found", 404)
 	}
@@ -598,6 +606,18 @@ func (s *Server) handleTerminalExchange(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	out := protocol.TerminalExchangeResponse{Sessions: []protocol.TerminalSessionDirective{}, PollAfterMS: 10000}
+	activeCount := 0
+	for _, v := range t.sessions {
+		if v.NodeID == in.NodeID && terminalActive(v) {
+			activeCount++
+		}
+	}
+	// Bound actual bytes, not tiny keystroke frame count. Share capacity fairly
+	// across the node's at-most-16 sessions and stay below its 1MiB JSON limit.
+	byteBudget := 512 << 10
+	if activeCount > 0 {
+		byteBudget /= activeCount
+	}
 	for _, v := range t.sessions {
 		if v.NodeID != in.NodeID || !terminalActive(v) {
 			continue
@@ -607,10 +627,12 @@ func (s *Server) handleTerminalExchange(w http.ResponseWriter, r *http.Request) 
 			out.PollAfterMS = 350
 		}
 		inputs := v.inputs
-		// At most 16 sessions * 4 frames * 8 KiB fit the bounded node response.
-		if len(inputs) > 4 {
-			inputs = inputs[:4]
+		count, used := 0, 0
+		for count < len(inputs) && used+len(inputs[count].Data) <= byteBudget {
+			used += len(inputs[count].Data)
+			count++
 		}
+		inputs = inputs[:count]
 		out.Sessions = append(out.Sessions, protocol.TerminalSessionDirective{ID: v.ID, Cols: v.cols, Rows: v.rows, Close: !active, After: v.next, Inputs: append([]protocol.TerminalInput(nil), inputs...)})
 	}
 	jsonOK(w, out)
